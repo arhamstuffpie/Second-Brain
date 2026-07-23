@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/arham/ai-second-brain/internal/config"
 )
 
 type stubHealthRepository struct {
@@ -14,6 +17,24 @@ func (s stubHealthRepository) Ping(context.Context) error {
 	return s.err
 }
 
+type stubUserRepository struct{}
+
+func (stubUserRepository) Create(context.Context, string, string) (StoredUser, bool, error) {
+	return StoredUser{}, true, nil
+}
+
+func (stubUserRepository) FindByEmail(context.Context, string) (StoredUser, bool, error) {
+	return StoredUser{}, true, nil
+}
+
+func testJWTConfig() config.JWTConfig {
+	return config.JWTConfig{
+		Secret:         "01234567890123456789012345678901",
+		Issuer:         "test-issuer",
+		AccessTokenTTL: time.Hour,
+	}
+}
+
 func TestNewContainerRequiresRepositories(t *testing.T) {
 	if _, err := NewContainer(Dependencies{}); err == nil {
 		t.Fatal("NewContainer() error = nil, want error")
@@ -21,11 +42,15 @@ func TestNewContainerRequiresRepositories(t *testing.T) {
 }
 
 func TestNewContainerPopulatesDependencies(t *testing.T) {
-	container, err := NewContainer(Dependencies{HealthRepository: stubHealthRepository{}})
+	container, err := NewContainer(Dependencies{
+		HealthRepository: stubHealthRepository{},
+		UserRepository:   stubUserRepository{},
+		JWT:              testJWTConfig(),
+	})
 	if err != nil {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
-	if container == nil || container.Health == nil {
+	if container == nil || container.Health == nil || container.Auth == nil {
 		t.Fatal("service container has nil required dependency")
 	}
 }

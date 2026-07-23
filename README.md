@@ -23,12 +23,37 @@ PostgreSQL -> repositories -> services -> handlers -> router
 The directory name `db/quries` intentionally follows the spelling requested in
 the project structure. sqlc outputs generated Go code to `internal/db/sqlc`.
 
+## Authentication
+
+Users authenticate with an email address and password. Email addresses are
+normalized to lowercase, passwords are stored as bcrypt hashes, and successful
+signup/login requests return an expiring HS256 JWT. Send that token as
+`Authorization: Bearer <access_token>` when calling protected endpoints.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/signup \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"user@example.com","password":"password123"}'
+
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"user@example.com","password":"password123"}'
+
+curl http://localhost:8080/api/v1/secure \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Signup returns HTTP 201, login returns HTTP 200, and the secure test endpoint
+returns the authenticated user ID. Missing, invalid, or expired tokens return
+HTTP 401.
+
 ## Configuration
 
 Configuration is read from `APP_*` environment variables through `GetEnv`,
 `GetEnvInt`, and `GetEnvBool`. Non-secret operational settings have fallback
 values. `APP_DATABASE_URL` and `APP_JWT_SECRET` are required; the JWT secret must
-contain at least 32 characters. Copy `.env.example` for local development, but
+contain at least 32 characters. `APP_JWT_ACCESS_TOKEN_TTL` controls access-token
+lifetime and defaults to `24h`. Copy `.env.example` for local development, but
 do not commit `.env`.
 
 Development logging is colored and console-friendly by default. Production
@@ -78,4 +103,5 @@ make build
 ```
 
 The test suite covers container dependency contracts, configuration fallbacks,
-the health use case and response envelope, request IDs, and JWT enforcement.
+the health use case and response envelope, signup/password hashing, JWT
+issuance, request IDs, and protected-route enforcement.

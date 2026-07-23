@@ -61,12 +61,15 @@ func run() error {
 	}
 	services, err := service.NewContainer(service.Dependencies{
 		HealthRepository: repositories.Health,
+		UserRepository:   repositories.User,
+		JWT:              cfg.JWT,
 	})
 	if err != nil {
 		return fmt.Errorf("construct services: %w", err)
 	}
 	handlers, err := handler.NewContainer(handler.Dependencies{
 		HealthService: services.Health,
+		AuthService:   services.Auth,
 	})
 	if err != nil {
 		return fmt.Errorf("construct handlers: %w", err)

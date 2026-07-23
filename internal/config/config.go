@@ -42,8 +42,9 @@ type DatabaseConfig struct {
 }
 
 type JWTConfig struct {
-	Secret string
-	Issuer string
+	Secret         string
+	Issuer         string
+	AccessTokenTTL time.Duration
 }
 
 type CORSConfig struct {
@@ -82,8 +83,9 @@ func Load() (Config, error) {
 			ConnectTimeout:  getEnvDuration("APP_DB_CONNECT_TIMEOUT", 5*time.Second),
 		},
 		JWT: JWTConfig{
-			Secret: GetEnv("APP_JWT_SECRET", "K9mP2xL7vQ4wR8tY1uI3oA5sD6fG0hJ2"),
-			Issuer: GetEnv("APP_JWT_ISSUER", "ai-second-brain"),
+			Secret:         GetEnv("APP_JWT_SECRET", "K9mP2xL7vQ4wR8tY1uI3oA5sD6fG0hJ2"),
+			Issuer:         GetEnv("APP_JWT_ISSUER", "ai-second-brain"),
+			AccessTokenTTL: getEnvDuration("APP_JWT_ACCESS_TOKEN_TTL", 24*time.Hour),
 		},
 		CORS: CORSConfig{
 			AllowedOrigins: getEnvCSV("APP_CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
@@ -145,6 +147,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.JWT.Issuer) == "" {
 		return fmt.Errorf("APP_JWT_ISSUER must not be empty")
+	}
+	if c.JWT.AccessTokenTTL <= 0 {
+		return fmt.Errorf("APP_JWT_ACCESS_TOKEN_TTL must be positive")
 	}
 	if c.Database.MaxOpenConns < 1 {
 		return fmt.Errorf("APP_DB_MAX_OPEN_CONNS must be positive")

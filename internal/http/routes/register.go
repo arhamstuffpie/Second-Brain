@@ -35,10 +35,12 @@ func Register(engine *gin.Engine, deps Dependencies) error {
 
 	registerHealth(engine, deps.Handlers.Health)
 
-	// Add authenticated feature routes to this group as they are introduced.
+	auth := engine.Group("/api/v1/auth")
+	registerAuth(auth, deps.Handlers.Auth)
+
 	protected := engine.Group("/api/v1")
 	protected.Use(deps.Middleware.JWT.Handle())
-	_ = protected
+	registerSecure(protected, deps.Handlers.Auth)
 
 	return nil
 }

@@ -1,6 +1,6 @@
 .PHONY: build run test vet generate migrate-up migrate-down
 
-DATABASE_URL ?=postgresql://postgres:mysecretpassword@localhost:5432/mysecondbrain   
+DATABASE_URL ?=postgresql://postgres:mysecretpassword@localhost:5432/mysecondbrain
 
 build:
 	@mkdir -p bin
