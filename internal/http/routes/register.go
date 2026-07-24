@@ -41,6 +41,7 @@ func Register(engine *gin.Engine, deps Dependencies) error {
 	protected := engine.Group("/api/v1")
 	protected.Use(deps.Middleware.JWT.Handle())
 	registerSecure(protected, deps.Handlers.Auth)
+	registerVoice(protected, deps.Handlers.Voice)
 
 	return nil
 }

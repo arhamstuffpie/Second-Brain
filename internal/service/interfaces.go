@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"time"
 )
 
@@ -21,6 +23,53 @@ type UserRepository interface {
 type AuthService interface {
 	Signup(ctx context.Context, email, password string) (AuthResult, error)
 	Login(ctx context.Context, email, password string) (AuthResult, error)
+}
+
+type VoiceRepository interface {
+	CreateRecording(ctx context.Context, input CreateRecordingInput, maxAttempts int) (VoiceRecording, error)
+	FindRecordingByChunk(ctx context.Context, ownerUserID, sessionID string, chunkIndex int) (VoiceRecording, bool, error)
+	GetRecording(ctx context.Context, id, ownerUserID string) (VoiceRecordingDetail, error)
+	CreateRealtimeSession(ctx context.Context, input StartRealtimeSessionInput) (RealtimeVoiceSession, error)
+	GetRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVoiceSessionDetail, error)
+	StopRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVoiceSession, error)
+	ClaimJob(ctx context.Context) (VoiceJob, bool, error)
+	SaveTranscriptAndEpisodes(ctx context.Context, job VoiceJob, transcript Transcript, episodes []EpisodeDraft, provider, model string, maxAttempts int) error
+	CompleteMemographEpisode(ctx context.Context, job VoiceJob, response json.RawMessage) error
+	RetryJob(ctx context.Context, job VoiceJob, cause string, runAt time.Time, dead bool) error
+}
+
+type Transcriber interface {
+	Transcribe(ctx context.Context, input TranscriptionInput) (Transcript, error)
+	Provider() string
+	Model() string
+}
+
+type AudioStore interface {
+	Save(ctx context.Context, filename string, content io.Reader) (StoredAudio, error)
+	Open(ctx context.Context, path string) (io.ReadCloser, error)
+	Delete(ctx context.Context, path string) error
+}
+
+type MemographClient interface {
+	CreateMemory(ctx context.Context, projectID string, request MemoryCreateRequest) (json.RawMessage, error)
+	InsertEpisode(ctx context.Context, memoryID string, request EpisodeInsertRequest) (json.RawMessage, error)
+	Search(ctx context.Context, memoryID string, request MemorySearchRequest) (json.RawMessage, error)
+	Answer(ctx context.Context, memoryID string, request MemoryAnswerRequest) (json.RawMessage, error)
+	GetGraph(ctx context.Context, memoryID, groupID string) (json.RawMessage, error)
+}
+
+type VoiceService interface {
+	Ingest(ctx context.Context, input VoiceIngestInput) (VoiceRecording, error)
+	GetRecording(ctx context.Context, id, ownerUserID string) (VoiceRecordingDetail, error)
+	StartRealtimeSession(ctx context.Context, input StartRealtimeSessionInput) (RealtimeVoiceSession, error)
+	IngestRealtimeChunk(ctx context.Context, input RealtimeChunkInput) (VoiceRecording, error)
+	GetRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVoiceSessionDetail, error)
+	StopRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVoiceSession, error)
+	CreateMemory(ctx context.Context, projectID string, request MemoryCreateRequest) (json.RawMessage, error)
+	Search(ctx context.Context, memoryID string, request MemorySearchRequest) (json.RawMessage, error)
+	Answer(ctx context.Context, memoryID string, request MemoryAnswerRequest) (json.RawMessage, error)
+	GetGraph(ctx context.Context, memoryID, groupID string) (json.RawMessage, error)
+	ProcessNextJob(ctx context.Context) (bool, error)
 }
 
 type Health struct {
@@ -49,4 +98,230 @@ type AuthResult struct {
 	AccessToken string    `json:"access_token"`
 	TokenType   string    `json:"token_type"`
 	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+type StoredAudio struct {
+	Path      string
+	SizeBytes int64
+}
+
+type VoiceIngestInput struct {
+	OwnerUserID       string
+	SessionID         string
+	GroupID           string
+	MemoryID          string
+	DeviceID          string
+	Location          string
+	FileName          string
+	MediaType         string
+	StartOffset       float64
+	ChunkIndex        *int
+	IsFinal           bool
+	DefaultConfidence *float64
+	Content           io.Reader
+}
+
+type CreateRecordingInput struct {
+	OwnerUserID       string
+	SessionID         string
+	GroupID           string
+	MemoryID          string
+	DeviceID          string
+	Location          string
+	FileName          string
+	FilePath          string
+	MediaType         string
+	SizeBytes         int64
+	StartOffset       float64
+	ChunkIndex        *int
+	IsFinal           bool
+	DefaultConfidence *float64
+}
+
+type VoiceRecording struct {
+	ID         string    `json:"id"`
+	SessionID  string    `json:"session_id"`
+	GroupID    string    `json:"group_id"`
+	MemoryID   string    `json:"memory_id"`
+	Status     string    `json:"status"`
+	FileName   string    `json:"file_name"`
+	MediaType  string    `json:"media_type"`
+	SizeBytes  int64     `json:"size_bytes"`
+	ChunkIndex *int      `json:"chunk_index,omitempty"`
+	IsFinal    bool      `json:"is_final,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type VoiceRecordingDetail struct {
+	VoiceRecording
+	DeviceID   string         `json:"device_id,omitempty"`
+	Location   string         `json:"location,omitempty"`
+	Transcript *Transcript    `json:"transcript,omitempty"`
+	Episodes   []VoiceEpisode `json:"episodes"`
+	LastError  string         `json:"last_error,omitempty"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+}
+
+type VoiceEpisode struct {
+	ID          string          `json:"id"`
+	BucketIndex int             `json:"bucket_index"`
+	StartTime   float64         `json:"start_time"`
+	EndTime     float64         `json:"end_time"`
+	Description string          `json:"description"`
+	Confidence  *float64        `json:"confidence,omitempty"`
+	Status      string          `json:"status"`
+	Response    json.RawMessage `json:"memograph_response,omitempty"`
+	LastError   string          `json:"last_error,omitempty"`
+}
+
+type TranscriptSegment struct {
+	StartTime  float64  `json:"start_time"`
+	EndTime    float64  `json:"end_time"`
+	Speaker    string   `json:"speaker"`
+	Text       string   `json:"text"`
+	Confidence *float64 `json:"confidence,omitempty"`
+}
+
+type Transcript struct {
+	Text     string              `json:"text"`
+	Language string              `json:"language,omitempty"`
+	Duration float64             `json:"duration"`
+	Segments []TranscriptSegment `json:"segments"`
+}
+
+type TranscriptionInput struct {
+	FileName  string
+	MediaType string
+	Audio     io.Reader
+}
+
+type EpisodeDraft struct {
+	BucketIndex int      `json:"bucket_index"`
+	StartTime   float64  `json:"start_time"`
+	EndTime     float64  `json:"end_time"`
+	Description string   `json:"description"`
+	Confidence  *float64 `json:"confidence,omitempty"`
+}
+
+type VoiceJob struct {
+	ID           int64
+	Kind         string
+	RecordingID  string
+	EpisodeID    string
+	Attempts     int
+	MaxAttempts  int
+	FilePath     string
+	FileName     string
+	MediaType    string
+	SessionID    string
+	GroupID      string
+	MemoryID     string
+	DeviceID     string
+	Location     string
+	StartOffset  float64
+	Description  string
+	EpisodeStart float64
+	EpisodeEnd   float64
+	Confidence   *float64
+}
+
+type StartRealtimeSessionInput struct {
+	OwnerUserID          string `json:"-"`
+	MemoryID             string `json:"memory_id"`
+	GroupID              string `json:"group_id,omitempty"`
+	DeviceID             string `json:"device_id,omitempty"`
+	Location             string `json:"location,omitempty"`
+	ChunkDurationSeconds int    `json:"chunk_duration_seconds,omitempty"`
+}
+
+type RealtimeChunkInput struct {
+	OwnerUserID       string
+	SessionID         string
+	ChunkIndex        int
+	IsFinal           bool
+	FileName          string
+	MediaType         string
+	DefaultConfidence *float64
+	Content           io.Reader
+}
+
+type RealtimeVoiceSession struct {
+	ID                   string     `json:"id"`
+	MemoryID             string     `json:"memory_id"`
+	GroupID              string     `json:"group_id"`
+	DeviceID             string     `json:"device_id,omitempty"`
+	Location             string     `json:"location,omitempty"`
+	ChunkDurationSeconds int        `json:"chunk_duration_seconds"`
+	Status               string     `json:"status"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	StoppedAt            *time.Time `json:"stopped_at,omitempty"`
+}
+
+type RealtimeSessionProgress struct {
+	Total            int `json:"total"`
+	Queued           int `json:"queued"`
+	Processing       int `json:"processing"`
+	Completed        int `json:"completed"`
+	Failed           int `json:"failed"`
+	LatestChunkIndex int `json:"latest_chunk_index"`
+}
+
+type RealtimeVoiceSessionDetail struct {
+	RealtimeVoiceSession
+	Progress RealtimeSessionProgress `json:"progress"`
+	Chunks   []VoiceRecording        `json:"chunks"`
+}
+
+type GraphConfig struct {
+	Mode             string              `json:"mode"`
+	Template         string              `json:"template,omitempty"`
+	Instruction      string              `json:"instruction,omitempty"`
+	EntityTypes      map[string]string   `json:"entity_types,omitempty"`
+	EntityTypeColors map[string]string   `json:"entity_type_colors,omitempty"`
+	EdgeTypes        map[string]string   `json:"edge_types,omitempty"`
+	EdgeTypeMap      map[string][]string `json:"edge_type_map,omitempty"`
+}
+
+type CustomField struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+}
+
+type MemoryCreateRequest struct {
+	Name           string        `json:"name"`
+	MemoryType     string        `json:"memory_type"`
+	EmbeddingModel string        `json:"embedding_model,omitempty"`
+	SecretID       string        `json:"secret_id,omitempty"`
+	CustomFields   []CustomField `json:"custom_fields,omitempty"`
+	GraphConfig    GraphConfig   `json:"graph_config"`
+}
+
+type EpisodeInsertRequest struct {
+	Data         string         `json:"data"`
+	Meta         map[string]any `json:"meta"`
+	CustomFields map[string]any `json:"-"`
+}
+
+type MemorySearchRequest struct {
+	Query   string         `json:"query"`
+	Limit   int            `json:"limit,omitempty"`
+	GroupID string         `json:"group_id,omitempty"`
+	Filters map[string]any `json:"filters,omitempty"`
+}
+
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type MemoryAnswerRequest struct {
+	Query    string         `json:"query,omitempty"`
+	Messages []ChatMessage  `json:"messages,omitempty"`
+	Limit    int            `json:"limit,omitempty"`
+	Model    string         `json:"model,omitempty"`
+	GroupID  string         `json:"group_id,omitempty"`
+	Filters  map[string]any `json:"filters,omitempty"`
 }

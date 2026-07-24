@@ -9,15 +9,21 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/arham/ai-second-brain/internal/audio"
 	"github.com/arham/ai-second-brain/internal/config"
 	internaldb "github.com/arham/ai-second-brain/internal/db"
 	"github.com/arham/ai-second-brain/internal/handler"
 	"github.com/arham/ai-second-brain/internal/http/middleware"
 	"github.com/arham/ai-second-brain/internal/http/router"
 	internallogger "github.com/arham/ai-second-brain/internal/logger"
+	"github.com/arham/ai-second-brain/internal/memograph"
 	"github.com/arham/ai-second-brain/internal/repository"
 	"github.com/arham/ai-second-brain/internal/service"
+	"github.com/arham/ai-second-brain/internal/stt"
+	"github.com/arham/ai-second-brain/internal/worker"
+	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 )
 
@@ -32,6 +38,9 @@ func main() {
 func run() error {
 	// This is the only composition root: each container is constructed once and
 	// passed down to the next layer.
+	if err := loadDotEnv(".env"); err != nil {
+		return fmt.Errorf("load .env: %w", err)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -59,9 +68,30 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct repositories: %w", err)
 	}
+	audioStore, err := audio.NewLocalStore(cfg.Voice.StorageDir, cfg.Voice.MaxUploadBytes)
+	if err != nil {
+		return fmt.Errorf("construct audio store: %w", err)
+	}
+	var transcriber service.Transcriber
+	switch cfg.STT.Provider {
+	case "openai":
+		transcriber, err = stt.NewOpenAI(cfg.STT)
+		if err != nil {
+			return fmt.Errorf("construct OpenAI transcriber: %w", err)
+		}
+	default:
+		transcriber = stt.NewMock()
+	}
+	memographClient := memograph.NewClient(cfg.Memograph)
 	services, err := service.NewContainer(service.Dependencies{
 		HealthRepository: repositories.Health,
 		UserRepository:   repositories.User,
+		VoiceRepository:  repositories.Voice,
+		Transcriber:      transcriber,
+		AudioStore:       audioStore,
+		Memograph:        memographClient,
+		VoiceConfig:      cfg.Voice,
+		WorkerConfig:     cfg.Worker,
 		JWT:              cfg.JWT,
 	})
 	if err != nil {
@@ -70,6 +100,8 @@ func run() error {
 	handlers, err := handler.NewContainer(handler.Dependencies{
 		HealthService: services.Health,
 		AuthService:   services.Auth,
+		VoiceService:  services.Voice,
+		VoiceConfig:   cfg.Voice,
 	})
 	if err != nil {
 		return fmt.Errorf("construct handlers: %w", err)
@@ -97,6 +129,20 @@ func run() error {
 	}
 
 	serverErrors := make(chan error, 1)
+	voiceWorker := worker.NewVoiceWorker(services.Voice, cfg.Worker, appLogger)
+	voiceWorkerDone := make(chan struct{})
+	go func() {
+		defer close(voiceWorkerDone)
+		voiceWorker.Run(rootCtx)
+	}()
+	defer func() {
+		stopSignals()
+		select {
+		case <-voiceWorkerDone:
+		case <-time.After(cfg.HTTP.ShutdownTimeout):
+			appLogger.Warn().Msg("voice worker did not stop before shutdown timeout")
+		}
+	}()
 	go func() {
 		appLogger.Info().Str("address", server.Addr).Msg("http server started")
 		serverErrors <- server.ListenAndServe()
@@ -121,4 +167,12 @@ func run() error {
 
 	appLogger.Info().Msg("http server stopped gracefully")
 	return nil
+}
+
+func loadDotEnv(filename string) error {
+	err := godotenv.Load(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }

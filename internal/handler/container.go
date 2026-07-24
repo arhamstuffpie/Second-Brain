@@ -3,17 +3,21 @@ package handler
 import (
 	"fmt"
 
+	"github.com/arham/ai-second-brain/internal/config"
 	"github.com/arham/ai-second-brain/internal/service"
 )
 
 type Dependencies struct {
 	HealthService service.HealthService
 	AuthService   service.AuthService
+	VoiceService  service.VoiceService
+	VoiceConfig   config.VoiceConfig
 }
 
 type Container struct {
 	Health HealthHandler
 	Auth   AuthHandler
+	Voice  VoiceHandler
 }
 
 func NewContainer(deps Dependencies) (*Container, error) {
@@ -23,10 +27,14 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	if deps.AuthService == nil {
 		return nil, fmt.Errorf("auth service is required")
 	}
+	if deps.VoiceService == nil {
+		return nil, fmt.Errorf("voice service is required")
+	}
 
 	container := &Container{
 		Health: newHealthHandler(deps.HealthService),
 		Auth:   newAuthHandler(deps.AuthService),
+		Voice:  newVoiceHandler(deps.VoiceService, deps.VoiceConfig.MaxUploadBytes),
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err
@@ -43,6 +51,9 @@ func (c *Container) Validate() error {
 	}
 	if c.Auth == nil {
 		return fmt.Errorf("auth handler is required")
+	}
+	if c.Voice == nil {
+		return fmt.Errorf("voice handler is required")
 	}
 	return nil
 }

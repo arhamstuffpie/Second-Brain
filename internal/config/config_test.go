@@ -68,8 +68,8 @@ func TestLoadUsesFallbackValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.HTTP.Port != 8080 {
-		t.Fatalf("HTTP.Port = %d, want 8080", cfg.HTTP.Port)
+	if cfg.HTTP.Port != 8181 {
+		t.Fatalf("HTTP.Port = %d, want 8181", cfg.HTTP.Port)
 	}
 	if cfg.Log.Level != "info" {
 		t.Fatalf("Log.Level = %q, want info", cfg.Log.Level)

@@ -35,6 +35,40 @@ type fakeAuthService struct {
 	loginErr     error
 }
 
+type fakeVoiceService struct{}
+
+func (fakeVoiceService) Ingest(context.Context, service.VoiceIngestInput) (service.VoiceRecording, error) {
+	return service.VoiceRecording{}, nil
+}
+func (fakeVoiceService) GetRecording(context.Context, string, string) (service.VoiceRecordingDetail, error) {
+	return service.VoiceRecordingDetail{}, nil
+}
+func (fakeVoiceService) StartRealtimeSession(context.Context, service.StartRealtimeSessionInput) (service.RealtimeVoiceSession, error) {
+	return service.RealtimeVoiceSession{}, nil
+}
+func (fakeVoiceService) IngestRealtimeChunk(context.Context, service.RealtimeChunkInput) (service.VoiceRecording, error) {
+	return service.VoiceRecording{}, nil
+}
+func (fakeVoiceService) GetRealtimeSession(context.Context, string, string) (service.RealtimeVoiceSessionDetail, error) {
+	return service.RealtimeVoiceSessionDetail{}, nil
+}
+func (fakeVoiceService) StopRealtimeSession(context.Context, string, string) (service.RealtimeVoiceSession, error) {
+	return service.RealtimeVoiceSession{}, nil
+}
+func (fakeVoiceService) CreateMemory(context.Context, string, service.MemoryCreateRequest) (json.RawMessage, error) {
+	return nil, nil
+}
+func (fakeVoiceService) Search(context.Context, string, service.MemorySearchRequest) (json.RawMessage, error) {
+	return nil, nil
+}
+func (fakeVoiceService) Answer(context.Context, string, service.MemoryAnswerRequest) (json.RawMessage, error) {
+	return nil, nil
+}
+func (fakeVoiceService) GetGraph(context.Context, string, string) (json.RawMessage, error) {
+	return nil, nil
+}
+func (fakeVoiceService) ProcessNextJob(context.Context) (bool, error) { return false, nil }
+
 func (f fakeAuthService) Signup(context.Context, string, string) (service.AuthResult, error) {
 	return f.signupResult, f.signupErr
 }
@@ -148,6 +182,7 @@ func testRouterWithAuth(t *testing.T, healthService service.HealthService, authS
 	handlers, err := handler.NewContainer(handler.Dependencies{
 		HealthService: healthService,
 		AuthService:   authService,
+		VoiceService:  fakeVoiceService{},
 	})
 	if err != nil {
 		t.Fatalf("handler.NewContainer() error = %v", err)
