@@ -80,6 +80,12 @@ func TestLoadUsesFallbackValues(t *testing.T) {
 	if cfg.HTTP.ReadTimeout != 10*time.Second {
 		t.Fatalf("HTTP.ReadTimeout = %s, want 10s", cfg.HTTP.ReadTimeout)
 	}
+	if cfg.Video.FrameInterval != 5*time.Second || cfg.Video.MaxFrames != 12 {
+		t.Fatalf("Video defaults = %+v", cfg.Video)
+	}
+	if cfg.Vision.Provider != "mock" || cfg.Vision.Model != "gpt-4.1-mini" {
+		t.Fatalf("Vision defaults = %+v", cfg.Vision)
+	}
 }
 
 func TestLoadUsesJSONLoggingInProductionByDefault(t *testing.T) {
@@ -125,5 +131,35 @@ func TestLoadRejectsShortJWTSecret(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want validation error")
+	}
+}
+
+func TestLoadRequiresVisionKeyForOpenAI(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("APP_JWT_SECRET", "01234567890123456789012345678901")
+	t.Setenv("APP_VISION_PROVIDER", "openai")
+	t.Setenv("APP_VISION_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("APP_STT_API_KEY", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want missing vision API key error")
+	}
+}
+
+func TestLoadUsesSTTKeyForVision(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("APP_JWT_SECRET", "01234567890123456789012345678901")
+	t.Setenv("APP_VISION_PROVIDER", "openai")
+	t.Setenv("APP_VISION_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("APP_STT_API_KEY", "shared-openai-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Vision.APIKey != "shared-openai-key" {
+		t.Fatalf("Vision.APIKey = %q, want STT key fallback", cfg.Vision.APIKey)
 	}
 }

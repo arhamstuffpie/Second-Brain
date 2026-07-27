@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,10 +19,12 @@ import (
 	"github.com/arham/ai-second-brain/internal/http/middleware"
 	"github.com/arham/ai-second-brain/internal/http/router"
 	internallogger "github.com/arham/ai-second-brain/internal/logger"
+	"github.com/arham/ai-second-brain/internal/media"
 	"github.com/arham/ai-second-brain/internal/memograph"
 	"github.com/arham/ai-second-brain/internal/repository"
 	"github.com/arham/ai-second-brain/internal/service"
 	"github.com/arham/ai-second-brain/internal/stt"
+	"github.com/arham/ai-second-brain/internal/vision"
 	"github.com/arham/ai-second-brain/internal/worker"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
@@ -72,6 +75,14 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct audio store: %w", err)
 	}
+	videoStore, err := audio.NewLocalStore(cfg.Video.StorageDir, cfg.Video.MaxUploadBytes)
+	if err != nil {
+		return fmt.Errorf("construct video store: %w", err)
+	}
+	mediaExtractor, err := media.NewFFmpegExtractor(cfg.Video)
+	if err != nil {
+		return fmt.Errorf("construct media extractor: %w", err)
+	}
 	var transcriber service.Transcriber
 	switch cfg.STT.Provider {
 	case "openai":
@@ -82,15 +93,36 @@ func run() error {
 	default:
 		transcriber = stt.NewMock()
 	}
+	var visualAnalyzer service.VisualAnalyzer
+	switch cfg.Vision.Provider {
+	case "openai":
+		visualAnalyzer, err = vision.NewOpenAI(cfg.Vision)
+		if err != nil {
+			return fmt.Errorf("construct OpenAI visual analyzer: %w", err)
+		}
+	default:
+		visualAnalyzer = vision.NewMock()
+	}
+	appLogger.Info().
+		Str("stt_provider", transcriber.Provider()).
+		Str("stt_model", transcriber.Model()).
+		Str("vision_provider", visualAnalyzer.Provider()).
+		Str("vision_model", visualAnalyzer.Model()).
+		Msg("media analysis providers configured")
 	memographClient := memograph.NewClient(cfg.Memograph)
 	services, err := service.NewContainer(service.Dependencies{
 		HealthRepository: repositories.Health,
 		UserRepository:   repositories.User,
 		VoiceRepository:  repositories.Voice,
+		VideoRepository:  repositories.Video,
 		Transcriber:      transcriber,
 		AudioStore:       audioStore,
+		VideoStore:       videoStore,
+		MediaExtractor:   mediaExtractor,
+		VisualAnalyzer:   visualAnalyzer,
 		Memograph:        memographClient,
 		VoiceConfig:      cfg.Voice,
+		VideoConfig:      cfg.Video,
 		WorkerConfig:     cfg.Worker,
 		JWT:              cfg.JWT,
 	})
@@ -102,6 +134,8 @@ func run() error {
 		AuthService:   services.Auth,
 		VoiceService:  services.Voice,
 		VoiceConfig:   cfg.Voice,
+		VideoService:  services.Video,
+		VideoConfig:   cfg.Video,
 	})
 	if err != nil {
 		return fmt.Errorf("construct handlers: %w", err)
@@ -130,17 +164,28 @@ func run() error {
 
 	serverErrors := make(chan error, 1)
 	voiceWorker := worker.NewVoiceWorker(services.Voice, cfg.Worker, appLogger)
-	voiceWorkerDone := make(chan struct{})
+	videoWorker := worker.NewVideoWorker(services.Video, cfg.Worker, appLogger)
+	workersDone := make(chan struct{})
 	go func() {
-		defer close(voiceWorkerDone)
-		voiceWorker.Run(rootCtx)
+		defer close(workersDone)
+		var group sync.WaitGroup
+		group.Add(2)
+		go func() {
+			defer group.Done()
+			voiceWorker.Run(rootCtx)
+		}()
+		go func() {
+			defer group.Done()
+			videoWorker.Run(rootCtx)
+		}()
+		group.Wait()
 	}()
 	defer func() {
 		stopSignals()
 		select {
-		case <-voiceWorkerDone:
+		case <-workersDone:
 		case <-time.After(cfg.HTTP.ShutdownTimeout):
-			appLogger.Warn().Msg("voice worker did not stop before shutdown timeout")
+			appLogger.Warn().Msg("media workers did not stop before shutdown timeout")
 		}
 	}()
 	go func() {

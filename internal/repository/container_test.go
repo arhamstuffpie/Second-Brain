@@ -35,7 +35,8 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
-	if container == nil || container.Health == nil || container.User == nil || container.Voice == nil {
+	if container == nil || container.Health == nil || container.User == nil ||
+		container.Voice == nil || container.Video == nil {
 		t.Fatal("repository container has nil required dependency")
 	}
 }

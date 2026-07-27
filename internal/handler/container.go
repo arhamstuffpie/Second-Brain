@@ -12,12 +12,15 @@ type Dependencies struct {
 	AuthService   service.AuthService
 	VoiceService  service.VoiceService
 	VoiceConfig   config.VoiceConfig
+	VideoService  service.VideoService
+	VideoConfig   config.VideoConfig
 }
 
 type Container struct {
 	Health HealthHandler
 	Auth   AuthHandler
 	Voice  VoiceHandler
+	Video  VideoHandler
 }
 
 func NewContainer(deps Dependencies) (*Container, error) {
@@ -30,11 +33,15 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	if deps.VoiceService == nil {
 		return nil, fmt.Errorf("voice service is required")
 	}
+	if deps.VideoService == nil {
+		return nil, fmt.Errorf("video service is required")
+	}
 
 	container := &Container{
 		Health: newHealthHandler(deps.HealthService),
 		Auth:   newAuthHandler(deps.AuthService),
 		Voice:  newVoiceHandler(deps.VoiceService, deps.VoiceConfig.MaxUploadBytes),
+		Video:  newVideoHandler(deps.VideoService, deps.VideoConfig.MaxUploadBytes),
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err
@@ -54,6 +61,9 @@ func (c *Container) Validate() error {
 	}
 	if c.Voice == nil {
 		return fmt.Errorf("voice handler is required")
+	}
+	if c.Video == nil {
+		return fmt.Errorf("video handler is required")
 	}
 	return nil
 }

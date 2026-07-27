@@ -42,6 +42,7 @@ func Register(engine *gin.Engine, deps Dependencies) error {
 	protected.Use(deps.Middleware.JWT.Handle())
 	registerSecure(protected, deps.Handlers.Auth)
 	registerVoice(protected, deps.Handlers.Voice)
+	registerVideo(protected, deps.Handlers.Video)
 
 	return nil
 }

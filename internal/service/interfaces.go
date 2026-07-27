@@ -50,6 +50,39 @@ type AudioStore interface {
 	Delete(ctx context.Context, path string) error
 }
 
+type VideoStore interface {
+	Save(ctx context.Context, filename string, content io.Reader) (StoredAudio, error)
+	Open(ctx context.Context, path string) (io.ReadCloser, error)
+	Delete(ctx context.Context, path string) error
+}
+
+type VideoRepository interface {
+	CreateVideoRecording(ctx context.Context, input CreateVideoRecordingInput, maxAttempts int) (VideoRecording, error)
+	CreateRealtimeVideoChunk(ctx context.Context, input CreateRealtimeVideoChunkInput, maxAttempts int) (VideoRecording, error)
+	FindVideoRecordingByClientChunk(ctx context.Context, ownerUserID, sessionID, clientChunkID string) (VideoRecording, bool, error)
+	GetVideoRecording(ctx context.Context, id, ownerUserID string) (VideoRecordingDetail, error)
+	CreateVideoRealtimeSession(ctx context.Context, input StartVideoRealtimeSessionInput) (RealtimeVideoSession, error)
+	GetVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSessionDetail, error)
+	StopVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSession, error)
+	ClaimVideoJob(ctx context.Context) (VideoJob, bool, error)
+	SaveVideoTranscript(ctx context.Context, job VideoJob, transcript Transcript, provider, model string, maxAttempts int) error
+	SaveVideoAnalysis(ctx context.Context, job VideoJob, analysis VisualAnalysis, provider, model string, maxAttempts int) error
+	SaveVideoEpisodes(ctx context.Context, job VideoJob, episodes []VideoEpisodeDraft, maxAttempts int) error
+	CompleteVideoMemographEpisode(ctx context.Context, job VideoJob, response json.RawMessage) error
+	RetryVideoJob(ctx context.Context, job VideoJob, cause string, runAt time.Time, dead bool) error
+}
+
+type MediaExtractor interface {
+	ExtractAudio(ctx context.Context, videoPath string) (ExtractedAudio, error)
+	ExtractFrames(ctx context.Context, videoPath string, interval time.Duration, maxFrames int) ([]VideoFrame, error)
+}
+
+type VisualAnalyzer interface {
+	Analyze(ctx context.Context, input VisualAnalysisInput) (VisualAnalysis, error)
+	Provider() string
+	Model() string
+}
+
 type MemographClient interface {
 	CreateMemory(ctx context.Context, projectID string, request MemoryCreateRequest) (json.RawMessage, error)
 	InsertEpisode(ctx context.Context, memoryID string, request EpisodeInsertRequest) (json.RawMessage, error)
@@ -70,6 +103,16 @@ type VoiceService interface {
 	Answer(ctx context.Context, memoryID string, request MemoryAnswerRequest) (json.RawMessage, error)
 	GetGraph(ctx context.Context, memoryID, groupID string) (json.RawMessage, error)
 	ProcessNextJob(ctx context.Context) (bool, error)
+}
+
+type VideoService interface {
+	IngestVideo(ctx context.Context, input VideoIngestInput) (VideoRecording, error)
+	GetVideoRecording(ctx context.Context, id, ownerUserID string) (VideoRecordingDetail, error)
+	StartVideoRealtimeSession(ctx context.Context, input StartVideoRealtimeSessionInput) (RealtimeVideoSession, error)
+	IngestVideoRealtimeChunk(ctx context.Context, input RealtimeVideoChunkInput) (VideoRecording, error)
+	GetVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSessionDetail, error)
+	StopVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSession, error)
+	ProcessNextVideoJob(ctx context.Context) (bool, error)
 }
 
 type Health struct {
@@ -183,10 +226,12 @@ type TranscriptSegment struct {
 }
 
 type Transcript struct {
-	Text     string              `json:"text"`
-	Language string              `json:"language,omitempty"`
-	Duration float64             `json:"duration"`
-	Segments []TranscriptSegment `json:"segments"`
+	Text              string              `json:"text"`
+	Language          string              `json:"language,omitempty"`
+	Duration          float64             `json:"duration"`
+	Segments          []TranscriptSegment `json:"segments"`
+	AudioTrackPresent *bool               `json:"audio_track_present,omitempty"`
+	Warning           string              `json:"warning,omitempty"`
 }
 
 type TranscriptionInput struct {

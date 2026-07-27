@@ -36,7 +36,6 @@ upload/chunk -> local audio store -> PostgreSQL STT job
              -> independent PostgreSQL Memograph jobs -> graph memory
 ```
 
-Video and visual processing are intentionally out of scope for this version.
 The speech-to-text boundary is an interface, so another provider can replace the
 included OpenAI-compatible adapter. PostgreSQL is the durable queue: workers
 claim rows with `FOR UPDATE SKIP LOCKED`, and STT and Memograph jobs have
@@ -259,6 +258,94 @@ the current Memograph route contracts. Configure both credentials when this
 service must perform every operation. The unprefixed `MEMOGRAPH_API_KEY`,
 `MEMOGRAPH_JWT_TOKEN`, and `MEMOGRAPH_BASE_URL` names are accepted as aliases.
 
+## Video-to-Memograph pipeline
+
+Video uploads and realtime chunks run through four independently retryable job
+types:
+
+```text
+video upload -> audio extraction -> speech-to-text ----\
+             -> frame extraction -> visual analysis ----> timeline merge
+                                                       -> Memograph episode
+```
+
+FFmpeg extracts a mono WAV track and timestamped JPEG frames. The audio branch
+uses the same swappable transcriber as voice ingestion. The visual branch uses
+a `VisualAnalyzer` interface; the included OpenAI adapter sends image frames to
+the Responses API with a strict JSON schema for objects, readable text,
+activity, location, summary, and confidence. Raw video is never sent to the
+vision model. Videos without an audio track are valid and produce visual-only
+episodes.
+
+PostgreSQL queues `audio` and `visual` jobs together. A `merge` job is created
+exactly once after both branches complete, and every resulting episode receives
+its own `memograph` job. A visual-analysis retry therefore never reruns STT, and
+a Memograph retry never reruns either extraction branch.
+
+### Video API
+
+All routes require `Authorization: Bearer <access_token>`.
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/v1/video/recordings` | Upload a complete video |
+| `GET` | `/api/v1/video/recordings/:recording_id` | Poll component and episode status |
+| `POST` | `/api/v1/video/realtime/sessions` | Start a realtime camera session |
+| `POST` | `/api/v1/video/realtime/sessions/:session_id/chunks` | Upload an idempotent video chunk |
+| `GET` | `/api/v1/video/realtime/sessions/:session_id` | Read chunk and aggregate progress |
+| `POST` | `/api/v1/video/realtime/sessions/:session_id/stop` | Stop the session |
+
+Upload a complete recording:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/video/recordings \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F "file=@meeting.webm" \
+  -F "session_id=meeting-123" \
+  -F "group_id=user-456" \
+  -F "memory_id=$MEMORY_ID" \
+  -F "device_id=browser-camera" \
+  -F "location=office"
+```
+
+Start a realtime session:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/video/realtime/sessions \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "memory_id": "'"$MEMORY_ID"'",
+    "group_id": "user-456",
+    "device_id": "browser-camera",
+    "location": "office",
+    "chunk_duration_seconds": 30,
+    "frame_interval_seconds": 5
+  }'
+```
+
+Upload a self-contained MP4/WebM chunk:
+
+```bash
+curl -X POST \
+  http://localhost:8080/api/v1/video/realtime/sessions/$VIDEO_SESSION_ID/chunks \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F "file=@chunk.webm" \
+  -F "chunk_id=$(uuidgen | tr '[:upper:]' '[:lower:]')" \
+  -F "is_final=false"
+```
+
+The client generates only the stable UUID `chunk_id`. The backend atomically
+assigns `chunk_index` and `start_time`. Retrying the same file with the same
+`chunk_id` returns the existing recording without creating duplicate jobs.
+Use a fresh `MediaRecorder` for every browser chunk so each WebM contains its
+own container header and can be decoded independently.
+
+In Postman, choose **Body → form-data**, set `file` to type **File**, and add
+`chunk_id` and `is_final` as text fields. Do not manually set
+`Content-Type`; Postman supplies the multipart boundary. Poll the returned
+recording ID until `status` is `completed` or `failed`.
+
 ## Authentication
 
 Users authenticate with an email address and password. Email addresses are
@@ -303,12 +390,16 @@ cp .env.example .env
 The server automatically loads `.env` when it is present. Variables already
 set by the shell or container take precedence.
 
-Voice and Memograph essentials:
+Voice, video, and Memograph essentials:
 
 ```bash
 APP_STT_PROVIDER=openai
 APP_STT_API_KEY=...
 APP_STT_MODEL=gpt-4o-transcribe-diarize
+
+APP_VISION_PROVIDER=openai
+APP_VISION_API_KEY=...
+APP_VISION_MODEL=gpt-4.1-mini
 
 APP_MEMOGRAPH_BASE_URL=https://your-memograph-host
 APP_MEMOGRAPH_API_KEY=mg_live_...
@@ -316,10 +407,15 @@ APP_MEMOGRAPH_JWT=...
 APP_MEMOGRAPH_TIMEOUT=3m
 ```
 
-See `.env.example` for storage limits, episode duration, worker concurrency,
-retry count, provider URLs, and timeouts. `OPENAI_API_KEY` is also accepted as
-an alias for `APP_STT_API_KEY`. Container deployments should mount persistent
-storage at `/data`.
+See `.env.example` for storage limits, frame interval, episode duration, worker
+concurrency, retry count, provider URLs, and timeouts. `OPENAI_API_KEY` is
+accepted as an alias for both `APP_STT_API_KEY` and `APP_VISION_API_KEY`. When
+both features use OpenAI, `APP_VISION_API_KEY` may also be omitted and the
+backend will reuse `APP_STT_API_KEY`.
+Container deployments should mount persistent storage at `/data`. Local
+non-container development requires `ffmpeg` on `PATH`; the production image
+installs it. The server validates `APP_VIDEO_FFMPEG_PATH` during startup so a
+missing executable is reported before any uploads are accepted.
 
 ## Database and server
 
@@ -334,7 +430,9 @@ make run
 Migration `00003_voice_memory.sql` adds recordings, episodes, and durable jobs.
 Migration `00004_realtime_voice_sessions.sql` adds persistent listening sessions
 and idempotent ordered chunks.
-The local audio directory (`data/` by default) is ignored by Git.
+Migration `00005_video_memory.sql` adds video sessions, recordings, component
+jobs, visual observations, and merged episodes. Local media under `data/` is
+ignored by Git.
 
 Example response:
 
@@ -365,5 +463,5 @@ make build
 
 The test suite covers container dependency contracts, configuration fallbacks,
 authentication, episode bucketing and offsets, graph-configuration validation,
-OpenAI diarized response parsing, Memograph auth selection, custom fields, and
-answer scoping.
+OpenAI diarized and visual structured-output parsing, backend-assigned video
+chunk ordering, Memograph auth selection, custom fields, and answer scoping.

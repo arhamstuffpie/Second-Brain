@@ -69,6 +69,28 @@ func (fakeVoiceService) GetGraph(context.Context, string, string) (json.RawMessa
 }
 func (fakeVoiceService) ProcessNextJob(context.Context) (bool, error) { return false, nil }
 
+type fakeVideoService struct{}
+
+func (fakeVideoService) IngestVideo(context.Context, service.VideoIngestInput) (service.VideoRecording, error) {
+	return service.VideoRecording{}, nil
+}
+func (fakeVideoService) GetVideoRecording(context.Context, string, string) (service.VideoRecordingDetail, error) {
+	return service.VideoRecordingDetail{}, nil
+}
+func (fakeVideoService) StartVideoRealtimeSession(context.Context, service.StartVideoRealtimeSessionInput) (service.RealtimeVideoSession, error) {
+	return service.RealtimeVideoSession{}, nil
+}
+func (fakeVideoService) IngestVideoRealtimeChunk(context.Context, service.RealtimeVideoChunkInput) (service.VideoRecording, error) {
+	return service.VideoRecording{}, nil
+}
+func (fakeVideoService) GetVideoRealtimeSession(context.Context, string, string) (service.RealtimeVideoSessionDetail, error) {
+	return service.RealtimeVideoSessionDetail{}, nil
+}
+func (fakeVideoService) StopVideoRealtimeSession(context.Context, string, string) (service.RealtimeVideoSession, error) {
+	return service.RealtimeVideoSession{}, nil
+}
+func (fakeVideoService) ProcessNextVideoJob(context.Context) (bool, error) { return false, nil }
+
 func (f fakeAuthService) Signup(context.Context, string, string) (service.AuthResult, error) {
 	return f.signupResult, f.signupErr
 }
@@ -183,6 +205,7 @@ func testRouterWithAuth(t *testing.T, healthService service.HealthService, authS
 		HealthService: healthService,
 		AuthService:   authService,
 		VoiceService:  fakeVoiceService{},
+		VideoService:  fakeVideoService{},
 	})
 	if err != nil {
 		t.Fatalf("handler.NewContainer() error = %v", err)

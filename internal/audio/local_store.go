@@ -18,26 +18,26 @@ type LocalStore struct {
 
 func NewLocalStore(root string, maxBytes int64) (*LocalStore, error) {
 	if strings.TrimSpace(root) == "" || maxBytes < 1 {
-		return nil, fmt.Errorf("valid local audio storage configuration is required")
+		return nil, fmt.Errorf("valid local media storage configuration is required")
 	}
 	absoluteRoot, err := filepath.Abs(root)
 	if err != nil {
-		return nil, fmt.Errorf("resolve audio storage path: %w", err)
+		return nil, fmt.Errorf("resolve media storage path: %w", err)
 	}
 	if err := os.MkdirAll(absoluteRoot, 0o750); err != nil {
-		return nil, fmt.Errorf("create audio storage directory: %w", err)
+		return nil, fmt.Errorf("create media storage directory: %w", err)
 	}
 	return &LocalStore{root: absoluteRoot, maxBytes: maxBytes}, nil
 }
 
 func (s *LocalStore) Save(ctx context.Context, filename string, content io.Reader) (service.StoredAudio, error) {
 	if content == nil {
-		return service.StoredAudio{}, fmt.Errorf("audio content is required")
+		return service.StoredAudio{}, fmt.Errorf("media content is required")
 	}
 	extension := strings.ToLower(filepath.Ext(filepath.Base(filename)))
-	temp, err := os.CreateTemp(s.root, "voice-*"+extension)
+	temp, err := os.CreateTemp(s.root, "media-*"+extension)
 	if err != nil {
-		return service.StoredAudio{}, fmt.Errorf("create audio file: %w", err)
+		return service.StoredAudio{}, fmt.Errorf("create media file: %w", err)
 	}
 	path := temp.Name()
 	keep := false
@@ -51,16 +51,16 @@ func (s *LocalStore) Save(ctx context.Context, filename string, content io.Reade
 	limited := io.LimitReader(content, s.maxBytes+1)
 	written, err := copyWithContext(ctx, temp, limited)
 	if err != nil {
-		return service.StoredAudio{}, fmt.Errorf("store audio: %w", err)
+		return service.StoredAudio{}, fmt.Errorf("store media: %w", err)
 	}
 	if written == 0 {
-		return service.StoredAudio{}, fmt.Errorf("audio file is empty")
+		return service.StoredAudio{}, fmt.Errorf("media file is empty")
 	}
 	if written > s.maxBytes {
-		return service.StoredAudio{}, fmt.Errorf("audio file exceeds %d bytes", s.maxBytes)
+		return service.StoredAudio{}, fmt.Errorf("media file exceeds %d bytes", s.maxBytes)
 	}
 	if err := temp.Sync(); err != nil {
-		return service.StoredAudio{}, fmt.Errorf("sync audio file: %w", err)
+		return service.StoredAudio{}, fmt.Errorf("sync media file: %w", err)
 	}
 	keep = true
 	return service.StoredAudio{Path: path, SizeBytes: written}, nil
@@ -70,11 +70,11 @@ func (s *LocalStore) Open(_ context.Context, path string) (io.ReadCloser, error)
 	clean := filepath.Clean(path)
 	relative, err := filepath.Rel(s.root, clean)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return nil, fmt.Errorf("audio path is outside storage root")
+		return nil, fmt.Errorf("media path is outside storage root")
 	}
 	file, err := os.Open(clean)
 	if err != nil {
-		return nil, fmt.Errorf("open audio file: %w", err)
+		return nil, fmt.Errorf("open media file: %w", err)
 	}
 	return file, nil
 }
@@ -83,10 +83,10 @@ func (s *LocalStore) Delete(_ context.Context, path string) error {
 	clean := filepath.Clean(path)
 	relative, err := filepath.Rel(s.root, clean)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("audio path is outside storage root")
+		return fmt.Errorf("media path is outside storage root")
 	}
 	if err := os.Remove(clean); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("delete audio file: %w", err)
+		return fmt.Errorf("delete media file: %w", err)
 	}
 	return nil
 }
@@ -119,3 +119,4 @@ func copyWithContext(ctx context.Context, destination io.Writer, source io.Reade
 }
 
 var _ service.AudioStore = (*LocalStore)(nil)
+var _ service.VideoStore = (*LocalStore)(nil)

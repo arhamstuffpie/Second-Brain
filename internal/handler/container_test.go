@@ -58,6 +58,28 @@ func (stubVoiceService) GetGraph(context.Context, string, string) (json.RawMessa
 }
 func (stubVoiceService) ProcessNextJob(context.Context) (bool, error) { return false, nil }
 
+type stubVideoService struct{}
+
+func (stubVideoService) IngestVideo(context.Context, service.VideoIngestInput) (service.VideoRecording, error) {
+	return service.VideoRecording{}, nil
+}
+func (stubVideoService) GetVideoRecording(context.Context, string, string) (service.VideoRecordingDetail, error) {
+	return service.VideoRecordingDetail{}, nil
+}
+func (stubVideoService) StartVideoRealtimeSession(context.Context, service.StartVideoRealtimeSessionInput) (service.RealtimeVideoSession, error) {
+	return service.RealtimeVideoSession{}, nil
+}
+func (stubVideoService) IngestVideoRealtimeChunk(context.Context, service.RealtimeVideoChunkInput) (service.VideoRecording, error) {
+	return service.VideoRecording{}, nil
+}
+func (stubVideoService) GetVideoRealtimeSession(context.Context, string, string) (service.RealtimeVideoSessionDetail, error) {
+	return service.RealtimeVideoSessionDetail{}, nil
+}
+func (stubVideoService) StopVideoRealtimeSession(context.Context, string, string) (service.RealtimeVideoSession, error) {
+	return service.RealtimeVideoSession{}, nil
+}
+func (stubVideoService) ProcessNextVideoJob(context.Context) (bool, error) { return false, nil }
+
 func TestNewContainerRequiresServices(t *testing.T) {
 	if _, err := NewContainer(Dependencies{}); err == nil {
 		t.Fatal("NewContainer() error = nil, want error")
@@ -69,11 +91,13 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		HealthService: stubHealthService{},
 		AuthService:   stubAuthService{},
 		VoiceService:  stubVoiceService{},
+		VideoService:  stubVideoService{},
 	})
 	if err != nil {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
-	if container == nil || container.Health == nil || container.Auth == nil || container.Voice == nil {
+	if container == nil || container.Health == nil || container.Auth == nil ||
+		container.Voice == nil || container.Video == nil {
 		t.Fatal("handler container has nil required dependency")
 	}
 }
