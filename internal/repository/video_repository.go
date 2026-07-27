@@ -203,7 +203,8 @@ WHERE id = $1 AND owner_user_id = $2`
 	}
 
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, bucket_index, start_time, end_time, description, location, confidence,
+SELECT id, bucket_index, start_time, end_time, description,
+       visual_description, speech_description, location, confidence,
        status, memograph_response, last_error
 FROM video_episodes WHERE recording_id = $1 ORDER BY bucket_index`, id)
 	if err != nil {
@@ -217,7 +218,8 @@ FROM video_episodes WHERE recording_id = $1 ORDER BY bucket_index`, id)
 		var responseJSON []byte
 		if err := rows.Scan(
 			&episode.ID, &episode.BucketIndex, &episode.StartTime, &episode.EndTime,
-			&episode.Description, &episode.Location, &confidence, &episode.Status,
+			&episode.Description, &episode.VisualDescription,
+			&episode.SpeechDescription, &episode.Location, &confidence, &episode.Status,
 			&responseJSON, &episode.LastError,
 		); err != nil {
 			return service.VideoRecordingDetail{}, fmt.Errorf("scan video episode: %w", err)
@@ -412,6 +414,7 @@ SELECT target.id, target.kind, COALESCE(target.recording_id, ''),
        COALESCE(r.client_chunk_id, ''),
        r.start_offset_seconds, r.frame_interval_seconds,
        r.transcript, r.visual_analysis, COALESCE(e.description, ''),
+       COALESCE(e.visual_description, ''), COALESCE(e.speech_description, ''),
        COALESCE(e.start_time, 0), COALESCE(e.end_time, 0),
        COALESCE(e.confidence, r.default_confidence)
 FROM target
@@ -426,7 +429,8 @@ LEFT JOIN video_episodes e ON e.id = target.episode_id`
 		&job.MediaType, &job.SessionID, &job.GroupID, &job.MemoryID,
 		&job.DeviceID, &job.Location, &job.ClientChunkID,
 		&job.StartOffset, &job.FrameInterval,
-		&transcriptJSON, &visualJSON, &job.Description, &job.EpisodeStart,
+		&transcriptJSON, &visualJSON, &job.Description,
+		&job.VisualDescription, &job.SpeechDescription, &job.EpisodeStart,
 		&job.EpisodeEnd, &confidence,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -537,20 +541,25 @@ func (r *videoRepository) SaveVideoEpisodes(
 WITH episode_rows AS (
 	SELECT * FROM jsonb_to_recordset($2::jsonb) AS x(
 		bucket_index integer, start_time double precision, end_time double precision,
-		description text, location text, confidence double precision,
+		description text, visual_description text, speech_description text,
+		location text, confidence double precision,
 		visual_observations jsonb
 	)
 ), inserted AS (
 	INSERT INTO video_episodes (
 		recording_id, bucket_index, start_time, end_time, description,
-		location, confidence, visual_observations
+		visual_description, speech_description, location, confidence,
+		visual_observations
 	)
 	SELECT $1, bucket_index, start_time, end_time, description,
-	       location, confidence, visual_observations
+	       visual_description, speech_description, location, confidence,
+	       visual_observations
 	FROM episode_rows
 	ON CONFLICT (recording_id, bucket_index) DO UPDATE
 	SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
 	    description = EXCLUDED.description, location = EXCLUDED.location,
+	    visual_description = EXCLUDED.visual_description,
+	    speech_description = EXCLUDED.speech_description,
 	    confidence = EXCLUDED.confidence,
 	    visual_observations = EXCLUDED.visual_observations, updated_at = NOW()
 	RETURNING id

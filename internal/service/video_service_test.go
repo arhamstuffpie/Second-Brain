@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -41,11 +42,25 @@ func TestBuildVideoEpisodesMergesSpeechAndVisualContext(t *testing.T) {
 		"Two people are reviewing a document.",
 		"Objects visible: printed contract.",
 		"Readable text: Employment Agreement.",
-		`A said: "Update the contract before Friday."`,
+		"A Said : Update the contract before Friday.",
 	} {
 		if !strings.Contains(episode.Description, expected) {
 			t.Fatalf("description %q does not contain %q", episode.Description, expected)
 		}
+	}
+	if episode.VisualDescription != "Two people are reviewing a document." {
+		t.Fatalf("visual description = %q", episode.VisualDescription)
+	}
+	if strings.Contains(episode.VisualDescription, "Objects visible:") ||
+		strings.Contains(episode.VisualDescription, "Visible context:") {
+		t.Fatalf("visual Memograph data contains a wrapper label: %q", episode.VisualDescription)
+	}
+	if episode.SpeechDescription != "A Said : Update the contract before Friday." {
+		t.Fatalf("speech description = %q", episode.SpeechDescription)
+	}
+	if strings.Contains(episode.SpeechDescription, "Speech:") ||
+		strings.Contains(episode.SpeechDescription, `"`) {
+		t.Fatalf("speech Memograph data contains a wrapper label: %q", episode.SpeechDescription)
 	}
 	if episode.Location != "office meeting room" {
 		t.Fatalf("location = %q, want office meeting room", episode.Location)
@@ -238,5 +253,130 @@ func TestVideoAudioJobReportsAudioWithNoDetectedSpeech(t *testing.T) {
 		!*repository.transcript.AudioTrackPresent ||
 		repository.transcript.Warning != "audio track was present, but no speech was detected" {
 		t.Fatalf("audio-track diagnostic = %+v", repository.transcript)
+	}
+}
+
+type memographCompletionRepository struct {
+	stubVideoRepository
+	response json.RawMessage
+}
+
+func (r *memographCompletionRepository) CompleteVideoMemographEpisode(
+	_ context.Context,
+	_ VideoJob,
+	response json.RawMessage,
+) error {
+	r.response = response
+	return nil
+}
+
+type parallelMemographClient struct {
+	stubMemographClient
+	started  chan struct{}
+	release  chan struct{}
+	requests chan EpisodeInsertRequest
+}
+
+func (c *parallelMemographClient) InsertEpisode(
+	ctx context.Context,
+	_ string,
+	request EpisodeInsertRequest,
+) (json.RawMessage, error) {
+	select {
+	case c.started <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	c.requests <- request
+	source, _ := request.Meta["source"].(string)
+	return json.RawMessage(`{"source":"` + source + `"}`), nil
+}
+
+func TestVideoMemographWritesVisualAndSpeechInParallel(t *testing.T) {
+	repository := &memographCompletionRepository{}
+	client := &parallelMemographClient{
+		started: make(chan struct{}, 2), release: make(chan struct{}),
+		requests: make(chan EpisodeInsertRequest, 2),
+	}
+	video := newVideoService(
+		repository, stubTranscriber{}, stubAudioStore{}, stubMediaExtractor{},
+		stubVisualAnalyzer{}, client,
+		config.VideoConfig{
+			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
+		},
+		config.WorkerConfig{MaxAttempts: 5},
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- video.processVideoMemograph(context.Background(), VideoJob{
+			MemoryID: "memory-1", SessionID: "session-1", GroupID: "group-1",
+			VisualDescription: "View over a lake with a dock.",
+			SpeechDescription: "A Said : you",
+			EpisodeStart:      30, EpisodeEnd: 60,
+		})
+	}()
+
+	for index := 0; index < 2; index++ {
+		select {
+		case <-client.started:
+		case <-time.After(time.Second):
+			t.Fatal("visual and speech Memograph calls did not overlap")
+		}
+	}
+	close(client.release)
+	if err := <-done; err != nil {
+		t.Fatalf("processVideoMemograph() error = %v", err)
+	}
+
+	dataBySource := make(map[string]string, 2)
+	for index := 0; index < 2; index++ {
+		request := <-client.requests
+		source, _ := request.Meta["source"].(string)
+		dataBySource[source] = request.Data
+	}
+	if dataBySource["visual"] != "View over a lake with a dock." ||
+		dataBySource["speech"] != "A Said : you" {
+		t.Fatalf("Memograph branch data = %+v", dataBySource)
+	}
+	for _, data := range dataBySource {
+		for _, forbidden := range []string{
+			"Audio and video memory from session",
+			"Visible context:",
+			"Objects visible:",
+			"Speech:",
+		} {
+			if strings.Contains(data, forbidden) {
+				t.Fatalf("Memograph data %q contains %q", data, forbidden)
+			}
+		}
+	}
+	var responses map[string]json.RawMessage
+	if err := json.Unmarshal(repository.response, &responses); err != nil {
+		t.Fatalf("combined Memograph response = %s: %v", repository.response, err)
+	}
+	if len(responses) != 2 {
+		t.Fatalf("combined Memograph responses = %s", repository.response)
+	}
+}
+
+func TestLegacyVideoMemographDataRemovesCombinedEpisodeWrappers(t *testing.T) {
+	visual, speech := legacyVideoMemographData(
+		"Audio and video memory from session session-1 between 30.00s and 60.00s. " +
+			"The scene was at or appeared to be home-4. " +
+			"Visible context: View over a lake. A hand is holding a cup. " +
+			"Activities: Looking over a lake. Objects visible: lake, hand, cup. " +
+			`Speech: A said: "you"`,
+	)
+	if visual != "View over a lake. A hand is holding a cup." {
+		t.Fatalf("legacy visual data = %q", visual)
+	}
+	if speech != "A Said : you" {
+		t.Fatalf("legacy speech data = %q", speech)
 	}
 }

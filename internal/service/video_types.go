@@ -171,50 +171,56 @@ type VisualAnalysis struct {
 }
 
 type VideoEpisodeDraft struct {
-	BucketIndex int                `json:"bucket_index"`
-	StartTime   float64            `json:"start_time"`
-	EndTime     float64            `json:"end_time"`
-	Description string             `json:"description"`
-	Location    string             `json:"location"`
-	Confidence  *float64           `json:"confidence,omitempty"`
-	Visual      []VideoObservation `json:"visual_observations"`
+	BucketIndex       int                `json:"bucket_index"`
+	StartTime         float64            `json:"start_time"`
+	EndTime           float64            `json:"end_time"`
+	Description       string             `json:"description"`
+	VisualDescription string             `json:"visual_description"`
+	SpeechDescription string             `json:"speech_description"`
+	Location          string             `json:"location"`
+	Confidence        *float64           `json:"confidence,omitempty"`
+	Visual            []VideoObservation `json:"visual_observations"`
 }
 
 type VideoEpisode struct {
-	ID          string          `json:"id"`
-	BucketIndex int             `json:"bucket_index"`
-	StartTime   float64         `json:"start_time"`
-	EndTime     float64         `json:"end_time"`
-	Description string          `json:"description"`
-	Location    string          `json:"location,omitempty"`
-	Confidence  *float64        `json:"confidence,omitempty"`
-	Status      string          `json:"status"`
-	Response    json.RawMessage `json:"memograph_response,omitempty"`
-	LastError   string          `json:"last_error,omitempty"`
+	ID                string          `json:"id"`
+	BucketIndex       int             `json:"bucket_index"`
+	StartTime         float64         `json:"start_time"`
+	EndTime           float64         `json:"end_time"`
+	Description       string          `json:"description"`
+	VisualDescription string          `json:"visual_description,omitempty"`
+	SpeechDescription string          `json:"speech_description,omitempty"`
+	Location          string          `json:"location,omitempty"`
+	Confidence        *float64        `json:"confidence,omitempty"`
+	Status            string          `json:"status"`
+	Response          json.RawMessage `json:"memograph_response,omitempty"`
+	LastError         string          `json:"last_error,omitempty"`
 }
 
 type VideoJob struct {
-	ID             int64
-	Kind           string
-	RecordingID    string
-	EpisodeID      string
-	Attempts       int
-	MaxAttempts    int
-	FilePath       string
-	FileName       string
-	MediaType      string
-	SessionID      string
-	GroupID        string
-	MemoryID       string
-	DeviceID       string
-	Location       string
-	ClientChunkID  string
-	StartOffset    float64
-	FrameInterval  float64
-	Transcript     Transcript
-	VisualAnalysis VisualAnalysis
-	Description    string
-	EpisodeStart   float64
-	EpisodeEnd     float64
-	Confidence     *float64
+	ID                int64
+	Kind              string
+	RecordingID       string
+	EpisodeID         string
+	Attempts          int
+	MaxAttempts       int
+	FilePath          string
+	FileName          string
+	MediaType         string
+	SessionID         string
+	GroupID           string
+	MemoryID          string
+	DeviceID          string
+	Location          string
+	ClientChunkID     string
+	StartOffset       float64
+	FrameInterval     float64
+	Transcript        Transcript
+	VisualAnalysis    VisualAnalysis
+	Description       string
+	VisualDescription string
+	SpeechDescription string
+	EpisodeStart      float64
+	EpisodeEnd        float64
+	Confidence        *float64
 }

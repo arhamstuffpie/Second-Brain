@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -367,31 +368,115 @@ func (s *videoService) processVideoMerge(ctx context.Context, job VideoJob) erro
 }
 
 func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) error {
-	meta := map[string]any{
-		"source": "audio+video", "source_description": "video recording",
+	baseMeta := map[string]any{
 		"session_id": job.SessionID, "group_id": job.GroupID,
 		"start_time": job.EpisodeStart, "end_time": job.EpisodeEnd,
 	}
 	if job.ClientChunkID != "" {
-		meta["chunk_id"] = job.ClientChunkID
+		baseMeta["chunk_id"] = job.ClientChunkID
 	}
 	if job.Location != "" {
-		meta["location"] = job.Location
+		baseMeta["location"] = job.Location
 	}
 	if job.DeviceID != "" {
-		meta["device_id"] = job.DeviceID
+		baseMeta["device_id"] = job.DeviceID
 	}
 	custom := make(map[string]any)
 	if job.Confidence != nil {
 		custom["confidence"] = *job.Confidence
 	}
-	result, err := s.memograph.InsertEpisode(ctx, job.MemoryID, EpisodeInsertRequest{
-		Data: job.Description, Meta: meta, CustomFields: custom,
-	})
-	if err != nil {
-		return err
+
+	type branch struct {
+		name string
+		data string
 	}
-	return s.repository.CompleteVideoMemographEpisode(ctx, job, result)
+	visualDescription := strings.TrimSpace(job.VisualDescription)
+	speechDescription := strings.TrimSpace(job.SpeechDescription)
+	if visualDescription == "" && speechDescription == "" {
+		visualDescription, speechDescription = legacyVideoMemographData(job.Description)
+	}
+	branches := make([]branch, 0, 2)
+	if visualDescription != "" {
+		branches = append(branches, branch{name: "visual", data: visualDescription})
+	}
+	if speechDescription != "" {
+		branches = append(branches, branch{name: "speech", data: speechDescription})
+	}
+	if len(branches) == 0 {
+		return fmt.Errorf("video episode contains no visual or speech data")
+	}
+
+	type branchResult struct {
+		name     string
+		response json.RawMessage
+		err      error
+	}
+	results := make(chan branchResult, len(branches))
+	for _, item := range branches {
+		go func(item branch) {
+			meta := make(map[string]any, len(baseMeta)+2)
+			for key, value := range baseMeta {
+				meta[key] = value
+			}
+			meta["source"] = item.name
+			meta["source_description"] = item.name + " from video recording"
+			response, err := s.memograph.InsertEpisode(
+				ctx,
+				job.MemoryID,
+				EpisodeInsertRequest{
+					Data: item.data, Meta: meta, CustomFields: custom,
+				},
+			)
+			results <- branchResult{name: item.name, response: response, err: err}
+		}(item)
+	}
+
+	responses := make(map[string]json.RawMessage, len(branches))
+	var failures []string
+	for range branches {
+		result := <-results
+		if result.err != nil {
+			failures = append(failures, result.name+": "+result.err.Error())
+			continue
+		}
+		responses[result.name] = result.response
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		return fmt.Errorf("write video episode branches: %s", strings.Join(failures, "; "))
+	}
+	combined, err := json.Marshal(responses)
+	if err != nil {
+		return fmt.Errorf("encode video Memograph responses: %w", err)
+	}
+	return s.repository.CompleteVideoMemographEpisode(ctx, job, combined)
+}
+
+func legacyVideoMemographData(description string) (string, string) {
+	visual := videoDescriptionSection(
+		description,
+		"Visible context:",
+		[]string{" Activities:", " Objects visible:", " Readable text:", " Speech:", " No speech"},
+	)
+	speech := videoDescriptionSection(description, "Speech:", nil)
+	speech = strings.ReplaceAll(speech, ` said: "`, " Said : ")
+	speech = strings.ReplaceAll(speech, `"`, "")
+	return strings.TrimSpace(visual), strings.TrimSpace(speech)
+}
+
+func videoDescriptionSection(description, label string, endLabels []string) string {
+	index := strings.Index(description, label)
+	if index < 0 {
+		return ""
+	}
+	value := description[index+len(label):]
+	end := len(value)
+	for _, endLabel := range endLabels {
+		if marker := strings.Index(value, endLabel); marker >= 0 && marker < end {
+			end = marker
+		}
+	}
+	return strings.TrimSpace(value[:end])
 }
 
 type videoBucket struct {
@@ -453,7 +538,10 @@ func BuildVideoEpisodes(
 			if speaker == "" {
 				speaker = "speaker"
 			}
-			speech = append(speech, fmt.Sprintf("%s said: %q", speaker, strings.TrimSpace(segment.Text)))
+			speech = append(
+				speech,
+				fmt.Sprintf("%s Said : %s", speaker, strings.TrimSpace(segment.Text)),
+			)
 			if segmentEnd := offset + segment.EndTime; segmentEnd > end {
 				end = segmentEnd
 			}
@@ -519,8 +607,11 @@ func BuildVideoEpisodes(
 		}
 		result = append(result, VideoEpisodeDraft{
 			BucketIndex: index, StartTime: start, EndTime: end,
-			Description: strings.Join(parts, " "), Location: location,
-			Confidence: confidence, Visual: absoluteObservations,
+			Description:       strings.Join(parts, " "),
+			VisualDescription: strings.Join(visualSummaries, " "),
+			SpeechDescription: strings.Join(speech, " "),
+			Location:          location,
+			Confidence:        confidence, Visual: absoluteObservations,
 		})
 	}
 	return result

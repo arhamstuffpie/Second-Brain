@@ -109,8 +109,10 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 	}
 	if err := repository.SaveVideoEpisodes(ctx, mergeJob, []service.VideoEpisodeDraft{{
 		BucketIndex: 0, StartTime: 0, EndTime: 5,
-		Description: "A said hello while a person was visible.",
-		Visual:      mergeJob.VisualAnalysis.Observations,
+		Description:       "A said hello while a person was visible.",
+		VisualDescription: "A person was visible.",
+		SpeechDescription: "A Said : Hello",
+		Visual:            mergeJob.VisualAnalysis.Observations,
 	}}, 3); err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +120,10 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 	memographJob, found, err := repository.ClaimVideoJob(ctx)
 	if err != nil || !found || memographJob.Kind != "memograph" {
 		t.Fatalf("memograph job = %+v, %t, %v", memographJob, found, err)
+	}
+	if memographJob.VisualDescription != "A person was visible." ||
+		memographJob.SpeechDescription != "A Said : Hello" {
+		t.Fatalf("Memograph branch descriptions = %+v", memographJob)
 	}
 	if err := repository.CompleteVideoMemographEpisode(
 		ctx, memographJob, json.RawMessage(`{"ok":true}`),

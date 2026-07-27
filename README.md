@@ -279,8 +279,11 @@ episodes.
 
 PostgreSQL queues `audio` and `visual` jobs together. A `merge` job is created
 exactly once after both branches complete, and every resulting episode receives
-its own `memograph` job. A visual-analysis retry therefore never reruns STT, and
-a Memograph retry never reruns either extraction branch.
+its own `memograph` job. That job writes the visual summary and speech transcript
+to Memograph as separate concurrent API calls. The visual payload excludes
+objects and wrapper labels; the speech payload contains only speaker utterances.
+A visual-analysis retry therefore never reruns STT, and a Memograph retry never
+reruns either extraction branch.
 
 ### Video API
 
