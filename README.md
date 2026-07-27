@@ -6,7 +6,7 @@ example endpoint is `GET /health`, which runs a sqlc-generated PostgreSQL probe.
 
 ## Architecture
 
-`cmd/server/main.go` is the only composition root. It creates each dependency
+`backend/cmd/server/main.go` is the only composition root. It creates each dependency
 exactly once and passes it downward:
 
 ```text
@@ -21,8 +21,9 @@ PostgreSQL -> repositories -> services -> handlers -> router
 - Request contexts flow through every layer and JWT claims are attached to the
   standard `context.Context` as an authenticated principal.
 
-The directory name `db/quries` intentionally follows the spelling requested in
-the project structure. sqlc outputs generated Go code to `internal/db/sqlc`.
+The directory name `backend/db/quries` intentionally follows the spelling
+requested in the project structure. sqlc outputs generated Go code to
+`backend/internal/db/sqlc`.
 
 ## Voice-to-Memograph pipeline
 
@@ -379,19 +380,19 @@ Configuration is read from `APP_*` environment variables through `GetEnv`,
 `GetEnvInt`, and `GetEnvBool`. Non-secret operational settings have fallback
 values. `APP_DATABASE_URL` and `APP_JWT_SECRET` are required; the JWT secret must
 contain at least 32 characters. `APP_JWT_ACCESS_TOKEN_TTL` controls access-token
-lifetime and defaults to `24h`. Copy `.env.example` for local development, but
-do not commit `.env`.
+lifetime and defaults to `24h`. Copy `backend/.env.example` for local
+development, but do not commit `backend/.env`.
 
 Development logging is colored and console-friendly by default. Production
 logging defaults to structured JSON. `APP_LOG_PRETTY` can explicitly override
 either behavior, and `NO_COLOR=1` disables ANSI colors.
 
 ```bash
-cp .env.example .env
+cp backend/.env.example backend/.env
 ```
 
-The server automatically loads `.env` when it is present. Variables already
-set by the shell or container take precedence.
+The server automatically loads `backend/.env` when started through the provided
+Makefiles. Variables already set by the shell or container take precedence.
 
 Voice, video, and Memograph essentials:
 
@@ -410,10 +411,10 @@ APP_MEMOGRAPH_JWT=...
 APP_MEMOGRAPH_TIMEOUT=3m
 ```
 
-See `.env.example` for storage limits, frame interval, episode duration, worker
-concurrency, retry count, provider URLs, and timeouts. `OPENAI_API_KEY` is
-accepted as an alias for both `APP_STT_API_KEY` and `APP_VISION_API_KEY`. When
-both features use OpenAI, `APP_VISION_API_KEY` may also be omitted and the
+See `backend/.env.example` for storage limits, frame interval, episode duration,
+worker concurrency, retry count, provider URLs, and timeouts. `OPENAI_API_KEY`
+is accepted as an alias for both `APP_STT_API_KEY` and `APP_VISION_API_KEY`.
+When both features use OpenAI, `APP_VISION_API_KEY` may also be omitted and the
 backend will reuse `APP_STT_API_KEY`.
 Container deployments should mount persistent storage at `/data`. Local
 non-container development requires `ffmpeg` on `PATH`; the production image
@@ -430,12 +431,15 @@ make migrate-up DATABASE_URL="$APP_DATABASE_URL"
 make run
 ```
 
+The root Makefile forwards backend commands into `backend/`. You can also run
+them directly after `cd backend`.
+
 Migration `00003_voice_memory.sql` adds recordings, episodes, and durable jobs.
 Migration `00004_realtime_voice_sessions.sql` adds persistent listening sessions
 and idempotent ordered chunks.
 Migration `00005_video_memory.sql` adds video sessions, recordings, component
-jobs, visual observations, and merged episodes. Local media under `data/` is
-ignored by Git.
+jobs, visual observations, and merged episodes. Local media under
+`backend/data/` is ignored by Git.
 
 Example response:
 
