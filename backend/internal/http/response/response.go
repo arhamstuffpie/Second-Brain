@@ -8,6 +8,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Envelope is the stable top-level contract consumed by frontend clients.
+// Fields intentionally do not use omitempty: success responses include empty
+// error/code values, while error responses include a null data value.
 type Envelope struct {
 	Data    any     `json:"data"`
 	Error   string  `json:"error"`
