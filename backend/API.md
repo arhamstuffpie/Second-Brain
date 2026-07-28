@@ -48,7 +48,7 @@ returns `401` with message `the bearer token is invalid or expired`.
 ### Response envelope
 
 Every JSON response uses this envelope. None of these top-level properties are
-omitted, so the frontend can use one response type for every endpoint.
+omitted, so the frontend can use one response type for every endpoint.   
 
 ```ts
 type ApiResponse<T> = {

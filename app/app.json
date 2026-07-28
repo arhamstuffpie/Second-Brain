@@ -1,23 +1,29 @@
 {
   "expo": {
-    "name": "second-brain",
-    "slug": "second-brain",
+    "name": "Memory One",
+    "slug": "memory-one",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "secondbrain",
+    "scheme": "memoryone",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "bundleIdentifier": "com.arham.memoryone",
+      "supportsTablet": false,
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "UIBackgroundModes": []
+      }
     },
     "android": {
+      "package": "com.arham.memoryone",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#F3F0E8",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": true
     },
     "web": {
       "output": "static",
@@ -26,9 +32,23 @@
     "plugins": [
       "expo-router",
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Memory One to capture the moments you explicitly record.",
+          "microphonePermission": "Allow Memory One to include audio in the video moments you explicitly record.",
+          "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
+        }
+      ],
+      [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#F3F0E8",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
