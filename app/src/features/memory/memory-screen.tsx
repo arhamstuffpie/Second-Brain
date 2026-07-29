@@ -1,18 +1,20 @@
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 
 import {
   Body,
   Button,
   Card,
   ChoiceRow,
+  ErrorNotice,
   Field,
   PageHeader,
   Screen,
   SectionLabel,
   StatusPill,
 } from '@/components/ui';
-import { Fonts, Radius, Spacing } from '@/constants/theme';
+import { Fonts } from '@/constants/theme';
+import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -91,7 +93,7 @@ export function MemoryScreen() {
             : await api.memory.graph(settings.memoryId, groupId);
       setResult(presentResult(response));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Memograph request failed.');
+      setError(getReadableError(cause, 'memograph'));
     } finally {
       setLoading(false);
     }
@@ -161,11 +163,7 @@ export function MemoryScreen() {
             />
           </>
         )}
-        {error ? (
-          <View style={[styles.error, { backgroundColor: theme.dangerSoft }]}>
-            <Text style={{ color: theme.danger, fontSize: 13, lineHeight: 18 }}>{error}</Text>
-          </View>
-        ) : null}
+        {error ? <ErrorNotice title="Memograph request failed" message={error} /> : null}
         <Button
           label={
             mode === 'create'
@@ -195,6 +193,5 @@ export function MemoryScreen() {
 
 const styles = StyleSheet.create({
   screen: { paddingBottom: 96 },
-  error: { borderRadius: Radius.md, padding: Spacing.md },
   result: { fontFamily: Fonts.mono, fontSize: 11, lineHeight: 17 },
 });

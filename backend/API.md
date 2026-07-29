@@ -45,6 +45,17 @@ The access token is returned by signup and login. A missing token returns
 `401` with message `a bearer token is required`. An invalid or expired token
 returns `401` with message `the bearer token is invalid or expired`.
 
+An authenticated client may also send this optional header:
+
+```http
+X-Memograph-Api-Key: <api_key>
+```
+
+It does not replace the application bearer token and cannot authenticate a
+user. For synchronous Memograph proxy endpoints, it overrides the backend's
+configured upstream credential for that request. Native clients should store
+this value in encrypted device storage and send it only over HTTPS.
+
 ### Response envelope
 
 Every JSON response uses this envelope. None of these top-level properties are
@@ -108,6 +119,7 @@ Error example:
 | `413` | `UPLOAD_TOO_LARGE` | A media upload exceeds its configured limit. |
 | `500` | `INTERNAL_ERROR` | An unexpected backend error occurred. |
 | `503` | `SERVICE_UNAVAILABLE` | A required dependency such as PostgreSQL or Memograph is unavailable. |
+| `503` | `MEMOGRAPH_UNAVAILABLE` | Memograph rejected the request, could not be reached, or is missing valid credentials. |
 
 All responses include an `X-Request-ID` header. The frontend may send its own
 `X-Request-ID` (maximum 128 characters); otherwise the backend creates one.
@@ -534,6 +546,15 @@ These authenticated endpoints proxy Memograph. Their success `data` is the
 valid JSON body returned by the configured Memograph server, so its inner shape
 is upstream-defined and is not transformed by this backend. An empty upstream
 body becomes `{}`.
+
+Upstream authorization is selected consistently for every Memograph operation:
+
+1. the authenticated request's optional `X-Memograph-Api-Key`;
+2. `APP_MEMOGRAPH_API_KEY`;
+3. `APP_MEMOGRAPH_JWT` as a bearer-token fallback.
+
+Background media jobs run after the originating HTTP request has completed, so
+they use the configured server API key or JWT rather than a request override.
 
 ### `POST /api/v1/voice/projects/:project_id/memories`
 

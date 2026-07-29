@@ -13,6 +13,7 @@ import {
 } from 'react';
 
 import { ApiClient, ApiError } from '@/lib/api-client';
+import { getReadableError } from '@/lib/readable-error';
 import {
   deleteQueuedFile,
   loadAuthSession,
@@ -66,10 +67,6 @@ type AppContextValue = {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : 'Something went wrong.';
-}
-
 export function AppProvider({ children }: PropsWithChildren) {
   const [ready, setReady] = useState(false);
   const [auth, setAuth] = useState<AuthSession | null>(null);
@@ -108,6 +105,7 @@ export function AppProvider({ children }: PropsWithChildren) {
 
   const activeSettings = settings ?? {
     apiBaseUrl: 'http://localhost:8181',
+    memographApiKey: '',
     projectId: '',
     memoryId: '',
     groupId: '',
@@ -122,8 +120,13 @@ export function AppProvider({ children }: PropsWithChildren) {
   };
 
   const api = useMemo(
-    () => new ApiClient(activeSettings.apiBaseUrl, () => auth?.access_token),
-    [activeSettings.apiBaseUrl, auth?.access_token],
+    () =>
+      new ApiClient(
+        activeSettings.apiBaseUrl,
+        () => auth?.access_token,
+        () => activeSettings.memographApiKey,
+      ),
+    [activeSettings.apiBaseUrl, activeSettings.memographApiKey, auth?.access_token],
   );
 
   const online =
@@ -276,7 +279,7 @@ export function AppProvider({ children }: PropsWithChildren) {
                 attempts,
                 state,
                 nextAttemptAt: Date.now() + delay,
-                lastError: getErrorMessage(error),
+                lastError: getReadableError(error, 'upload'),
               }
             : candidate,
         ),

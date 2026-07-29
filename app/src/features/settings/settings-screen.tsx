@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
-import { Alert, StyleSheet, Switch, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Animated, StyleSheet, Switch, Text, View } from 'react-native';
 
 import {
   Body,
   Button,
   Card,
   ChoiceRow,
+  ErrorNotice,
   Field,
   PageHeader,
   Screen,
@@ -13,6 +14,7 @@ import {
   StatusPill,
 } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/theme';
+import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
 import type { AppSettings } from '@/types/app';
 import { useTheme } from '@/hooks/use-theme';
@@ -50,15 +52,47 @@ export function SettingsScreen() {
   const { settings, auth, network, power, updateSettings, checkHealth, logout } = useApp();
   const [draft, setDraft] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [health, setHealth] = useState<'idle' | 'checking' | 'healthy' | 'failed'>('idle');
+  const [healthError, setHealthError] = useState('');
+  const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const snackbarOpacity = useRef(new Animated.Value(0)).current;
+  const snackbarOffset = useRef(new Animated.Value(12)).current;
+  const snackbarTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => setDraft(settings), [settings]);
+  useEffect(
+    () => () => {
+      if (snackbarTimer.current) clearTimeout(snackbarTimer.current);
+    },
+    [],
+  );
 
   function patch<T extends keyof AppSettings>(key: T, value: AppSettings[T]) {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
+  function showSavedSnackbar() {
+    if (snackbarTimer.current) clearTimeout(snackbarTimer.current);
+    setSnackbarVisible(true);
+    snackbarOpacity.setValue(0);
+    snackbarOffset.setValue(12);
+    Animated.parallel([
+      Animated.timing(snackbarOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+      Animated.timing(snackbarOffset, { toValue: 0, duration: 180, useNativeDriver: true }),
+    ]).start();
+    snackbarTimer.current = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(snackbarOpacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+        Animated.timing(snackbarOffset, { toValue: 8, duration: 180, useNativeDriver: true }),
+      ]).start(({ finished }) => {
+        if (finished) setSnackbarVisible(false);
+      });
+    }, 2400);
+  }
+
   async function save() {
+    setSaveError('');
     const base = draft.apiBaseUrl.trim().replace(/\/+$/, '');
     if (!/^https?:\/\//.test(base)) {
       Alert.alert('Invalid backend URL', 'Enter a complete http:// or https:// address.');
@@ -69,11 +103,15 @@ export function SettingsScreen() {
       await updateSettings({
         ...draft,
         apiBaseUrl: base,
+        memographApiKey: draft.memographApiKey.trim(),
         projectId: draft.projectId.trim(),
         memoryId: draft.memoryId.trim(),
         groupId: draft.groupId.trim(),
         location: draft.location.trim(),
       });
+      showSavedSnackbar();
+    } catch (error) {
+      setSaveError(getReadableError(error, 'backend'));
     } finally {
       setSaving(false);
     }
@@ -81,16 +119,19 @@ export function SettingsScreen() {
 
   async function testBackend() {
     setHealth('checking');
+    setHealthError('');
     try {
       await checkHealth();
       setHealth('healthy');
-    } catch {
+    } catch (error) {
       setHealth('failed');
+      setHealthError(getReadableError(error, 'backend'));
     }
   }
 
   return (
-    <Screen contentStyle={styles.screen}>
+    <View style={styles.root}>
+      <Screen contentStyle={styles.screen}>
       <PageHeader
         eyebrow="PREFERENCES"
         title="Collection controls"
@@ -129,10 +170,21 @@ export function SettingsScreen() {
             />
           )}
         </View>
+        {healthError ? <ErrorNotice title="Backend connection failed" message={healthError} /> : null}
       </Card>
 
       <Card>
         <SectionLabel>Memograph sync</SectionLabel>
+        <Field
+          label="Memograph API key (optional)"
+          value={draft.memographApiKey}
+          onChangeText={(value) => patch('memographApiKey', value)}
+          placeholder="mg_live_…"
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+          hint="Overrides the server Memograph credential for your requests. Your app login is still required."
+        />
         <Field
           label="Project ID"
           value={draft.projectId}
@@ -216,6 +268,7 @@ export function SettingsScreen() {
         </View>
       </Card>
 
+      {saveError ? <ErrorNotice title="Preferences were not saved" message={saveError} /> : null}
       <Button label="Save preferences" onPress={() => void save()} loading={saving} />
 
       <Card>
@@ -236,15 +289,49 @@ export function SettingsScreen() {
           }
         />
       </Card>
-    </Screen>
+      </Screen>
+      {snackbarVisible && (
+        <Animated.View
+          accessibilityLiveRegion="polite"
+          style={[
+            styles.snackbar,
+            {
+              backgroundColor: theme.text,
+              opacity: snackbarOpacity,
+              transform: [{ translateY: snackbarOffset }],
+            },
+          ]}>
+          <Text style={[styles.snackbarText, { color: theme.background }]}>
+            Your preferences have been saved.
+          </Text>
+        </Animated.View>
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   screen: { paddingBottom: 96 },
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.lg },
   toggleCopy: { flex: 1, gap: Spacing.xs },
   toggleLabel: { fontSize: 15, fontWeight: '800' },
   inline: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: Spacing.md },
   powerRow: { borderRadius: Radius.md, padding: Spacing.md },
+  snackbar: {
+    position: 'absolute',
+    left: Spacing.lg,
+    right: Spacing.lg,
+    bottom: Spacing.lg,
+    minHeight: 50,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.lg,
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  snackbarText: { fontSize: 14, fontWeight: '800', textAlign: 'center' },
 });

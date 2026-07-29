@@ -11,6 +11,7 @@ import (
 
 	"github.com/arham/ai-second-brain/internal/config"
 	"github.com/arham/ai-second-brain/internal/service"
+	"github.com/arham/ai-second-brain/internal/utils"
 )
 
 func TestInsertEpisodeUsesAPIKeyAndMergesCustomFields(t *testing.T) {
@@ -48,13 +49,13 @@ func TestInsertEpisodeUsesAPIKeyAndMergesCustomFields(t *testing.T) {
 	}
 }
 
-func TestCreateMemoryUsesJWT(t *testing.T) {
+func TestCreateMemoryPrefersAPIKey(t *testing.T) {
 	client := testClient(t, "mg_live_test", "jwt-token", func(request *http.Request) string {
-		if got := request.Header.Get("Authorization"); got != "Bearer jwt-token" {
-			t.Fatalf("Authorization = %q", got)
+		if got := request.Header.Get("X-Api-Key"); got != "mg_live_test" {
+			t.Fatalf("X-Api-Key = %q", got)
 		}
-		if got := request.Header.Get("X-Api-Key"); got != "" {
-			t.Fatalf("X-Api-Key = %q, want empty", got)
+		if got := request.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization = %q, want empty", got)
 		}
 		return `{"data":{"id":"memory-1"}}`
 	})
@@ -111,11 +112,47 @@ func testClient(t *testing.T, apiKey, jwt string, handler func(*http.Request) st
 	return client
 }
 
-func TestGetGraphRequiresJWT(t *testing.T) {
-	client := NewClient(config.MemographConfig{
-		BaseURL: "https://example.invalid", APIKey: "mg_live_test", Timeout: time.Second,
+func TestGetGraphUsesAPIKey(t *testing.T) {
+	client := testClient(t, "mg_live_test", "", func(request *http.Request) string {
+		if got := request.Header.Get("X-Api-Key"); got != "mg_live_test" {
+			t.Fatalf("X-Api-Key = %q", got)
+		}
+		return `{"data":{"nodes":[],"edges":[]}}`
 	})
-	if _, err := client.GetGraph(context.Background(), "memory-1", "session-1"); err == nil {
-		t.Fatal("GetGraph() error = nil, want missing JWT error")
+	if _, err := client.GetGraph(context.Background(), "memory-1", "session-1"); err != nil {
+		t.Fatalf("GetGraph() error = %v", err)
+	}
+}
+
+func TestMemographFallsBackToJWTWhenAPIKeyIsMissing(t *testing.T) {
+	client := testClient(t, "", "jwt-token", func(request *http.Request) string {
+		if got := request.Header.Get("Authorization"); got != "Bearer jwt-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := request.Header.Get("X-Api-Key"); got != "" {
+			t.Fatalf("X-Api-Key = %q, want empty", got)
+		}
+		return `{"data":[]}`
+	})
+	if _, err := client.Search(context.Background(), "memory-1", service.MemorySearchRequest{
+		Query: "hello",
+	}); err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+}
+
+func TestRequestAPIKeyOverridesConfiguredCredentials(t *testing.T) {
+	client := testClient(t, "configured-key", "jwt-token", func(request *http.Request) string {
+		if got := request.Header.Get("X-Api-Key"); got != "device-key" {
+			t.Fatalf("X-Api-Key = %q", got)
+		}
+		if got := request.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization = %q, want empty", got)
+		}
+		return `{"data":[]}`
+	})
+	ctx := utils.WithMemographAPIKey(context.Background(), "device-key")
+	if _, err := client.Search(ctx, "memory-1", service.MemorySearchRequest{Query: "hello"}); err != nil {
+		t.Fatalf("Search() error = %v", err)
 	}
 }

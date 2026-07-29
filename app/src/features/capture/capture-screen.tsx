@@ -17,9 +17,10 @@ import {
   View,
 } from 'react-native';
 
-import { Body, BrandMark, Button, Card, Metric, StatusPill } from '@/components/ui';
+import { Body, BrandMark, Button, Card, ErrorNotice, Metric, StatusPill } from '@/components/ui';
 import { Fonts, Radius, Spacing } from '@/constants/theme';
 import { deleteQueuedFile, persistCapturedVideo } from '@/lib/storage';
+import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
 import type { CapturePhase, QueuedVideoChunk } from '@/types/app';
 import { useTheme } from '@/hooks/use-theme';
@@ -159,7 +160,7 @@ export function CaptureScreen() {
       }
     } catch (error) {
       shouldCapture.current = false;
-      loopError = error instanceof Error ? error.message : 'Camera recording failed.';
+      loopError = getReadableError(error, 'capture');
       setCapture({ phase: 'error', sessionId, error: loopError });
     } finally {
       runningLoop.current = false;
@@ -218,7 +219,7 @@ export function CaptureScreen() {
     } catch (error) {
       setCapture({
         phase: 'error',
-        error: error instanceof Error ? error.message : 'Unable to start capture.',
+        error: getReadableError(error, 'capture'),
       });
     }
   }
@@ -275,8 +276,6 @@ export function CaptureScreen() {
         onCameraReady={() => setCameraReady(true)}
         onMountError={({ message }) => setCapture({ phase: 'error', error: message })}
       />
-      <View style={styles.scrimTop} />
-      <View style={styles.scrimBottom} />
 
       <View style={styles.topBar}>
         <BrandMark compact />
@@ -315,11 +314,7 @@ export function CaptureScreen() {
           <Metric value={pendingCount} label="buffered" />
         </View>
 
-        {capture.error ? (
-          <View style={[styles.errorBanner, { backgroundColor: theme.dangerSoft }]}>
-            <Text style={[styles.errorText, { color: theme.danger }]}>{capture.error}</Text>
-          </View>
-        ) : null}
+        {capture.error ? <ErrorNotice title="Capture unavailable" message={capture.error} /> : null}
 
         <View style={styles.captureRow}>
           <View style={styles.captureCopy}>
@@ -365,16 +360,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, overflow: 'hidden' },
   fallback: { flex: 1, justifyContent: 'center', padding: Spacing.xl, gap: Spacing.xl },
   fallbackTitle: { fontFamily: Fonts.rounded, fontSize: 28, fontWeight: '800' },
-  scrimTop: {
-    ...StyleSheet.absoluteFillObject,
-    bottom: '55%',
-    backgroundColor: 'rgba(5,6,5,0.36)',
-  },
-  scrimBottom: {
-    ...StyleSheet.absoluteFillObject,
-    top: '48%',
-    backgroundColor: 'rgba(5,6,5,0.34)',
-  },
   topBar: {
     position: 'absolute',
     top: 56,
@@ -418,8 +403,6 @@ const styles = StyleSheet.create({
   },
   recordIcon: { width: 24, height: 24, borderRadius: 12 },
   stopIcon: { width: 21, height: 21, borderRadius: 5 },
-  errorBanner: { borderRadius: Radius.md, padding: Spacing.md },
-  errorText: { fontSize: 12, lineHeight: 17, fontWeight: '700' },
   pressed: { opacity: 0.72, transform: [{ scale: 0.97 }] },
   disabled: { opacity: 0.45 },
 });

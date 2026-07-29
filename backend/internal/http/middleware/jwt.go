@@ -16,6 +16,8 @@ type JWTAuthenticator interface {
 	Handle() gin.HandlerFunc
 }
 
+const MemographAPIKeyHeader = "X-Memograph-Api-Key"
+
 type jwtAuthenticator struct {
 	secret []byte
 	issuer string
@@ -60,7 +62,11 @@ func (a *jwtAuthenticator) Handle() gin.HandlerFunc {
 		}
 
 		principal := utils.Principal{Subject: claims.Subject, Issuer: a.issuer}
-		c.Request = c.Request.WithContext(utils.WithPrincipal(c.Request.Context(), principal))
+		requestContext := utils.WithPrincipal(c.Request.Context(), principal)
+		if apiKey := strings.TrimSpace(c.GetHeader(MemographAPIKeyHeader)); apiKey != "" {
+			requestContext = utils.WithMemographAPIKey(requestContext, apiKey)
+		}
+		c.Request = c.Request.WithContext(requestContext)
 		c.Next()
 	}
 }

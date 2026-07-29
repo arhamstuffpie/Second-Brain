@@ -37,11 +37,16 @@ func TestJWTAuthenticator(t *testing.T) {
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
 		}
+		if apiKey := utils.MemographAPIKeyFromContext(c.Request.Context()); apiKey != "device-key" {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
 		c.Status(http.StatusNoContent)
 	})
 
 	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	request.Header.Set("Authorization", "Bearer "+signed)
+	request.Header.Set(MemographAPIKeyHeader, "device-key")
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNoContent {

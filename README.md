@@ -252,11 +252,11 @@ curl -X POST \
   -d '{"query":"What did we decide?", "limit":10, "group_id":"session-123"}'
 ```
 
-The wrapper uses `X-Api-Key` for insert/search/answer when
-`APP_MEMOGRAPH_API_KEY` is configured, falling back to the bearer JWT.
-`create-full` and complete graph reads require `APP_MEMOGRAPH_JWT`, matching
-the current Memograph route contracts. Configure both credentials when this
-service must perform every operation. The unprefixed `MEMOGRAPH_API_KEY`,
+Every Memograph route uses `X-Api-Key` when `APP_MEMOGRAPH_API_KEY` is
+configured, including memory creation and graph reads. When the API key is
+empty, the wrapper falls back to `Authorization: Bearer APP_MEMOGRAPH_JWT`.
+Authenticated clients may send an optional `X-Memograph-Api-Key` override for
+synchronous graph-memory proxy calls. The unprefixed `MEMOGRAPH_API_KEY`,
 `MEMOGRAPH_JWT_TOKEN`, and `MEMOGRAPH_BASE_URL` names are accepted as aliases.
 
 ## Video-to-Memograph pipeline

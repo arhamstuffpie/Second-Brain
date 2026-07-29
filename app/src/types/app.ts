@@ -6,6 +6,7 @@ export type AuthSession = AuthResult;
 
 export type AppSettings = {
   apiBaseUrl: string;
+  memographApiKey: string;
   projectId: string;
   memoryId: string;
   groupId: string;

@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Animated,
-  KeyboardAvoidingView,
-  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Body, BrandMark, Button, ChoiceRow, Field } from '@/components/ui';
+import { Body, BrandMark, Button, ChoiceRow, ErrorNotice, Field } from '@/components/ui';
 import { Fonts, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
-import { ApiError } from '@/lib/api-client';
+import { useKeyboardHeight } from '@/hooks/use-keyboard-height';
+import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -25,6 +25,7 @@ export function AuthScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const entrance = useRef(new Animated.Value(0)).current;
+  const keyboardHeight = useKeyboardHeight();
 
   useEffect(() => {
     Animated.spring(entrance, {
@@ -52,11 +53,7 @@ export function AuthScreen() {
         await signup({ email: email.trim(), password }, apiBaseUrl.trim());
       }
     } catch (cause) {
-      setError(
-        cause instanceof ApiError
-          ? `${cause.message}${cause.requestId ? ` · ${cause.requestId}` : ''}`
-          : 'Unable to authenticate. Check the backend address and connection.',
-      );
+      setError(getReadableError(cause, 'auth'));
     } finally {
       setLoading(false);
     }
@@ -64,10 +61,11 @@ export function AuthScreen() {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.keyboard}>
-        <View style={styles.shell}>
+      <ScrollView
+        style={styles.keyboard}
+        contentContainerStyle={[styles.shell, { paddingBottom: Spacing.xl + keyboardHeight }]}
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled">
           <Animated.View
             style={[
               styles.content,
@@ -127,7 +125,7 @@ export function AuthScreen() {
                 placeholder="https://api.example.com"
                 hint="Use your computer's LAN IP instead of localhost on a physical phone."
               />
-              {error ? <Text style={[styles.error, { color: theme.danger }]}>{error}</Text> : null}
+              {error ? <ErrorNotice title="Unable to continue" message={error} /> : null}
               <Button
                 label={mode === 'login' ? 'Continue' : 'Create private account'}
                 onPress={() => void submit()}
@@ -139,8 +137,7 @@ export function AuthScreen() {
               the app is visible.
             </Text>
           </Animated.View>
-        </View>
-      </KeyboardAvoidingView>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -164,6 +161,5 @@ const styles = StyleSheet.create({
     borderRadius: Radius.lg,
     padding: Spacing.xl,
   },
-  error: { fontSize: 13, lineHeight: 18, fontWeight: '600' },
   privacy: { fontSize: 12, lineHeight: 18, textAlign: 'center', paddingHorizontal: Spacing.lg },
 });

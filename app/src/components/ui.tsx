@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Fonts, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { useKeyboardHeight } from '@/hooks/use-keyboard-height';
 import { useTheme } from '@/hooks/use-theme';
 
 export function BrandMark({ compact = false }: { compact?: boolean }) {
@@ -33,6 +34,7 @@ export function Screen({
   contentStyle,
 }: PropsWithChildren<{ scroll?: boolean; contentStyle?: ViewStyle }>) {
   const theme = useTheme();
+  const keyboardHeight = useKeyboardHeight();
   const content = (
     <View style={[styles.screenContent, contentStyle]}>
       <View style={styles.screenInner}>{children}</View>
@@ -43,7 +45,8 @@ export function Screen({
       {scroll ? (
         <ScrollView
           style={{ backgroundColor: theme.background }}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: keyboardHeight }]}
+          keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled">
           {content}
         </ScrollView>
@@ -105,6 +108,26 @@ export function Body({
     <Text style={[styles.body, { color: muted ? theme.textSecondary : theme.text }, style]}>
       {children}
     </Text>
+  );
+}
+
+export function ErrorNotice({
+  message,
+  title = 'Something went wrong',
+}: {
+  message: string;
+  title?: string;
+}) {
+  const theme = useTheme();
+  return (
+    <View
+      accessibilityLiveRegion="polite"
+      style={[styles.errorNotice, { backgroundColor: theme.dangerSoft, borderColor: theme.danger }]}>
+      <Text style={[styles.errorNoticeTitle, { color: theme.danger }]}>{title}</Text>
+      <Text selectable style={[styles.errorNoticeMessage, { color: theme.danger }]}>
+        {message}
+      </Text>
+    </View>
   );
 }
 
@@ -273,6 +296,14 @@ const styles = StyleSheet.create({
   card: { borderWidth: StyleSheet.hairlineWidth, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.lg },
   sectionLabel: { fontFamily: Fonts.mono, fontSize: 11, fontWeight: '800', letterSpacing: 1.4, textTransform: 'uppercase' },
   body: { fontSize: 15, lineHeight: 22 },
+  errorNotice: {
+    gap: Spacing.xs,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+  },
+  errorNoticeTitle: { fontSize: 13, fontWeight: '900' },
+  errorNoticeMessage: { fontSize: 13, lineHeight: 19 },
   button: {
     minHeight: 50,
     borderRadius: Radius.md,

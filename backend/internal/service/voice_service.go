@@ -239,7 +239,7 @@ func (s *voiceService) CreateMemory(ctx context.Context, projectID string, reque
 	}
 	result, err := s.memograph.CreateMemory(ctx, projectID, request)
 	if err != nil {
-		return nil, &UnavailableError{Cause: err}
+		return nil, &UnavailableError{Dependency: "memograph", Cause: err}
 	}
 	return result, nil
 }
@@ -253,7 +253,7 @@ func (s *voiceService) Search(ctx context.Context, memoryID string, request Memo
 	}
 	result, err := s.memograph.Search(ctx, memoryID, request)
 	if err != nil {
-		return nil, &UnavailableError{Cause: err}
+		return nil, &UnavailableError{Dependency: "memograph", Cause: err}
 	}
 	return result, nil
 }
@@ -267,7 +267,7 @@ func (s *voiceService) Answer(ctx context.Context, memoryID string, request Memo
 	}
 	result, err := s.memograph.Answer(ctx, memoryID, request)
 	if err != nil {
-		return nil, &UnavailableError{Cause: err}
+		return nil, &UnavailableError{Dependency: "memograph", Cause: err}
 	}
 	return result, nil
 }
@@ -278,7 +278,7 @@ func (s *voiceService) GetGraph(ctx context.Context, memoryID, groupID string) (
 	}
 	result, err := s.memograph.GetGraph(ctx, memoryID, groupID)
 	if err != nil {
-		return nil, &UnavailableError{Cause: err}
+		return nil, &UnavailableError{Dependency: "memograph", Cause: err}
 	}
 	return result, nil
 }

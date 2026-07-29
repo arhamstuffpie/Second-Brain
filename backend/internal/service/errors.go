@@ -30,7 +30,8 @@ func (e *ValidationError) Unwrap() error {
 }
 
 type UnavailableError struct {
-	Cause error
+	Dependency string
+	Cause      error
 }
 
 func (e *UnavailableError) Error() string {

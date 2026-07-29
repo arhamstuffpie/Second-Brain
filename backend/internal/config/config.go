@@ -145,7 +145,7 @@ func Load() (Config, error) {
 		CORS: CORSConfig{
 			AllowedOrigins: getEnvCSV("APP_CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
 			AllowedMethods: getEnvCSV("APP_CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS"),
-			AllowedHeaders: getEnvCSV("APP_CORS_ALLOWED_HEADERS", "Authorization,Content-Type,X-Request-ID"),
+			AllowedHeaders: getEnvCSV("APP_CORS_ALLOWED_HEADERS", "Authorization,Content-Type,X-Request-ID,X-Memograph-Api-Key"),
 			MaxAge:         GetEnvInt("APP_CORS_MAX_AGE_SECONDS", 600),
 		},
 		Log: LogConfig{

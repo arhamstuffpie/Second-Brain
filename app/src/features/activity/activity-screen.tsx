@@ -2,8 +2,18 @@ import { useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Body, Button, Card, Metric, PageHeader, SectionLabel, StatusPill } from '@/components/ui';
-import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import {
+  Body,
+  Button,
+  Card,
+  ErrorNotice,
+  Metric,
+  PageHeader,
+  SectionLabel,
+  StatusPill,
+} from '@/components/ui';
+import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
 import type { QueuedVideoChunk, UploadState } from '@/types/app';
 import type { VideoRecordingDetail } from '@/types/api';
@@ -43,11 +53,14 @@ export function ActivityScreen() {
 
   async function refresh() {
     setRefreshing(true);
+    setDetailError('');
     try {
       await refreshRealtimeSession();
       if (detail) {
         setDetail(await api.video.getRecording(detail.id));
       }
+    } catch (error) {
+      setDetailError(getReadableError(error, 'backend'));
     } finally {
       setRefreshing(false);
     }
@@ -59,7 +72,7 @@ export function ActivityScreen() {
     try {
       setDetail(await api.video.getRecording(item.recording.id));
     } catch (error) {
-      setDetailError(error instanceof Error ? error.message : 'Unable to load processing details.');
+      setDetailError(getReadableError(error, 'backend'));
     }
   }
 
@@ -123,6 +136,12 @@ export function ActivityScreen() {
                 <Body muted>Vision · {detail.visual_status}</Body>
                 <Body muted>Merge · {detail.merge_status}</Body>
               </View>
+              {detail.last_error ? (
+                <ErrorNotice
+                  title="Processing failed"
+                  message={getReadableError(detail.last_error, 'upload')}
+                />
+              ) : null}
               {detail.transcript?.text ? <Body>{detail.transcript.text}</Body> : null}
               {detail.episodes.map((episode) => (
                 <View
@@ -133,6 +152,12 @@ export function ActivityScreen() {
                     label={episode.status}
                     tone={episode.status === 'completed' ? 'success' : 'warning'}
                   />
+                  {episode.last_error ? (
+                    <ErrorNotice
+                      title="Memory sync failed"
+                      message={getReadableError(episode.last_error, 'memograph')}
+                    />
+                  ) : null}
                 </View>
               ))}
               <Button label="Close detail" variant="ghost" compact onPress={() => setDetail(null)} />
@@ -140,9 +165,7 @@ export function ActivityScreen() {
           )}
 
           {detailError ? (
-            <Card>
-              <Body style={{ color: theme.danger }}>{detailError}</Body>
-            </Card>
+            <ErrorNotice title="Could not load processing details" message={detailError} />
           ) : null}
 
           <View style={styles.rowBetween}>
@@ -177,11 +200,7 @@ export function ActivityScreen() {
                   <StatusPill label={item.state} tone={stateTone(item.state)} />
                 </View>
                 {item.lastError ? (
-                  <View style={[styles.error, { backgroundColor: theme.dangerSoft }]}>
-                    <Text style={{ color: theme.danger, fontSize: 12, lineHeight: 17 }}>
-                      {item.lastError}
-                    </Text>
-                  </View>
+                  <ErrorNotice title="Upload failed" message={item.lastError} />
                 ) : null}
                 <View style={styles.actions}>
                   {item.state === 'uploaded' && item.recording && (
@@ -225,6 +244,5 @@ const styles = StyleSheet.create({
   pipeline: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.lg },
   episode: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: Spacing.lg, gap: Spacing.md },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  error: { borderRadius: Radius.md, padding: Spacing.md },
   emptyTitle: { fontSize: 20, fontWeight: '800' },
 });

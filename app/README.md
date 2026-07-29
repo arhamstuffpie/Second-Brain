@@ -34,5 +34,12 @@ the phone itself, not the development computer.
 - The screen stays awake only during active capture.
 - Wi-Fi-only delivery, video quality, frame sampling, and low-battery behavior
   are user-configurable.
+- Settings accepts an optional Memograph API-key override. Native builds keep it
+  in SecureStore; web builds keep it only for the current browser session.
+- Saving preferences shows an in-app confirmation snackbar.
+- Scrollable forms add bottom space equal to the open keyboard height and
+  remove it when the keyboard closes.
+- Backend and Memograph failures are translated into actionable notices;
+  request references remain visible for server-log troubleshooting.
 
 The complete server contract is in [`../backend/API.md`](../backend/API.md).

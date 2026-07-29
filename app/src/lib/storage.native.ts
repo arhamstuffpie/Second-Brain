@@ -9,12 +9,14 @@ import { Platform } from 'react-native';
 import type { AppSettings, AuthSession, QueuedVideoChunk } from '@/types/app';
 
 const AUTH_KEY = 'second-brain.auth.v1';
+const MEMOGRAPH_API_KEY = 'second-brain.memograph-api-key.v1';
 const SETTINGS_KEY = 'second-brain.settings.v1';
 const QUEUE_KEY = 'second-brain.upload-queue.v1';
 const QUEUE_DIRECTORY = new Directory(Paths.document, 'second-brain-upload-queue');
 
 export const defaultSettings: AppSettings = {
   apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:8181',
+  memographApiKey: '',
   projectId: '',
   memoryId: '',
   groupId: '',
@@ -68,11 +70,28 @@ export async function saveAuthSession(session: AuthSession | null) {
 
 export async function loadSettings() {
   const stored = parseJSON<Partial<AppSettings>>(await AsyncStorage.getItem(SETTINGS_KEY), {});
-  return { ...defaultSettings, ...stored };
+  const securedApiKey = (await secureStoreAvailable())
+    ? await SecureStore.getItemAsync(MEMOGRAPH_API_KEY)
+    : undefined;
+  return {
+    ...defaultSettings,
+    ...stored,
+    memographApiKey: securedApiKey ?? '',
+  };
 }
 
 export async function saveSettings(settings: AppSettings) {
-  await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  const { memographApiKey, ...nonSensitiveSettings } = settings;
+  await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(nonSensitiveSettings));
+  if (await secureStoreAvailable()) {
+    if (memographApiKey) {
+      await SecureStore.setItemAsync(MEMOGRAPH_API_KEY, memographApiKey, {
+        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+      });
+    } else {
+      await SecureStore.deleteItemAsync(MEMOGRAPH_API_KEY);
+    }
+  }
 }
 
 export async function loadUploadQueue() {

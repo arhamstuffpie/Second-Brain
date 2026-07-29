@@ -12,6 +12,7 @@ import (
 
 	"github.com/arham/ai-second-brain/internal/config"
 	"github.com/arham/ai-second-brain/internal/service"
+	"github.com/arham/ai-second-brain/internal/utils"
 )
 
 // Client is the single thin wrapper around Memograph's HTTP API.
@@ -35,7 +36,7 @@ func (c *Client) CreateMemory(ctx context.Context, projectID string, request ser
 	if strings.TrimSpace(projectID) == "" {
 		return nil, fmt.Errorf("project ID is required")
 	}
-	return c.doJSON(ctx, http.MethodPost, "/api/v1/memory/project/"+url.PathEscape(projectID)+"/create-full", request, true)
+	return c.doJSON(ctx, http.MethodPost, "/api/v1/memory/project/"+url.PathEscape(projectID)+"/create-full", request)
 }
 
 func (c *Client) InsertEpisode(ctx context.Context, memoryID string, request service.EpisodeInsertRequest) (json.RawMessage, error) {
@@ -48,11 +49,11 @@ func (c *Client) InsertEpisode(ctx context.Context, memoryID string, request ser
 			payload[key] = value
 		}
 	}
-	return c.doJSON(ctx, http.MethodPost, memoryPath(memoryID)+"/create", payload, false)
+	return c.doJSON(ctx, http.MethodPost, memoryPath(memoryID)+"/create", payload)
 }
 
 func (c *Client) Search(ctx context.Context, memoryID string, request service.MemorySearchRequest) (json.RawMessage, error) {
-	return c.doJSON(ctx, http.MethodPost, memoryPath(memoryID)+"/search", request, false)
+	return c.doJSON(ctx, http.MethodPost, memoryPath(memoryID)+"/search", request)
 }
 
 func (c *Client) Answer(ctx context.Context, memoryID string, request service.MemoryAnswerRequest) (json.RawMessage, error) {
@@ -67,7 +68,7 @@ func (c *Client) Answer(ctx context.Context, memoryID string, request service.Me
 			request.Filters = map[string]any{"AND": []any{request.Filters, groupFilter}}
 		}
 	}
-	return c.doJSON(ctx, http.MethodPost, memoryPath(memoryID)+"/answer", request, false)
+	return c.doJSON(ctx, http.MethodPost, memoryPath(memoryID)+"/answer", request)
 }
 
 func (c *Client) GetGraph(ctx context.Context, memoryID, groupID string) (json.RawMessage, error) {
@@ -75,10 +76,10 @@ func (c *Client) GetGraph(ctx context.Context, memoryID, groupID string) (json.R
 	if groupID != "" {
 		path += "?group_id=" + url.QueryEscape(groupID)
 	}
-	return c.doJSON(ctx, http.MethodGet, path, nil, true)
+	return c.doJSON(ctx, http.MethodGet, path, nil)
 }
 
-func (c *Client) doJSON(ctx context.Context, method, path string, payload any, preferJWT bool) (json.RawMessage, error) {
+func (c *Client) doJSON(ctx context.Context, method, path string, payload any) (json.RawMessage, error) {
 	if c.baseURL == "" {
 		return nil, fmt.Errorf("Memograph is not configured")
 	}
@@ -97,7 +98,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, p
 	if payload != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	if err := c.authorize(request, preferJWT); err != nil {
+	if err := c.authorize(request); err != nil {
 		return nil, err
 	}
 	response, err := c.http.Do(request)
@@ -125,12 +126,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, p
 	return json.RawMessage(responseBody), nil
 }
 
-func (c *Client) authorize(request *http.Request, preferJWT bool) error {
-	if preferJWT {
-		if c.jwt == "" {
-			return fmt.Errorf("Memograph JWT is required for this endpoint")
-		}
-		request.Header.Set("Authorization", "Bearer "+c.jwt)
+func (c *Client) authorize(request *http.Request) error {
+	if apiKey := strings.TrimSpace(utils.MemographAPIKeyFromContext(request.Context())); apiKey != "" {
+		request.Header.Set("X-Api-Key", apiKey)
 		return nil
 	}
 	if c.apiKey != "" {

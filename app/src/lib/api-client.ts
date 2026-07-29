@@ -81,6 +81,7 @@ export class ApiClient {
   constructor(
     baseUrl: string,
     private readonly getAccessToken: () => string | undefined,
+    private readonly getMemographAPIKey: () => string | undefined = () => undefined,
   ) {
     this.baseUrl = normalizeBaseUrl(baseUrl);
     if (!this.baseUrl) {
@@ -102,6 +103,10 @@ export class ApiClient {
         throw new ApiError('Please sign in again.', 401, 'UNAUTHORIZED');
       }
       headers.Authorization = `Bearer ${token}`;
+      const memographAPIKey = this.getMemographAPIKey()?.trim();
+      if (memographAPIKey) {
+        headers['X-Memograph-Api-Key'] = memographAPIKey;
+      }
     }
     if (options.body !== undefined) {
       headers['Content-Type'] = 'application/json';

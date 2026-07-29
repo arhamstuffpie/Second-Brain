@@ -5,9 +5,11 @@ import type { AppSettings, AuthSession, QueuedVideoChunk } from '@/types/app';
 const AUTH_KEY = 'second-brain.auth.v1';
 const SETTINGS_KEY = 'second-brain.settings.v1';
 const QUEUE_KEY = 'second-brain.upload-queue.v1';
+let sessionMemographAPIKey = '';
 
 export const defaultSettings: AppSettings = {
   apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:8181',
+  memographApiKey: '',
   projectId: '',
   memoryId: '',
   groupId: '',
@@ -44,11 +46,13 @@ export async function saveAuthSession(session: AuthSession | null) {
 
 export async function loadSettings() {
   const stored = parseJSON<Partial<AppSettings>>(await AsyncStorage.getItem(SETTINGS_KEY), {});
-  return { ...defaultSettings, ...stored };
+  return { ...defaultSettings, ...stored, memographApiKey: sessionMemographAPIKey };
 }
 
 export async function saveSettings(settings: AppSettings) {
-  await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  const { memographApiKey, ...nonSensitiveSettings } = settings;
+  sessionMemographAPIKey = memographApiKey;
+  await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(nonSensitiveSettings));
 }
 
 export async function loadUploadQueue() {
