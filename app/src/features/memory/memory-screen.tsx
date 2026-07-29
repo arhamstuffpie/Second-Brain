@@ -44,7 +44,7 @@ function presentResult(value: unknown) {
 
 export function MemoryScreen() {
   const theme = useTheme();
-  const { api, settings, updateSettings } = useApp();
+  const { api, settings, updateSettings, showError } = useApp();
   const [mode, setMode] = useState<MemoryMode>('answer');
   const [query, setQuery] = useState('');
   const [memoryName, setMemoryName] = useState('My ambient memory');
@@ -93,7 +93,9 @@ export function MemoryScreen() {
             : await api.memory.graph(settings.memoryId, groupId);
       setResult(presentResult(response));
     } catch (cause) {
-      setError(getReadableError(cause, 'memograph'));
+      const message = getReadableError(cause, 'memograph');
+      setError(message);
+      showError(message);
     } finally {
       setLoading(false);
     }

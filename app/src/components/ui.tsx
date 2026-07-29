@@ -1,6 +1,7 @@
-import type { PropsWithChildren, ReactNode } from 'react';
+import { type PropsWithChildren, type ReactNode, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -128,6 +129,55 @@ export function ErrorNotice({
         {message}
       </Text>
     </View>
+  );
+}
+
+export function ErrorSnackbar({
+  message,
+  onDismiss,
+}: {
+  message: string;
+  onDismiss: () => void;
+}) {
+  const theme = useTheme();
+  const opacity = useRef(new Animated.Value(0)).current;
+  const offset = useRef(new Animated.Value(14)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+      Animated.timing(offset, { toValue: 0, duration: 180, useNativeDriver: true }),
+    ]).start();
+    const timer = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(opacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+        Animated.timing(offset, { toValue: 10, duration: 180, useNativeDriver: true }),
+      ]).start(({ finished }) => {
+        if (finished) onDismiss();
+      });
+    }, 4500);
+    return () => clearTimeout(timer);
+  }, [offset, onDismiss, opacity]);
+
+  return (
+    <Animated.View
+      accessibilityLiveRegion="assertive"
+      style={[
+        styles.errorSnackbar,
+        {
+          backgroundColor: theme.danger,
+          opacity,
+          transform: [{ translateY: offset }],
+        },
+      ]}>
+      <Text style={styles.errorSnackbarTitle}>ACTION NEEDED</Text>
+      <Text selectable style={styles.errorSnackbarMessage}>
+        {message}
+      </Text>
+      <Pressable accessibilityRole="button" onPress={onDismiss} hitSlop={10}>
+        <Text style={styles.errorSnackbarDismiss}>DISMISS</Text>
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -304,6 +354,28 @@ const styles = StyleSheet.create({
   },
   errorNoticeTitle: { fontSize: 13, fontWeight: '900' },
   errorNoticeMessage: { fontSize: 13, lineHeight: 19 },
+  errorSnackbar: {
+    position: 'absolute',
+    left: Spacing.lg,
+    right: Spacing.lg,
+    bottom: Spacing.lg,
+    zIndex: 1000,
+    elevation: 12,
+    minHeight: 62,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+  },
+  errorSnackbarTitle: { color: '#FFFFFF', fontFamily: Fonts.mono, fontSize: 9, fontWeight: '900' },
+  errorSnackbarMessage: { color: '#FFFFFF', flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  errorSnackbarDismiss: { color: '#FFFFFF', fontFamily: Fonts.mono, fontSize: 9, fontWeight: '900' },
   button: {
     minHeight: 50,
     borderRadius: Radius.md,

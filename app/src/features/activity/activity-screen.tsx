@@ -43,6 +43,7 @@ export function ActivityScreen() {
     discardUpload,
     clearCompletedUploads,
     refreshRealtimeSession,
+    showError,
   } = useApp();
   const [refreshing, setRefreshing] = useState(false);
   const [detail, setDetail] = useState<VideoRecordingDetail | null>(null);
@@ -60,7 +61,9 @@ export function ActivityScreen() {
         setDetail(await api.video.getRecording(detail.id));
       }
     } catch (error) {
-      setDetailError(getReadableError(error, 'backend'));
+      const message = getReadableError(error, 'backend');
+      setDetailError(message);
+      showError(message);
     } finally {
       setRefreshing(false);
     }
@@ -72,7 +75,9 @@ export function ActivityScreen() {
     try {
       setDetail(await api.video.getRecording(item.recording.id));
     } catch (error) {
-      setDetailError(getReadableError(error, 'backend'));
+      const message = getReadableError(error, 'backend');
+      setDetailError(message);
+      showError(message);
     }
   }
 

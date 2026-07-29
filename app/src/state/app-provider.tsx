@@ -11,7 +11,9 @@ import {
   useRef,
   useState,
 } from 'react';
+import { StyleSheet, View } from 'react-native';
 
+import { ErrorSnackbar } from '@/components/ui';
 import { ApiClient, ApiError } from '@/lib/api-client';
 import { getReadableError } from '@/lib/readable-error';
 import {
@@ -63,6 +65,7 @@ type AppContextValue = {
   clearCompletedUploads: () => void;
   refreshRealtimeSession: (sessionId?: string) => Promise<RealtimeVideoSessionDetail | undefined>;
   checkHealth: () => Promise<Health>;
+  showError: (message: string) => void;
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -73,6 +76,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [queue, setQueue] = useState<QueuedVideoChunk[]>([]);
   const [capture, setCapture] = useState<CaptureSnapshot>({ phase: 'idle' });
+  const [errorSnackbar, setErrorSnackbar] = useState<{ id: number; message: string } | null>(null);
   const queueRef = useRef(queue);
   const uploadLock = useRef(false);
   const queueWrite = useRef(Promise.resolve());
@@ -94,6 +98,10 @@ export function AppProvider({ children }: PropsWithChildren) {
         if (storedAuth && Date.parse(storedAuth.expires_at) <= Date.now()) {
           storedAuth = null;
           await saveAuthSession(null);
+          setErrorSnackbar({
+            id: Date.now(),
+            message: 'Your session expired. Sign in again to continue.',
+          });
         }
         setAuth(storedAuth);
         setSettings(storedSettings);
@@ -101,6 +109,18 @@ export function AppProvider({ children }: PropsWithChildren) {
         setReady(true);
       },
     );
+  }, []);
+
+  const logout = useCallback(async () => {
+    setAuth(null);
+    setCapture({ phase: 'idle' });
+    validatedToken.current = undefined;
+    await saveAuthSession(null);
+  }, []);
+
+  const showError = useCallback((message: string) => {
+    if (!message.trim()) return;
+    setErrorSnackbar({ id: Date.now(), message });
   }, []);
 
   const activeSettings = settings ?? {
@@ -125,8 +145,18 @@ export function AppProvider({ children }: PropsWithChildren) {
         activeSettings.apiBaseUrl,
         () => auth?.access_token,
         () => activeSettings.memographApiKey,
+        () => {
+          showError('Your session expired. Sign in again to continue.');
+          void logout();
+        },
       ),
-    [activeSettings.apiBaseUrl, activeSettings.memographApiKey, auth?.access_token],
+    [
+      activeSettings.apiBaseUrl,
+      activeSettings.memographApiKey,
+      auth?.access_token,
+      logout,
+      showError,
+    ],
   );
 
   const online =
@@ -163,13 +193,6 @@ export function AppProvider({ children }: PropsWithChildren) {
     [],
   );
 
-  const logout = useCallback(async () => {
-    await saveAuthSession(null);
-    validatedToken.current = undefined;
-    setAuth(null);
-    setCapture({ phase: 'idle' });
-  }, []);
-
   const authenticate = useCallback(
     async (mode: 'login' | 'signup', credentials: Credentials, baseUrl?: string) => {
       const authClient = new ApiClient(baseUrl ?? activeSettings.apiBaseUrl, () => undefined);
@@ -203,6 +226,22 @@ export function AppProvider({ children }: PropsWithChildren) {
       }
     });
   }, [api, auth, logout, online, ready]);
+
+  useEffect(() => {
+    if (!auth) return;
+    let timeout: ReturnType<typeof setTimeout>;
+    const checkExpiration = () => {
+      const expiresIn = Date.parse(auth.expires_at) - Date.now();
+      if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
+        showError('Your session expired. Sign in again to continue.');
+        void logout();
+        return;
+      }
+      timeout = setTimeout(checkExpiration, Math.min(expiresIn, 60_000));
+    };
+    checkExpiration();
+    return () => clearTimeout(timeout);
+  }, [auth, logout, showError]);
 
   const updateSettings = useCallback(
     async (patch: Partial<AppSettings>) => {
@@ -271,6 +310,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       const retryable = !(error instanceof ApiError) || error.retryable;
       const state = retryable && attempts < MAX_UPLOAD_ATTEMPTS ? 'retrying' : 'failed';
       const delay = Math.min(5 * 2 ** Math.max(attempts - 1, 0), 300) * 1000;
+      const readableError = getReadableError(error, 'upload');
       replaceQueue((current) =>
         current.map((candidate) =>
           candidate.id === item.id
@@ -279,18 +319,21 @@ export function AppProvider({ children }: PropsWithChildren) {
                 attempts,
                 state,
                 nextAttemptAt: Date.now() + delay,
-                lastError: getReadableError(error, 'upload'),
+                lastError: readableError,
               }
             : candidate,
         ),
       );
+      if (state === 'failed') {
+        showError(readableError);
+      }
       if (error instanceof ApiError && error.status === 401) {
         await logout();
       }
     } finally {
       uploadLock.current = false;
     }
-  }, [api, auth, logout, ready, replaceQueue, uploadAllowed]);
+  }, [api, auth, logout, ready, replaceQueue, showError, uploadAllowed]);
 
   useEffect(() => {
     void flushQueue();
@@ -363,6 +406,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       clearCompletedUploads,
       refreshRealtimeSession,
       checkHealth: () => api.health(),
+      showError,
     }),
     [
       activeSettings,
@@ -384,12 +428,26 @@ export function AppProvider({ children }: PropsWithChildren) {
       refreshRealtimeSession,
       retryUpload,
       signup,
+      showError,
       updateSettings,
       uploadAllowed,
     ],
   );
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <AppContext.Provider value={value}>
+      <View style={styles.provider}>
+        {children}
+        {errorSnackbar ? (
+          <ErrorSnackbar
+            key={errorSnackbar.id}
+            message={errorSnackbar.message}
+            onDismiss={() => setErrorSnackbar(null)}
+          />
+        ) : null}
+      </View>
+    </AppContext.Provider>
+  );
 }
 
 export function useApp() {
@@ -399,3 +457,7 @@ export function useApp() {
   }
   return context;
 }
+
+const styles = StyleSheet.create({
+  provider: { flex: 1 },
+});

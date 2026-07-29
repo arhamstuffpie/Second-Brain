@@ -41,5 +41,10 @@ the phone itself, not the development computer.
   remove it when the keyboard closes.
 - Backend and Memograph failures are translated into actionable notices;
   request references remain visible for server-log troubleshooting.
+- Errors also trigger a dismissible global snackbar; inline notices retain the
+  details next to the action that failed.
+- Expired tokens are cleared at startup, at their expiry time, or after an
+  authenticated `401`, returning the user to sign-in.
+- Short local chimes signal when foreground recording starts and stops.
 
 The complete server contract is in [`../backend/API.md`](../backend/API.md).

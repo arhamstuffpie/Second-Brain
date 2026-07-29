@@ -156,3 +156,53 @@ func TestRequestAPIKeyOverridesConfiguredCredentials(t *testing.T) {
 		t.Fatalf("Search() error = %v", err)
 	}
 }
+  
+func TestEveryMemographOperationUsesAPIKey(t *testing.T) {
+	expected := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/memory/project/project-1/create-full"},
+		{http.MethodPost, "/api/v1/memory/memory-1/create"},
+		{http.MethodPost, "/api/v1/memory/memory-1/search"},
+		{http.MethodPost, "/api/v1/memory/memory-1/answer"},
+		{http.MethodGet, "/api/v1/memory/memory-1/graph"},
+	}
+	requestIndex := 0
+	client := testClient(t, "mg_live_test", "jwt-token", func(request *http.Request) string {
+		if requestIndex >= len(expected) {
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+		want := expected[requestIndex]
+		requestIndex++
+		if request.Method != want.method || request.URL.Path != want.path {
+			t.Fatalf("request = %s %s, want %s %s", request.Method, request.URL.Path, want.method, want.path)
+		}
+		if got := request.Header.Get("X-Api-Key"); got != "mg_live_test" {
+			t.Fatalf("%s %s X-Api-Key = %q", request.Method, request.URL.Path, got)
+		}
+		if got := request.Header.Get("Authorization"); got != "" {
+			t.Fatalf("%s %s Authorization = %q, want empty", request.Method, request.URL.Path, got)
+		}
+		return `{"data":{}}`
+	})
+	ctx := context.Background()
+	if _, err := client.CreateMemory(ctx, "project-1", service.MemoryCreateRequest{}); err != nil {
+		t.Fatalf("CreateMemory() error = %v", err)
+	}
+	if _, err := client.InsertEpisode(ctx, "memory-1", service.EpisodeInsertRequest{Data: "hello"}); err != nil {
+		t.Fatalf("InsertEpisode() error = %v", err)
+	}
+	if _, err := client.Search(ctx, "memory-1", service.MemorySearchRequest{Query: "hello"}); err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if _, err := client.Answer(ctx, "memory-1", service.MemoryAnswerRequest{Query: "hello"}); err != nil {
+		t.Fatalf("Answer() error = %v", err)
+	}
+	if _, err := client.GetGraph(ctx, "memory-1", ""); err != nil {
+		t.Fatalf("GetGraph() error = %v", err)
+	}
+	if requestIndex != len(expected) {
+		t.Fatalf("requests = %d, want %d", requestIndex, len(expected))
+	}
+}

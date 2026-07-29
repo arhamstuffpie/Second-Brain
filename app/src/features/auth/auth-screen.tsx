@@ -17,7 +17,7 @@ import { useTheme } from '@/hooks/use-theme';
 
 export function AuthScreen() {
   const theme = useTheme();
-  const { login, signup, settings, updateSettings } = useApp();
+  const { login, signup, settings, updateSettings, showError } = useApp();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -53,7 +53,9 @@ export function AuthScreen() {
         await signup({ email: email.trim(), password }, apiBaseUrl.trim());
       }
     } catch (cause) {
-      setError(getReadableError(cause, 'auth'));
+      const message = getReadableError(cause, 'auth');
+      setError(message);
+      showError(message);
     } finally {
       setLoading(false);
     }

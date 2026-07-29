@@ -82,6 +82,7 @@ export class ApiClient {
     baseUrl: string,
     private readonly getAccessToken: () => string | undefined,
     private readonly getMemographAPIKey: () => string | undefined = () => undefined,
+    private readonly onUnauthorized?: () => void,
   ) {
     this.baseUrl = normalizeBaseUrl(baseUrl);
     if (!this.baseUrl) {
@@ -137,6 +138,9 @@ export class ApiClient {
     }
 
     const requestId = response.headers.get('X-Request-ID') ?? undefined;
+    if (response.status === 401 && options.authenticated !== false) {
+      this.onUnauthorized?.();
+    }
     let envelope: ApiEnvelope<T>;
     try {
       envelope = (await response.json()) as ApiEnvelope<T>;

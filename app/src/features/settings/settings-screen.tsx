@@ -49,7 +49,7 @@ function ToggleRow({
 
 export function SettingsScreen() {
   const theme = useTheme();
-  const { settings, auth, network, power, updateSettings, checkHealth, logout } = useApp();
+  const { settings, auth, network, power, updateSettings, checkHealth, logout, showError } = useApp();
   const [draft, setDraft] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -111,7 +111,9 @@ export function SettingsScreen() {
       });
       showSavedSnackbar();
     } catch (error) {
-      setSaveError(getReadableError(error, 'backend'));
+      const message = getReadableError(error, 'backend');
+      setSaveError(message);
+      showError(message);
     } finally {
       setSaving(false);
     }
@@ -125,7 +127,9 @@ export function SettingsScreen() {
       setHealth('healthy');
     } catch (error) {
       setHealth('failed');
-      setHealthError(getReadableError(error, 'backend'));
+      const message = getReadableError(error, 'backend');
+      setHealthError(message);
+      showError(message);
     }
   }
 

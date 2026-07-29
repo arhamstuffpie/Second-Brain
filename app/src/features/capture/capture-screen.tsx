@@ -21,6 +21,7 @@ import { Body, BrandMark, Button, Card, ErrorNotice, Metric, StatusPill } from '
 import { Fonts, Radius, Spacing } from '@/constants/theme';
 import { deleteQueuedFile, persistCapturedVideo } from '@/lib/storage';
 import { getReadableError } from '@/lib/readable-error';
+import { useRecordingSoundCues } from '@/lib/recording-cues';
 import { useApp } from '@/state/app-provider';
 import type { CapturePhase, QueuedVideoChunk } from '@/types/app';
 import { useTheme } from '@/hooks/use-theme';
@@ -43,12 +44,14 @@ export function CaptureScreen() {
     capture,
     setCapture,
     enqueueVideoChunk,
+    showError,
   } = useApp();
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [cameraReady, setCameraReady] = useState(false);
   const [facing, setFacing] = useState<CameraType>('back');
   const [elapsed, setElapsed] = useState(0);
+  const { playStarted, playStopped } = useRecordingSoundCues();
   const cameraRef = useRef<CameraView>(null);
   const shouldCapture = useRef(false);
   const stopRequested = useRef(false);
@@ -58,6 +61,10 @@ export function CaptureScreen() {
   const capturing = capture.phase === 'capturing';
   const busy = capture.phase === 'starting' || capture.phase === 'stopping';
   const pendingCount = queue.filter((item) => item.state !== 'uploaded').length;
+
+  useEffect(() => {
+    if (capture.error) showError(capture.error);
+  }, [capture.error, showError]);
 
   useEffect(() => {
     if (!capturing) {
@@ -174,6 +181,9 @@ export function CaptureScreen() {
         }
       }
       if (!loopError) {
+        if (stopRequested.current && AppState.currentState === 'active') {
+          playStopped();
+        }
         setCapture({ phase: 'idle', sessionId });
       }
     }
@@ -215,6 +225,7 @@ export function CaptureScreen() {
       const startedAt = Date.now();
       setCapture({ phase: 'capturing', sessionId: session.id, startedAt });
       await activateKeepAwakeAsync(KEEP_AWAKE_TAG);
+      playStarted();
       void runCaptureLoop(session.id);
     } catch (error) {
       setCapture({
