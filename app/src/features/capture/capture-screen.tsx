@@ -370,7 +370,7 @@ export function CaptureScreen() {
             <View
               style={[
                 capturing ? styles.stopIcon : styles.recordIcon,
-                { backgroundColor: capturing ? theme.accent : '#FFFFFF' },
+                { backgroundColor: capturing ? theme.accent : theme.onAccent },
               ]}
             />
           </Pressable>

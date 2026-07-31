@@ -223,7 +223,7 @@ export function Button({
 }) {
   const theme = useTheme();
   const palette = {
-    primary: { bg: theme.accent, fg: '#FFFFFF', border: theme.accent },
+    primary: { bg: theme.accent, fg: theme.onAccent, border: theme.accent },
     secondary: { bg: theme.backgroundElement, fg: theme.text, border: theme.border },
     danger: { bg: theme.dangerSoft, fg: theme.danger, border: theme.dangerSoft },
     ghost: { bg: 'transparent', fg: theme.textSecondary, border: theme.border },

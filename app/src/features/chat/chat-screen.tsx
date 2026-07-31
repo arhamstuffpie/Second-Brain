@@ -162,7 +162,13 @@ function ChatTile({ message }: { message: ChatMessage }) {
             selectable
             style={[
               styles.messageText,
-              { color: user ? '#FFFFFF' : message.status === 'error' ? theme.danger : theme.text },
+              {
+                color: user
+                  ? theme.onAccent
+                  : message.status === 'error'
+                    ? theme.danger
+                    : theme.text,
+              },
             ]}>
             {message.content}
             {message.status === 'streaming' ? <StreamingCursor /> : null}
@@ -658,7 +664,7 @@ export function ChatScreen() {
                   pressed && styles.pressed,
                   (!input.trim() || !network.online || historyLoading) && styles.disabled,
                 ]}>
-                <Text style={styles.sendText}>↑</Text>
+                <Text style={[styles.sendText, { color: theme.onAccent }]}>↑</Text>
               </Pressable>
             )}
           </View>
@@ -783,7 +789,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sendText: { color: '#FFFFFF', fontSize: 24, lineHeight: 27, fontWeight: '900' },
+  sendText: { fontSize: 24, lineHeight: 27, fontWeight: '900' },
   stopIcon: { width: 13, height: 13, borderRadius: 3 },
   disclaimer: {
     width: '100%',
