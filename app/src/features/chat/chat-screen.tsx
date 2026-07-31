@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, ErrorNotice, PageHeader, StatusPill } from '@/components/ui';
 import { Fonts, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useKeyboardHeight } from '@/hooks/use-keyboard-height';
+import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useTheme } from '@/hooks/use-theme';
 import { ApiError } from '@/lib/api-client';
 import { clearChatHistory, loadChatHistory, saveChatHistory } from '@/lib/chat-storage';
@@ -30,16 +31,22 @@ const STARTERS = [
 
 function ChatTile({ message }: { message: ChatMessage }) {
   const theme = useTheme();
+  const reducedMotion = useReducedMotion();
   const opacity = useRef(new Animated.Value(0)).current;
   const offset = useRef(new Animated.Value(8)).current;
   const user = message.role === 'user';
 
   useEffect(() => {
+    if (reducedMotion) {
+      opacity.setValue(1);
+      offset.setValue(0);
+      return;
+    }
     Animated.parallel([
       Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: true }),
       Animated.timing(offset, { toValue: 0, duration: 180, useNativeDriver: true }),
     ]).start();
-  }, [offset, opacity]);
+  }, [offset, opacity, reducedMotion]);
 
   return (
     <Animated.View
@@ -335,13 +342,15 @@ export function ChatScreen() {
             }
           />
           {messages.length > 0 ? (
-            <Button
-              label="Clear chat"
-              variant="ghost"
-              compact
-              disabled={streaming}
-              onPress={clearChat}
-            />
+            <View style={styles.clearAction}>
+              <Button
+                label="Clear chat"
+                variant="ghost"
+                compact
+                disabled={streaming}
+                onPress={clearChat}
+              />
+            </View>
           ) : null}
         </View>
 
@@ -471,10 +480,11 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     alignSelf: 'center',
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.xl,
+    paddingTop: 20,
     paddingBottom: Spacing.md,
     gap: Spacing.sm,
   },
+  clearAction: { alignItems: 'flex-end' },
   listContent: {
     width: '100%',
     maxWidth: MaxContentWidth,
@@ -492,11 +502,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 16,
     paddingVertical: 11,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 1,
   },
   userTile: {
     maxWidth: '78%',
@@ -519,16 +524,14 @@ const styles = StyleSheet.create({
   messageTime: { fontFamily: Fonts.mono, fontSize: 9, fontWeight: '600' },
   empty: { alignItems: 'center', gap: Spacing.md },
   emptyGlyph: {
-    width: 58,
-    height: 58,
-    borderRadius: 20,
-    borderWidth: StyleSheet.hairlineWidth,
+    width: 48,
+    height: 48,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
-    transform: [{ rotate: '5deg' }],
   },
-  emptyGlyphText: { fontSize: 26, fontWeight: '900' },
-  emptyTitle: { fontFamily: Fonts.rounded, fontSize: 25, fontWeight: '800', letterSpacing: -0.5 },
+  emptyGlyphText: { fontSize: 22, fontWeight: '900' },
+  emptyTitle: { fontFamily: Fonts.rounded, fontSize: 23, fontWeight: '800', letterSpacing: -0.4 },
   emptyCopy: { maxWidth: 420, textAlign: 'center', fontSize: 14, lineHeight: 21 },
   starters: { width: '100%', marginTop: Spacing.md, gap: Spacing.sm },
   starter: {

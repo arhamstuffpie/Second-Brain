@@ -105,8 +105,8 @@ export function MemoryScreen() {
     <Screen contentStyle={styles.screen}>
       <PageHeader
         eyebrow="MEMOGRAPH"
-        title="Ask your timeline"
-        subtitle="Uses the same memory and group identifiers as the web app, so captures stay in one graph."
+        title="Memory tools"
+        subtitle="Search, inspect, or create the graph shared with your captures and web app."
         action={
           <StatusPill
             label={settings.memoryId ? 'memory linked' : 'setup needed'}

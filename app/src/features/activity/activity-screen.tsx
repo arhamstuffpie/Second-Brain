@@ -90,9 +90,9 @@ export function ActivityScreen() {
         }>
         <View style={styles.inner}>
           <PageHeader
-            eyebrow="DELIVERY"
-            title="Capture activity"
-            subtitle="Local buffer and backend processing, in one place."
+            eyebrow="CAPTURE HISTORY"
+            title="Activity"
+            subtitle="Follow each recording from the local buffer to your memory."
             action={
               <StatusPill
                 label={network.uploadAllowed ? 'syncing' : network.online ? 'waiting for Wi-Fi' : 'offline'}
@@ -186,50 +186,64 @@ export function ActivityScreen() {
               <Body muted>Your first chunk will appear here as soon as recording begins.</Body>
             </Card>
           ) : (
-            queue.map((item) => (
-              <Card key={item.id}>
-                <View style={styles.rowBetween}>
-                  <View style={styles.flex}>
-                    <Text style={[styles.itemTitle, { color: theme.text }]}>
-                      {item.isFinal ? 'Final chunk' : 'Video + audio chunk'}
-                    </Text>
-                    <Body muted>
-                      {new Date(item.createdAt).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                      {' · '}
-                      {formatBytes(item.recording?.size_bytes)}
-                    </Body>
+            <View
+              style={[
+                styles.chunkList,
+                { backgroundColor: theme.surface, borderColor: theme.border },
+              ]}>
+              {queue.map((item, index) => (
+                <View
+                  key={item.id}
+                  style={[
+                    styles.chunkRow,
+                    index > 0 && {
+                      borderTopWidth: StyleSheet.hairlineWidth,
+                      borderTopColor: theme.border,
+                    },
+                  ]}>
+                  <View style={styles.rowBetween}>
+                    <View style={styles.flex}>
+                      <Text style={[styles.itemTitle, { color: theme.text }]}>
+                        {item.isFinal ? 'Final chunk' : 'Video + audio chunk'}
+                      </Text>
+                      <Body muted>
+                        {new Date(item.createdAt).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                        {' · '}
+                        {formatBytes(item.recording?.size_bytes)}
+                      </Body>
+                    </View>
+                    <StatusPill label={item.state} tone={stateTone(item.state)} />
                   </View>
-                  <StatusPill label={item.state} tone={stateTone(item.state)} />
-                </View>
-                {item.lastError ? (
-                  <ErrorNotice title="Upload failed" message={item.lastError} />
-                ) : null}
-                <View style={styles.actions}>
-                  {item.state === 'uploaded' && item.recording && (
-                    <Button
-                      label="Processing detail"
-                      variant="secondary"
-                      compact
-                      onPress={() => void showDetail(item)}
-                    />
-                  )}
-                  {item.state === 'failed' && (
-                    <>
-                      <Button label="Retry" compact onPress={() => retryUpload(item.id)} />
+                  {item.lastError ? (
+                    <ErrorNotice title="Upload failed" message={item.lastError} />
+                  ) : null}
+                  <View style={styles.actions}>
+                    {item.state === 'uploaded' && item.recording && (
                       <Button
-                        label="Discard"
+                        label="Processing detail"
+                        variant="secondary"
                         compact
-                        variant="danger"
-                        onPress={() => discardUpload(item.id)}
+                        onPress={() => void showDetail(item)}
                       />
-                    </>
-                  )}
+                    )}
+                    {item.state === 'failed' && (
+                      <>
+                        <Button label="Retry" compact onPress={() => retryUpload(item.id)} />
+                        <Button
+                          label="Discard"
+                          compact
+                          variant="danger"
+                          onPress={() => discardUpload(item.id)}
+                        />
+                      </>
+                    )}
+                  </View>
                 </View>
-              </Card>
-            ))
+              ))}
+            </View>
           )}
         </View>
       </ScrollView>
@@ -249,5 +263,11 @@ const styles = StyleSheet.create({
   pipeline: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.lg },
   episode: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: Spacing.lg, gap: Spacing.md },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  chunkList: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  chunkRow: { padding: Spacing.lg, gap: Spacing.md },
   emptyTitle: { fontSize: 20, fontWeight: '800' },
 });

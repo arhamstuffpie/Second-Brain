@@ -1,4 +1,4 @@
-import { type PropsWithChildren, type ReactNode, useEffect, useRef } from 'react';
+import { type PropsWithChildren, type ReactNode, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Fonts, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useKeyboardHeight } from '@/hooks/use-keyboard-height';
+import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useTheme } from '@/hooks/use-theme';
 
 export function BrandMark({ compact = false }: { compact?: boolean }) {
@@ -74,7 +75,9 @@ export function PageHeader({
     <View style={styles.header}>
       <View style={styles.headerCopy}>
         {eyebrow && <Text style={[styles.eyebrow, { color: theme.accent }]}>{eyebrow}</Text>}
-        <Text style={[styles.pageTitle, { color: theme.text }]}>{title}</Text>
+        <Text accessibilityRole="header" style={[styles.pageTitle, { color: theme.text }]}>
+          {title}
+        </Text>
         {subtitle && <Text style={[styles.subtitle, { color: theme.textSecondary }]}>{subtitle}</Text>}
       </View>
       {action}
@@ -96,7 +99,11 @@ export function Card({
 
 export function SectionLabel({ children }: PropsWithChildren) {
   const theme = useTheme();
-  return <Text style={[styles.sectionLabel, { color: theme.textSecondary }]}>{children}</Text>;
+  return (
+    <Text accessibilityRole="header" style={[styles.sectionLabel, { color: theme.textSecondary }]}>
+      {children}
+    </Text>
+  );
 }
 
 export function Body({
@@ -122,6 +129,7 @@ export function ErrorNotice({
   const theme = useTheme();
   return (
     <View
+      accessibilityRole="alert"
       accessibilityLiveRegion="polite"
       style={[styles.errorNotice, { backgroundColor: theme.dangerSoft, borderColor: theme.danger }]}>
       <Text style={[styles.errorNoticeTitle, { color: theme.danger }]}>{title}</Text>
@@ -140,10 +148,17 @@ export function ErrorSnackbar({
   onDismiss: () => void;
 }) {
   const theme = useTheme();
+  const reducedMotion = useReducedMotion();
   const opacity = useRef(new Animated.Value(0)).current;
   const offset = useRef(new Animated.Value(14)).current;
 
   useEffect(() => {
+    if (reducedMotion) {
+      opacity.setValue(1);
+      offset.setValue(0);
+      const timer = setTimeout(onDismiss, 4500);
+      return () => clearTimeout(timer);
+    }
     Animated.parallel([
       Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: true }),
       Animated.timing(offset, { toValue: 0, duration: 180, useNativeDriver: true }),
@@ -157,7 +172,7 @@ export function ErrorSnackbar({
       });
     }, 4500);
     return () => clearTimeout(timer);
-  }, [offset, onDismiss, opacity]);
+  }, [offset, onDismiss, opacity, reducedMotion]);
 
   return (
     <Animated.View
@@ -206,6 +221,7 @@ export function Button({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityState={{ disabled: disabled || loading, busy: loading }}
       disabled={disabled || loading}
       onPress={onPress}
       style={({ pressed }) => [
@@ -228,24 +244,44 @@ export function Field({
   label,
   hint,
   error,
+  onFocus,
+  onBlur,
+  editable,
   ...props
 }: TextInputProps & { label: string; hint?: string; error?: string }) {
   const theme = useTheme();
+  const [focused, setFocused] = useState(false);
   return (
     <View style={styles.field}>
       <Text style={[styles.fieldLabel, { color: theme.text }]}>{label}</Text>
       <TextInput
+        accessibilityState={{ disabled: editable === false }}
+        editable={editable}
         placeholderTextColor={theme.textSecondary}
         selectionColor={theme.accent}
+        onFocus={(event) => {
+          setFocused(true);
+          onFocus?.(event);
+        }}
+        onBlur={(event) => {
+          setFocused(false);
+          onBlur?.(event);
+        }}
         style={[
           styles.input,
-          { color: theme.text, backgroundColor: theme.surfaceRaised, borderColor: error ? theme.danger : theme.border },
+          {
+            color: theme.text,
+            backgroundColor: theme.surfaceRaised,
+            borderColor: error ? theme.danger : focused ? theme.accent : theme.border,
+          },
           props.multiline && styles.multiline,
         ]}
         {...props}
       />
       {(error || hint) && (
-        <Text style={[styles.fieldHint, { color: error ? theme.danger : theme.textSecondary }]}>
+        <Text
+          accessibilityLiveRegion={error ? 'polite' : 'none'}
+          style={[styles.fieldHint, { color: error ? theme.danger : theme.textSecondary }]}>
           {error ?? hint}
         </Text>
       )}
@@ -264,22 +300,23 @@ export function ChoiceRow<T extends string | number>({
 }) {
   const theme = useTheme();
   return (
-    <View style={styles.choiceRow}>
+    <View style={[styles.choiceRow, { backgroundColor: theme.backgroundElement }]}>
       {options.map((option) => {
         const selected = option.value === value;
         return (
           <Pressable
             key={String(option.value)}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
             onPress={() => onChange(option.value)}
             style={({ pressed }) => [
               styles.choice,
               {
-                backgroundColor: selected ? theme.accentSoft : theme.surfaceRaised,
-                borderColor: selected ? theme.accent : theme.border,
+                backgroundColor: selected ? theme.surfaceRaised : 'transparent',
               },
               pressed && styles.pressed,
             ]}>
-            <Text style={[styles.choiceText, { color: selected ? theme.accent : theme.textSecondary }]}>
+            <Text style={[styles.choiceText, { color: selected ? theme.text : theme.textSecondary }]}>
               {option.label}
             </Text>
           </Pressable>
@@ -326,24 +363,41 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   scrollContent: { flexGrow: 1 },
   screenContent: { flex: 1, alignItems: 'center', paddingHorizontal: Spacing.lg },
-  screenInner: { width: '100%', maxWidth: MaxContentWidth, paddingVertical: Spacing.xl, gap: Spacing.xl },
+  screenInner: {
+    width: '100%',
+    maxWidth: MaxContentWidth,
+    paddingTop: 20,
+    paddingBottom: Spacing.xl,
+    gap: Spacing.xl,
+  },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
   brandGlyph: {
-    width: 28,
-    height: 28,
-    borderRadius: 9,
+    width: 26,
+    height: 26,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     transform: [{ rotate: '8deg' }],
   },
   brandGlyphCore: { width: 9, height: 9, borderRadius: 3 },
   brandText: { fontFamily: Fonts.mono, fontWeight: '800', fontSize: 12, letterSpacing: 1.7 },
-  header: { flexDirection: 'row', gap: Spacing.lg, alignItems: 'flex-start' },
+  header: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.lg, alignItems: 'flex-start' },
   headerCopy: { flex: 1, gap: Spacing.sm },
   eyebrow: { fontFamily: Fonts.mono, fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },
-  pageTitle: { fontFamily: Fonts.rounded, fontSize: 34, lineHeight: 38, fontWeight: '800', letterSpacing: -1.2 },
+  pageTitle: {
+    fontFamily: Fonts.rounded,
+    fontSize: 30,
+    lineHeight: 34,
+    fontWeight: '800',
+    letterSpacing: -0.8,
+  },
   subtitle: { fontSize: 15, lineHeight: 22, maxWidth: 520 },
-  card: { borderWidth: StyleSheet.hairlineWidth, borderRadius: Radius.lg, padding: Spacing.lg, gap: Spacing.lg },
+  card: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    gap: Spacing.lg,
+  },
   sectionLabel: { fontFamily: Fonts.mono, fontSize: 11, fontWeight: '800', letterSpacing: 1.4, textTransform: 'uppercase' },
   body: { fontSize: 15, lineHeight: 22 },
   errorNotice: {
@@ -377,21 +431,21 @@ const styles = StyleSheet.create({
   errorSnackbarMessage: { color: '#FFFFFF', flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '700' },
   errorSnackbarDismiss: { color: '#FFFFFF', fontFamily: Fonts.mono, fontSize: 9, fontWeight: '900' },
   button: {
-    minHeight: 50,
+    minHeight: 48,
     borderRadius: Radius.md,
     borderWidth: 1,
     paddingHorizontal: Spacing.xl,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  buttonCompact: { minHeight: 38, paddingHorizontal: Spacing.lg },
+  buttonCompact: { minHeight: 40, paddingHorizontal: Spacing.lg, alignSelf: 'flex-start' },
   buttonLabel: { fontSize: 15, fontWeight: '800' },
   pressed: { opacity: 0.72, transform: [{ scale: 0.99 }] },
   disabled: { opacity: 0.42 },
   field: { gap: Spacing.sm },
   fieldLabel: { fontSize: 13, fontWeight: '700' },
   input: {
-    minHeight: 50,
+    minHeight: 48,
     borderRadius: Radius.md,
     borderWidth: 1,
     paddingHorizontal: Spacing.lg,
@@ -399,17 +453,32 @@ const styles = StyleSheet.create({
   },
   multiline: { minHeight: 104, paddingTop: Spacing.md, textAlignVertical: 'top' },
   fieldHint: { fontSize: 12, lineHeight: 17 },
-  choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  choice: { borderWidth: 1, borderRadius: Radius.pill, paddingHorizontal: Spacing.lg, paddingVertical: 10 },
-  choiceText: { fontSize: 13, fontWeight: '800' },
+  choiceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 3,
+    borderRadius: Radius.md,
+    padding: 3,
+  },
+  choice: {
+    minWidth: 84,
+    minHeight: 40,
+    flexGrow: 1,
+    borderRadius: 9,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  choiceText: { fontSize: 13, fontWeight: '700', textAlign: 'center' },
   pill: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
     borderRadius: Radius.pill,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
   },
   pillDot: { width: 6, height: 6, borderRadius: 3 },
   pillText: { fontFamily: Fonts.mono, fontSize: 9, fontWeight: '900', letterSpacing: 1 },

@@ -14,6 +14,7 @@ import {
   StatusPill,
 } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/theme';
+import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
 import type { AppSettings } from '@/types/app';
@@ -56,6 +57,7 @@ export function SettingsScreen() {
   const [health, setHealth] = useState<'idle' | 'checking' | 'healthy' | 'failed'>('idle');
   const [healthError, setHealthError] = useState('');
   const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const reducedMotion = useReducedMotion();
   const snackbarOpacity = useRef(new Animated.Value(0)).current;
   const snackbarOffset = useRef(new Animated.Value(12)).current;
   const snackbarTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -75,6 +77,12 @@ export function SettingsScreen() {
   function showSavedSnackbar() {
     if (snackbarTimer.current) clearTimeout(snackbarTimer.current);
     setSnackbarVisible(true);
+    if (reducedMotion) {
+      snackbarOpacity.setValue(1);
+      snackbarOffset.setValue(0);
+      snackbarTimer.current = setTimeout(() => setSnackbarVisible(false), 2400);
+      return;
+    }
     snackbarOpacity.setValue(0);
     snackbarOffset.setValue(12);
     Animated.parallel([
@@ -138,8 +146,8 @@ export function SettingsScreen() {
       <Screen contentStyle={styles.screen}>
       <PageHeader
         eyebrow="PREFERENCES"
-        title="Collection controls"
-        subtitle="Tune capture quality, delivery cost, and the Memograph destination."
+        title="Settings"
+        subtitle="Manage capture quality, network use, and your Memograph destination."
         action={
           <StatusPill
             label={network.online ? network.type.toLowerCase() : 'offline'}

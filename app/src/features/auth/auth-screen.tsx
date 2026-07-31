@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Body, BrandMark, Button, ChoiceRow, ErrorNotice, Field } from '@/components/ui';
 import { Fonts, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useKeyboardHeight } from '@/hooks/use-keyboard-height';
+import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
 import { useTheme } from '@/hooks/use-theme';
@@ -26,15 +27,20 @@ export function AuthScreen() {
   const [error, setError] = useState('');
   const entrance = useRef(new Animated.Value(0)).current;
   const keyboardHeight = useKeyboardHeight();
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
+    if (reducedMotion) {
+      entrance.setValue(1);
+      return;
+    }
     Animated.spring(entrance, {
       toValue: 1,
       damping: 18,
       stiffness: 130,
       useNativeDriver: true,
     }).start();
-  }, [entrance]);
+  }, [entrance, reducedMotion]);
 
   async function submit() {
     setError('');
@@ -85,7 +91,9 @@ export function AuthScreen() {
             ]}>
             <BrandMark />
             <View style={styles.hero}>
-              <Text style={[styles.title, { color: theme.text }]}>Your day,{'\n'}remembered.</Text>
+              <Text accessibilityRole="header" style={[styles.title, { color: theme.text }]}>
+                Your day,{'\n'}remembered.
+              </Text>
               <Body muted>
                 Capture ambient video and audio into your private Memograph timeline.
               </Body>
@@ -147,21 +155,21 @@ export function AuthScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   keyboard: { flex: 1 },
-  shell: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.xl },
-  content: { width: '100%', maxWidth: Math.min(MaxContentWidth, 520), gap: Spacing.xl },
-  hero: { gap: Spacing.md },
+  shell: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
+  content: { width: '100%', maxWidth: Math.min(MaxContentWidth, 500), gap: Spacing.xl },
+  hero: { gap: Spacing.sm },
   title: {
     fontFamily: Fonts.rounded,
-    fontSize: 47,
-    lineHeight: 49,
-    letterSpacing: -2,
+    fontSize: 40,
+    lineHeight: 43,
+    letterSpacing: -1.5,
     fontWeight: '900',
   },
   form: {
     gap: Spacing.lg,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: Radius.lg,
-    padding: Spacing.xl,
+    padding: 20,
   },
   privacy: { fontSize: 12, lineHeight: 18, textAlign: 'center', paddingHorizontal: Spacing.lg },
 });

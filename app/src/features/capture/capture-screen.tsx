@@ -16,12 +16,14 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, BrandMark, Button, Card, ErrorNotice, Metric, StatusPill } from '@/components/ui';
 import { Fonts, Radius, Spacing } from '@/constants/theme';
 import { deleteQueuedFile, persistCapturedVideo } from '@/lib/storage';
 import { getReadableError } from '@/lib/readable-error';
 import { useRecordingSoundCues } from '@/lib/recording-cues';
+import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useApp } from '@/state/app-provider';
 import type { CapturePhase, QueuedVideoChunk } from '@/types/app';
 import { useTheme } from '@/hooks/use-theme';
@@ -35,6 +37,8 @@ function formatElapsed(seconds: number) {
 
 export function CaptureScreen() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  const reducedMotion = useReducedMotion();
   const {
     api,
     settings,
@@ -71,6 +75,10 @@ export function CaptureScreen() {
       pulse.setValue(0.45);
       return;
     }
+    if (reducedMotion) {
+      pulse.setValue(1);
+      return;
+    }
     const animation = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: true }),
@@ -79,7 +87,7 @@ export function CaptureScreen() {
     );
     animation.start();
     return () => animation.stop();
-  }, [capturing, pulse]);
+  }, [capturing, pulse, reducedMotion]);
 
   useEffect(() => {
     if (!capture.startedAt || capture.phase === 'idle') {
@@ -288,7 +296,7 @@ export function CaptureScreen() {
         onMountError={({ message }) => setCapture({ phase: 'error', error: message })}
       />
 
-      <View style={styles.topBar}>
+      <View style={[styles.topBar, { top: insets.top + Spacing.md }]}>
         <BrandMark compact />
         <View style={styles.topPills}>
           <StatusPill
@@ -303,8 +311,9 @@ export function CaptureScreen() {
         </View>
       </View>
 
-      <View style={styles.previewActions}>
+      <View style={[styles.previewActions, { top: insets.top + 68 }]}>
         <Pressable
+          accessibilityLabel="Switch camera"
           accessibilityRole="button"
           disabled={capturing || busy}
           onPress={() => setFacing((current) => (current === 'back' ? 'front' : 'back'))}
@@ -314,11 +323,15 @@ export function CaptureScreen() {
             pressed && styles.pressed,
             (capturing || busy) && styles.disabled,
           ]}>
-          <Text style={styles.roundActionText}>FLIP</Text>
+          <Text style={styles.roundActionText}>↻</Text>
         </Pressable>
       </View>
 
-      <View style={[styles.controlDock, { backgroundColor: theme.surface }]}>
+      <View
+        style={[
+          styles.controlDock,
+          { backgroundColor: theme.surface, borderColor: theme.border },
+        ]}>
         <View style={styles.metrics}>
           <Metric value={formatElapsed(elapsed)} label="elapsed" />
           <Metric value={`${settings.chunkDurationSeconds}s`} label="chunks" />
@@ -373,7 +386,6 @@ const styles = StyleSheet.create({
   fallbackTitle: { fontFamily: Fonts.rounded, fontSize: 28, fontWeight: '800' },
   topBar: {
     position: 'absolute',
-    top: 56,
     left: Spacing.lg,
     right: Spacing.lg,
     flexDirection: 'row',
@@ -381,7 +393,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   topPills: { flexDirection: 'row', gap: Spacing.sm },
-  previewActions: { position: 'absolute', top: 112, right: Spacing.lg },
+  previewActions: { position: 'absolute', right: Spacing.lg },
   roundAction: {
     width: 48,
     height: 48,
@@ -389,13 +401,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  roundActionText: { color: '#FFFFFF', fontFamily: Fonts.mono, fontSize: 9, fontWeight: '900' },
+  roundActionText: { color: '#FFFFFF', fontSize: 23, lineHeight: 25, fontWeight: '500' },
   controlDock: {
     position: 'absolute',
     left: Spacing.md,
     right: Spacing.md,
-    bottom: 86,
+    bottom: Spacing.md,
     borderRadius: Radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
     padding: Spacing.lg,
     gap: Spacing.lg,
   },
