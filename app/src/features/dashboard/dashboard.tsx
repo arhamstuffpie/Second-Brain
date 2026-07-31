@@ -5,16 +5,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Radius, Spacing } from '@/constants/theme';
 import { ActivityScreen } from '@/features/activity/activity-screen';
 import { CaptureScreen } from '@/features/capture/capture-screen';
+import { ChatScreen } from '@/features/chat/chat-screen';
 import { MemoryScreen } from '@/features/memory/memory-screen';
 import { SettingsScreen } from '@/features/settings/settings-screen';
 import { useApp } from '@/state/app-provider';
 import { useTheme } from '@/hooks/use-theme';
 
-type Tab = 'capture' | 'activity' | 'memory' | 'settings';
+type Tab = 'capture' | 'activity' | 'chat' | 'memory' | 'settings';
 
 const tabs: Array<{ key: Tab; label: string; icon: string }> = [
   { key: 'capture', label: 'Capture', icon: '●' },
   { key: 'activity', label: 'Activity', icon: '↥' },
+  { key: 'chat', label: 'Chat', icon: '✦' },
   { key: 'memory', label: 'Memory', icon: '◇' },
   { key: 'settings', label: 'Settings', icon: '⌁' },
 ];
@@ -32,6 +34,8 @@ export function Dashboard() {
       <CaptureScreen />
     ) : tab === 'activity' ? (
       <ActivityScreen />
+    ) : tab === 'chat' ? (
+      <ChatScreen />
     ) : tab === 'memory' ? (
       <MemoryScreen />
     ) : (

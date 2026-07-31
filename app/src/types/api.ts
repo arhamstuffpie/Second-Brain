@@ -299,8 +299,27 @@ export type MemorySearchRequest = {
 export type MemoryAnswerRequest = {
   query?: string;
   messages?: Array<{ role: string; content: string }>;
+  stream?: boolean;
   limit?: number;
   model?: string;
   group_id?: string;
   filters?: Record<string, unknown>;
+};
+
+export type MemoryAnswerStreamMeta = {
+  memory_id: string;
+  memory_name?: string;
+};
+
+export type MemoryAnswerStreamUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
+export type MemoryAnswerStreamHandlers = {
+  onMeta?: (meta: MemoryAnswerStreamMeta) => void;
+  onToken: (content: string) => void;
+  onUsage?: (usage: MemoryAnswerStreamUsage) => void;
+  onDone?: () => void;
 };

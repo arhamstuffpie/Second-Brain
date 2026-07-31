@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +65,14 @@ func (fakeVoiceService) Search(context.Context, string, service.MemorySearchRequ
 }
 func (fakeVoiceService) Answer(context.Context, string, service.MemoryAnswerRequest) (json.RawMessage, error) {
 	return nil, nil
+}
+func (fakeVoiceService) AnswerStream(context.Context, string, service.MemoryAnswerRequest) (service.MemoryAnswerStream, error) {
+	return service.MemoryAnswerStream{
+		Body: io.NopCloser(strings.NewReader(
+			"event: token\ndata: {\"content\":\"hello\"}\n\nevent: done\ndata: [DONE]\n\n",
+		)),
+		ContentType: "text/event-stream",
+	}, nil
 }
 func (fakeVoiceService) GetGraph(context.Context, string, string) (json.RawMessage, error) {
 	return nil, nil
@@ -175,6 +185,39 @@ func TestSecureRouteAcceptsJWT(t *testing.T) {
 	}
 	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"user_id":"user-123"`)) {
 		t.Fatalf("body = %s, want authenticated user ID", recorder.Body.String())
+	}
+}
+
+func TestMemoryAnswerRouteStreamsSSE(t *testing.T) {
+	engine := testRouterWithAuth(t, fakeHealthService{}, fakeAuthService{})
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+		Subject:   "user-123",
+		Issuer:    "test-issuer",
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	})
+	signedToken, err := token.SignedString([]byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatalf("SignedString() error = %v", err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/memory/55d875c1-7e6f-43c9-a858-e084278e62a5/answer",
+		bytes.NewBufferString(`{"query":"What happened?","stream":true}`),
+	)
+	request.Header.Set("Authorization", "Bearer "+signedToken)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	if !strings.Contains(recorder.Body.String(), `"content":"hello"`) ||
+		!strings.Contains(recorder.Body.String(), "event: done") {
+		t.Fatalf("body = %q, want streamed token and done events", recorder.Body.String())
 	}
 }
 

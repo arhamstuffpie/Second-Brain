@@ -154,6 +154,9 @@ func (stubMemographClient) Search(context.Context, string, MemorySearchRequest) 
 func (stubMemographClient) Answer(context.Context, string, MemoryAnswerRequest) (json.RawMessage, error) {
 	return nil, nil
 }
+func (stubMemographClient) AnswerStream(context.Context, string, MemoryAnswerRequest) (MemoryAnswerStream, error) {
+	return MemoryAnswerStream{}, nil
+}
 func (stubMemographClient) GetGraph(context.Context, string, string) (json.RawMessage, error) {
 	return nil, nil
 }

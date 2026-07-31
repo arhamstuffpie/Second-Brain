@@ -62,6 +62,11 @@ func registerVoice(router *gin.RouterGroup, voice handler.VoiceHandler) {
 	// model, group_id and filters are optional. Returns the upstream answer JSON.
 	voiceRoutes.POST("/memories/:memory_id/answer", voice.Answer)
 
+	// POST /api/v1/memory/:memory_id/answer
+	// JSON: service.MemoryAnswerRequest. Forces stream=true upstream and proxies
+	// Memograph's meta, token, usage, error and done SSE events without buffering.
+	router.POST("/memory/:memory_id/answer", voice.AnswerStream)
+
 	// GET /api/v1/voice/memories/:memory_id/graph?group_id=<optional>
 	// Loads the memory graph, optionally restricted to group_id, and returns 200
 	// with Memograph's graph JSON as data.

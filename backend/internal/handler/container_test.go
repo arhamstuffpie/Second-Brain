@@ -53,6 +53,9 @@ func (stubVoiceService) Search(context.Context, string, service.MemorySearchRequ
 func (stubVoiceService) Answer(context.Context, string, service.MemoryAnswerRequest) (json.RawMessage, error) {
 	return nil, nil
 }
+func (stubVoiceService) AnswerStream(context.Context, string, service.MemoryAnswerRequest) (service.MemoryAnswerStream, error) {
+	return service.MemoryAnswerStream{}, nil
+}
 func (stubVoiceService) GetGraph(context.Context, string, string) (json.RawMessage, error) {
 	return nil, nil
 }

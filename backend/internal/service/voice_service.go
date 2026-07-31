@@ -272,6 +272,29 @@ func (s *voiceService) Answer(ctx context.Context, memoryID string, request Memo
 	return result, nil
 }
 
+func (s *voiceService) AnswerStream(
+	ctx context.Context,
+	memoryID string,
+	request MemoryAnswerRequest,
+) (MemoryAnswerStream, error) {
+	if strings.TrimSpace(memoryID) == "" ||
+		(strings.TrimSpace(request.Query) == "" && len(request.Messages) == 0) {
+		return MemoryAnswerStream{}, validation(
+			"query",
+			"memory_id and query or messages are required",
+		)
+	}
+	if request.Limit <= 0 {
+		request.Limit = 10
+	}
+	request.Stream = true
+	result, err := s.memograph.AnswerStream(ctx, memoryID, request)
+	if err != nil {
+		return MemoryAnswerStream{}, &UnavailableError{Dependency: "memograph", Cause: err}
+	}
+	return result, nil
+}
+
 func (s *voiceService) GetGraph(ctx context.Context, memoryID, groupID string) (json.RawMessage, error) {
 	if strings.TrimSpace(memoryID) == "" {
 		return nil, validation("memory_id", "is required")

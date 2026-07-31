@@ -89,6 +89,55 @@ func TestAnswerScopesGroupThroughFilter(t *testing.T) {
 	}
 }
 
+func TestAnswerStreamUsesAPIKeyAndForcesStreaming(t *testing.T) {
+	client := NewClient(config.MemographConfig{
+		BaseURL: "https://memograph.test", APIKey: "mg_live_test", Timeout: time.Second,
+	})
+	client.http = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/api/v1/memory/memory-1/answer" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		if got := request.Header.Get("Accept"); got != "text/event-stream" {
+			t.Fatalf("Accept = %q", got)
+		}
+		if got := request.Header.Get("X-Api-Key"); got != "mg_live_test" {
+			t.Fatalf("X-Api-Key = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["stream"] != true {
+			t.Fatalf("stream = %#v, want true", payload["stream"])
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				"event: token\ndata: {\"content\":\"hello\"}\n\n",
+			)),
+			Request: request,
+		}, nil
+	})}
+
+	stream, err := client.AnswerStream(
+		context.Background(),
+		"memory-1",
+		service.MemoryAnswerRequest{Query: "What happened?"},
+	)
+	if err != nil {
+		t.Fatalf("AnswerStream() error = %v", err)
+	}
+	defer stream.Body.Close()
+	body, err := io.ReadAll(stream.Body)
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	if !strings.Contains(string(body), `"content":"hello"`) {
+		t.Fatalf("stream body = %q", body)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -156,7 +205,7 @@ func TestRequestAPIKeyOverridesConfiguredCredentials(t *testing.T) {
 		t.Fatalf("Search() error = %v", err)
 	}
 }
-  
+
 func TestEveryMemographOperationUsesAPIKey(t *testing.T) {
 	expected := []struct {
 		method string

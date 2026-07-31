@@ -4,6 +4,9 @@ import type {
   Credentials,
   Health,
   MemoryAnswerRequest,
+  MemoryAnswerStreamHandlers,
+  MemoryAnswerStreamMeta,
+  MemoryAnswerStreamUsage,
   MemoryCreateRequest,
   MemorySearchRequest,
   RealtimeVideoSession,
@@ -21,7 +24,10 @@ import type {
   VoiceRecording,
   VoiceRecordingDetail,
 } from '@/types/api';
+import { fetch as expoFetch } from 'expo/fetch';
 import { randomUUID } from 'expo-crypto';
+
+import { ServerSentEventParser, type ServerSentEvent } from '@/lib/sse';
 
 type RequestOptions = {
   method?: 'GET' | 'POST';
@@ -158,6 +164,171 @@ export class ApiClient {
     return envelope.data as T;
   }
 
+  private async streamMemoryAnswer(
+    memoryId: string,
+    input: MemoryAnswerRequest,
+    handlers: MemoryAnswerStreamHandlers,
+    signal?: AbortSignal,
+  ) {
+    if (!__DEV__ && !this.baseUrl.startsWith('https://')) {
+      throw new ApiError('Production backend URL must use HTTPS.', 0, 'INSECURE_BACKEND_URL');
+    }
+    const token = this.getAccessToken();
+    if (!token) {
+      throw new ApiError('Please sign in again.', 401, 'UNAUTHORIZED');
+    }
+
+    const headers: Record<string, string> = {
+      Accept: 'text/event-stream',
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Request-ID': randomUUID(),
+    };
+    const memographAPIKey = this.getMemographAPIKey()?.trim();
+    if (memographAPIKey) {
+      headers['X-Memograph-Api-Key'] = memographAPIKey;
+    }
+
+    const controller = new AbortController();
+    let connectionTimedOut = false;
+    const abort = () => controller.abort();
+    if (signal?.aborted) {
+      controller.abort();
+    } else {
+      signal?.addEventListener('abort', abort, { once: true });
+    }
+    const connectionTimeout = setTimeout(() => {
+      connectionTimedOut = true;
+      controller.abort();
+    }, 30_000);
+
+    try {
+      let response: Response;
+      try {
+        response = await expoFetch(
+          `${this.baseUrl}/api/v1/memory/${encodeURIComponent(memoryId)}/answer`,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ ...input, stream: true }),
+            signal: controller.signal,
+          },
+        );
+      } catch (error) {
+        if (signal?.aborted) {
+          throw new ApiError('The response was stopped.', 0, 'REQUEST_CANCELLED');
+        }
+        const aborted = error instanceof Error && error.name === 'AbortError';
+        throw new ApiError(
+          connectionTimedOut || aborted
+            ? 'The backend took too long to start responding.'
+            : 'Unable to reach the backend.',
+          0,
+          connectionTimedOut || aborted ? 'REQUEST_TIMEOUT' : 'NETWORK_ERROR',
+        );
+      } finally {
+        clearTimeout(connectionTimeout);
+      }
+
+      const requestId = response.headers.get('X-Request-ID') ?? undefined;
+      if (response.status === 401) this.onUnauthorized?.();
+      if (!response.ok) {
+        const fallback = await response.text();
+        let message = fallback || 'Request failed.';
+        let code = 'REQUEST_FAILED';
+        try {
+          const parsed = JSON.parse(fallback) as {
+            message?: string;
+            error?: string;
+            code?: string;
+          };
+          message = parsed.message || parsed.error || message;
+          code = parsed.code || code;
+        } catch {
+          // Plain-text upstream failures are still useful to the readable-error layer.
+        }
+        throw new ApiError(message, response.status, code, requestId);
+      }
+
+      const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? '';
+      if (!contentType.startsWith('text/event-stream') || !response.body) {
+        throw new ApiError(
+          'Backend returned an invalid streaming response.',
+          response.status,
+          'INVALID_RESPONSE',
+          requestId,
+        );
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const parser = new ServerSentEventParser();
+      let completed = false;
+      const handleEvent = (event: ServerSentEvent) => {
+        if (event.event === 'done' || event.data === '[DONE]') {
+          completed = true;
+          handlers.onDone?.();
+          return;
+        }
+        if (event.event === 'error') {
+          let message = event.data;
+          try {
+            message = (JSON.parse(event.data) as { message?: string }).message || message;
+          } catch {
+            // Keep the raw server message if the event payload is plain text.
+          }
+          throw new ApiError(message, 502, 'MEMOGRAPH_ERROR', requestId);
+        }
+        if (event.event === 'meta') {
+          handlers.onMeta?.(JSON.parse(event.data) as MemoryAnswerStreamMeta);
+          return;
+        }
+        if (event.event === 'usage') {
+          handlers.onUsage?.(JSON.parse(event.data) as MemoryAnswerStreamUsage);
+          return;
+        }
+        if (event.event === 'token') {
+          const content = (JSON.parse(event.data) as { content?: string }).content;
+          if (content) handlers.onToken(content);
+        }
+      };
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          parser.feed(decoder.decode(value, { stream: true }), handleEvent);
+        }
+        parser.feed(decoder.decode(), handleEvent);
+        parser.finish(handleEvent);
+      } catch (error) {
+        if (signal?.aborted) {
+          throw new ApiError('The response was stopped.', 0, 'REQUEST_CANCELLED');
+        }
+        if (error instanceof ApiError) throw error;
+        throw new ApiError(
+          'The streamed response was interrupted.',
+          0,
+          'NETWORK_ERROR',
+          requestId,
+        );
+      } finally {
+        reader.releaseLock();
+      }
+
+      if (!completed) {
+        throw new ApiError(
+          'The streamed response ended unexpectedly.',
+          0,
+          'NETWORK_ERROR',
+          requestId,
+        );
+      }
+    } finally {
+      signal?.removeEventListener('abort', abort);
+    }
+  }
+
   health() {
     return this.request<Health>('/health', { authenticated: false });
   }
@@ -290,6 +461,13 @@ export class ApiClient {
         method: 'POST',
         body: input,
       }),
+
+    answerStream: (
+      memoryId: string,
+      input: MemoryAnswerRequest,
+      handlers: MemoryAnswerStreamHandlers,
+      signal?: AbortSignal,
+    ) => this.streamMemoryAnswer(memoryId, input, handlers, signal),
 
     graph: (memoryId: string, groupId?: string) => {
       const query = groupId ? `?group_id=${encodeURIComponent(groupId)}` : '';

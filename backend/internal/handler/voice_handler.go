@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ type VoiceHandler interface {
 	CreateMemory(c *gin.Context)
 	Search(c *gin.Context)
 	Answer(c *gin.Context)
+	AnswerStream(c *gin.Context)
 	GetGraph(c *gin.Context)
 }
 
@@ -283,6 +285,48 @@ func (h *voiceHandler) Answer(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, result, "memory answer complete")
+}
+
+func (h *voiceHandler) AnswerStream(c *gin.Context) {
+	var request service.MemoryAnswerRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid answer request")
+		return
+	}
+	stream, err := h.service.AnswerStream(c.Request.Context(), c.Param("memory_id"), request)
+	if err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	defer stream.Body.Close()
+
+	contentType := stream.ContentType
+	if contentType == "" {
+		contentType = "text/event-stream"
+	}
+	c.Header("Content-Type", contentType)
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	buffer := make([]byte, 4096)
+	for {
+		read, readErr := stream.Body.Read(buffer)
+		if read > 0 {
+			if _, writeErr := c.Writer.Write(buffer[:read]); writeErr != nil {
+				return
+			}
+			c.Writer.Flush()
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				_ = c.Error(readErr)
+			}
+			return
+		}
+	}
 }
 
 func (h *voiceHandler) GetGraph(c *gin.Context) {

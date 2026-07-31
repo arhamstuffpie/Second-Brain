@@ -22,6 +22,7 @@ except `/health` live below `/api/v1`.
 | `POST` | `/api/v1/voice/projects/:project_id/memories` | yes | Create graph memory |
 | `POST` | `/api/v1/voice/memories/:memory_id/search` | yes | Search graph memory |
 | `POST` | `/api/v1/voice/memories/:memory_id/answer` | yes | Answer using graph memory |
+| `POST` | `/api/v1/memory/:memory_id/answer` | yes | Stream an answer using graph memory |
 | `GET` | `/api/v1/voice/memories/:memory_id/graph` | yes | Read graph |
 | `POST` | `/api/v1/video/recordings` | yes | Queue video recording |
 | `GET` | `/api/v1/video/recordings/:recording_id` | yes | Read video processing result |
@@ -653,6 +654,34 @@ upstream filters as a `group_id == value` constraint.
 - Success: `200`, message `memory answer complete`, `data: unknown`
   (Memograph JSON).
 - Errors: `400 VALIDATION_ERROR`, `503 SERVICE_UNAVAILABLE`.
+
+### `POST /api/v1/memory/:memory_id/answer`
+
+Streams a Memograph answer without buffering it in this backend. It uses the
+same JSON body as the non-streaming answer endpoint; `stream` is always forced
+to `true`.
+
+The success response is `200 text/event-stream`, not the standard JSON
+envelope. Events arrive in this order:
+
+```text
+event: meta
+data: {"memory_id":"...","memory_name":"..."}
+
+event: token
+data: {"content":"partial answer"}
+
+event: usage
+data: {"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}
+
+event: done
+data: [DONE]
+```
+
+There can be any number of `token` events. An upstream failure after streaming
+has started is returned as an `error` event with a JSON `message`. Validation,
+authentication, and upstream connection failures that happen before streaming
+starts use the normal JSON error envelope.
 
 ### `GET /api/v1/voice/memories/:memory_id/graph`
 

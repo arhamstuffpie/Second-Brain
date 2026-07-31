@@ -53,13 +53,88 @@ func (a *OpenAIAnalyzer) Analyze(
 		timestamps = append(timestamps, strconv.FormatFloat(frame.Timestamp, 'f', 2, 64)+"s")
 	}
 	content = append(content, map[string]any{
-		"type": "input_text",
-		"text": "Analyze the following ordered video frames at timestamps " +
-			strings.Join(timestamps, ", ") + `. Return one observation per frame in the same order. ` +
-			`Detect important visible objects, transcribe readable text exactly, identify the current ` +
-			`activity/scenario, make a conservative location guess, and summarize only what is visually ` +
-			`grounded. Use each supplied timestamp as start_time and the next timestamp as end_time; ` +
-			`for the last frame use the configured window duration. Confidence values must be between 0 and 1.`,
+	"type": "input_text",
+	"text": "Analyze the following ordered video frames at timestamps " +
+		strings.Join(timestamps, ", ") + `. Return exactly one observation for each
+		supplied frame, in the same order.
+
+		Analyze each frame carefully and produce a dense, self-contained, visually
+		grounded description.
+
+		For every frame:
+
+		1. Identify the primary subject and all important visible people, animals,
+		vehicles, objects, structures, surfaces, documents, screens, signs, products,
+		and environmental elements.
+
+		2. Describe relevant visible attributes, including type, color, material, size,
+		quantity, condition, state, orientation, position, and distinguishing
+		features.
+
+		3. Describe the foreground, middle ground, and background. Include important
+		spatial relationships between visible entities, such as on, inside, beside,
+		behind, in front of, attached to, held by, worn by, displayed on, or near.
+
+		4. Transcribe all readable text exactly as it appears, including text on signs,
+		screens, documents, labels, packaging, clothing, vehicles, buildings,
+		posters, handwritten notes, and other visible surfaces. Do not omit text
+		merely because it is small or not central to the scene.
+
+		5. For every item returned in text_detected, identify the object, surface, or
+		visual region on which the text appears. Connect the text to that object in
+		the summary using a natural-language relationship sentence.
+
+		Use the general pattern:
+		"A/An <visible object attributes> <object or surface> <contains, shows,
+		bears, reads, or displays> the exact text '<detected text>' on <specific
+		region, if known>."
+
+		Choose the relationship verb that most accurately describes the visual
+		evidence.
+
+		6. The summary must include every item returned in text_detected. Never report
+		readable text only as an isolated value when its containing object or surface
+		can be identified.
+
+		7. If the containing object cannot be identified, write:
+		"An unidentified surface in the <position> of the frame displays the exact
+		text '<detected text>'."
+
+		8. If text is only partially readable, preserve the visible characters exactly,
+		replace each unreadable character with "?", and explicitly state that the
+		reading is partial or uncertain. Do not correct spelling, complete missing
+		text, or guess hidden characters.
+
+		9. Identify the visible activity, action, event, or scenario. Describe who or
+		what is performing the action and which visible entities are involved.
+
+		10. Make a conservative location guess using only visible evidence. Distinguish
+			between directly observed environmental details and inferred location.
+			Describe visible lighting, indoor or outdoor setting, terrain, road
+			conditions, and visual weather cues when present, but do not claim external
+			facts that cannot be seen.
+
+		11. Write the summary as graph-friendly factual sentences. Use explicit entity
+			names and relationships instead of ambiguous pronouns. Include:
+			- The principal subject and its distinguishing features.
+			- Relevant surrounding objects and environmental details.
+			- Foreground, middle-ground, and background context.
+			- Important spatial and interaction relationships.
+			- Every detected text item connected to its containing object or surface.
+			- The visible activity or event.
+
+		12. Do not infer ownership, identity, intent, registration information, exact
+			address, or other facts that are not visually supported. When uncertain,
+			describe the uncertainty rather than inventing information.
+
+		13. Do not omit a visible detail merely because it appears unimportant. However,
+			do not repeat identical facts unnecessarily within the same observation.
+
+		Use each supplied timestamp as start_time and the next supplied timestamp as
+		end_time. For the final frame, use the configured window duration.
+
+		All confidence values must be between 0 and 1 and should reflect visibility,
+		image quality, occlusion, blur, and ambiguity.`,
 	})
 	for _, frame := range input.Frames {
 		mediaType := strings.TrimSpace(frame.MediaType)

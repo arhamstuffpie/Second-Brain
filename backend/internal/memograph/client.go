@@ -57,18 +57,66 @@ func (c *Client) Search(ctx context.Context, memoryID string, request service.Me
 }
 
 func (c *Client) Answer(ctx context.Context, memoryID string, request service.MemoryAnswerRequest) (json.RawMessage, error) {
-	// The currently deployed Memograph answer handler accepts filters but not a
-	// dedicated group_id field. Keep group_id in the payload for forward
-	// compatibility and also enforce it through the graph-search filter.
-	if request.GroupID != "" {
-		groupFilter := map[string]any{"group_id": map[string]any{"eq": request.GroupID}}
-		if len(request.Filters) == 0 {
-			request.Filters = groupFilter
-		} else {
-			request.Filters = map[string]any{"AND": []any{request.Filters, groupFilter}}
-		}
-	}
+	request = scopeAnswerRequest(request)
 	return c.doJSON(ctx, http.MethodPost, memoryPath(memoryID)+"/answer", request)
+}
+
+func (c *Client) AnswerStream(
+	ctx context.Context,
+	memoryID string,
+	request service.MemoryAnswerRequest,
+) (service.MemoryAnswerStream, error) {
+	if c.baseURL == "" {
+		return service.MemoryAnswerStream{}, fmt.Errorf("Memograph is not configured")
+	}
+	request = scopeAnswerRequest(request)
+	request.Stream = true
+	body, err := json.Marshal(request)
+	if err != nil {
+		return service.MemoryAnswerStream{}, fmt.Errorf("encode Memograph stream request: %w", err)
+	}
+	upstream, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+memoryPath(memoryID)+"/answer",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return service.MemoryAnswerStream{}, fmt.Errorf("create Memograph stream request: %w", err)
+	}
+	upstream.Header.Set("Accept", "text/event-stream")
+	upstream.Header.Set("Content-Type", "application/json")
+	if err := c.authorize(upstream); err != nil {
+		return service.MemoryAnswerStream{}, err
+	}
+	result, err := c.http.Do(upstream)
+	if err != nil {
+		return service.MemoryAnswerStream{}, fmt.Errorf("call Memograph stream: %w", err)
+	}
+	if result.StatusCode < 200 || result.StatusCode >= 300 {
+		defer result.Body.Close()
+		responseBody, readErr := io.ReadAll(io.LimitReader(result.Body, 1000))
+		if readErr != nil {
+			return service.MemoryAnswerStream{}, fmt.Errorf(
+				"Memograph returned %d and its response could not be read",
+				result.StatusCode,
+			)
+		}
+		return service.MemoryAnswerStream{}, fmt.Errorf(
+			"Memograph returned %d: %s",
+			result.StatusCode,
+			strings.TrimSpace(string(responseBody)),
+		)
+	}
+	contentType := result.Header.Get("Content-Type")
+	if !strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") {
+		defer result.Body.Close()
+		return service.MemoryAnswerStream{}, fmt.Errorf(
+			"Memograph returned unexpected stream content type %q",
+			contentType,
+		)
+	}
+	return service.MemoryAnswerStream{Body: result.Body, ContentType: contentType}, nil
 }
 
 func (c *Client) GetGraph(ctx context.Context, memoryID, groupID string) (json.RawMessage, error) {
@@ -144,6 +192,21 @@ func (c *Client) authorize(request *http.Request) error {
 
 func memoryPath(memoryID string) string {
 	return "/api/v1/memory/" + url.PathEscape(memoryID)
+}
+
+func scopeAnswerRequest(request service.MemoryAnswerRequest) service.MemoryAnswerRequest {
+	// The currently deployed Memograph answer handler accepts filters but not a
+	// dedicated group_id field. Keep group_id in the payload for forward
+	// compatibility and also enforce it through the graph-search filter.
+	if request.GroupID != "" {
+		groupFilter := map[string]any{"group_id": map[string]any{"eq": request.GroupID}}
+		if len(request.Filters) == 0 {
+			request.Filters = groupFilter
+		} else {
+			request.Filters = map[string]any{"AND": []any{request.Filters, groupFilter}}
+		}
+	}
+	return request
 }
 
 var _ service.MemographClient = (*Client)(nil)

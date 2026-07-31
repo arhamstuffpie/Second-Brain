@@ -88,6 +88,7 @@ type MemographClient interface {
 	InsertEpisode(ctx context.Context, memoryID string, request EpisodeInsertRequest) (json.RawMessage, error)
 	Search(ctx context.Context, memoryID string, request MemorySearchRequest) (json.RawMessage, error)
 	Answer(ctx context.Context, memoryID string, request MemoryAnswerRequest) (json.RawMessage, error)
+	AnswerStream(ctx context.Context, memoryID string, request MemoryAnswerRequest) (MemoryAnswerStream, error)
 	GetGraph(ctx context.Context, memoryID, groupID string) (json.RawMessage, error)
 }
 
@@ -101,6 +102,7 @@ type VoiceService interface {
 	CreateMemory(ctx context.Context, projectID string, request MemoryCreateRequest) (json.RawMessage, error)
 	Search(ctx context.Context, memoryID string, request MemorySearchRequest) (json.RawMessage, error)
 	Answer(ctx context.Context, memoryID string, request MemoryAnswerRequest) (json.RawMessage, error)
+	AnswerStream(ctx context.Context, memoryID string, request MemoryAnswerRequest) (MemoryAnswerStream, error)
 	GetGraph(ctx context.Context, memoryID, groupID string) (json.RawMessage, error)
 	ProcessNextJob(ctx context.Context) (bool, error)
 }
@@ -365,8 +367,14 @@ type ChatMessage struct {
 type MemoryAnswerRequest struct {
 	Query    string         `json:"query,omitempty"`
 	Messages []ChatMessage  `json:"messages,omitempty"`
+	Stream   bool           `json:"stream,omitempty"`
 	Limit    int            `json:"limit,omitempty"`
 	Model    string         `json:"model,omitempty"`
 	GroupID  string         `json:"group_id,omitempty"`
 	Filters  map[string]any `json:"filters,omitempty"`
+}
+
+type MemoryAnswerStream struct {
+	Body        io.ReadCloser
+	ContentType string
 }
