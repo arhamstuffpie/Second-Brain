@@ -1,7 +1,15 @@
-import { type PropsWithChildren, type ReactNode, useEffect, useRef, useState } from 'react';
+import {
+  type PropsWithChildren,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   ActivityIndicator,
   Animated,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,6 +25,8 @@ import { Fonts, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useKeyboardHeight } from '@/hooks/use-keyboard-height';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useTheme } from '@/hooks/use-theme';
+
+const CHOICE_ROW_INSET = 3;
 
 export function BrandMark({ compact = false }: { compact?: boolean }) {
   const theme = useTheme();
@@ -289,16 +299,179 @@ export function Field({
   );
 }
 
+type ChoiceRowProps<T extends string | number> = {
+  options: Array<{ label: string; value: T }>;
+  value: T;
+  onChange: (value: T) => void;
+  slidable?: boolean;
+};
+
+function SlidingChoiceRow<T extends string | number>({
+  options,
+  value,
+  onChange,
+}: ChoiceRowProps<T>) {
+  const theme = useTheme();
+  const reducedMotion = useReducedMotion();
+  const [rowWidth, setRowWidth] = useState(0);
+  const pillX = useRef(new Animated.Value(0)).current;
+  const dragStart = useRef(0);
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
+  const slotWidth =
+    rowWidth > 0 && options.length > 0
+      ? (rowWidth - CHOICE_ROW_INSET * 2) / options.length
+      : 0;
+  const metrics = useRef({ count: options.length, selectedIndex, slotWidth });
+  const optionsRef = useRef(options);
+  const onChangeRef = useRef(onChange);
+  metrics.current = { count: options.length, selectedIndex, slotWidth };
+  optionsRef.current = options;
+  onChangeRef.current = onChange;
+
+  const snapPill = useCallback(
+    (index: number, velocity = 0) => {
+      const width = metrics.current.slotWidth;
+      if (!width) return;
+      const target = index * width;
+      pillX.stopAnimation();
+      if (reducedMotion) {
+        pillX.setValue(target);
+        return;
+      }
+      Animated.spring(pillX, {
+        toValue: target,
+        velocity,
+        stiffness: 320,
+        damping: 29,
+        mass: 0.68,
+        useNativeDriver: true,
+      }).start();
+    },
+    [pillX, reducedMotion],
+  );
+  const snapPillRef = useRef(snapPill);
+  snapPillRef.current = snapPill;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gesture) =>
+        metrics.current.slotWidth > 0 &&
+        Math.abs(gesture.dx) > 5 &&
+        Math.abs(gesture.dx) > Math.abs(gesture.dy),
+      onMoveShouldSetPanResponderCapture: (_, gesture) =>
+        metrics.current.slotWidth > 0 &&
+        Math.abs(gesture.dx) > 5 &&
+        Math.abs(gesture.dx) > Math.abs(gesture.dy),
+      onPanResponderGrant: () => {
+        const current = metrics.current;
+        dragStart.current = current.selectedIndex * current.slotWidth;
+        pillX.stopAnimation((position) => {
+          dragStart.current = position;
+        });
+      },
+      onPanResponderMove: (_, gesture) => {
+        const current = metrics.current;
+        const maximum = current.slotWidth * (current.count - 1);
+        pillX.setValue(Math.max(0, Math.min(maximum, dragStart.current + gesture.dx)));
+      },
+      onPanResponderRelease: (_, gesture) => {
+        const current = metrics.current;
+        const projected =
+          dragStart.current + gesture.dx + gesture.vx * current.slotWidth * 0.12;
+        const nextIndex = Math.max(
+          0,
+          Math.min(current.count - 1, Math.round(projected / current.slotWidth)),
+        );
+        const nextOption = optionsRef.current[nextIndex];
+        if (nextIndex === current.selectedIndex || !nextOption) {
+          snapPillRef.current(current.selectedIndex, gesture.vx);
+          return;
+        }
+        onChangeRef.current(nextOption.value);
+      },
+      onPanResponderTerminate: () => {
+        snapPillRef.current(metrics.current.selectedIndex);
+      },
+      onPanResponderTerminationRequest: () => true,
+      onShouldBlockNativeResponder: () => true,
+    }),
+  ).current;
+
+  useEffect(() => {
+    if (!slotWidth) return;
+    snapPill(selectedIndex);
+  }, [selectedIndex, slotWidth, snapPill]);
+
+  return (
+    <View
+      {...panResponder.panHandlers}
+      onLayout={(event) => setRowWidth(event.nativeEvent.layout.width)}
+      style={[
+        styles.choiceRow,
+        styles.choiceRowSliding,
+        { backgroundColor: theme.backgroundElement },
+      ]}>
+      {slotWidth > 0 ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.choiceSlidingPill,
+            {
+              width: slotWidth,
+              backgroundColor: theme.surfaceRaised,
+              borderColor: theme.accentSoft,
+              shadowColor: theme.accent,
+              transform: [{ translateX: pillX }],
+            },
+          ]}>
+          <View style={[styles.choiceSlidingTint, { backgroundColor: theme.accentSoft }]} />
+        </Animated.View>
+      ) : null}
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <Pressable
+            key={String(option.value)}
+            accessibilityRole="button"
+            accessibilityHint="Double tap to select, or swipe across the control to change."
+            accessibilityState={{ selected }}
+            onPress={() => onChange(option.value)}
+            style={({ pressed }) => [
+              styles.choice,
+              styles.choiceSliding,
+              pressed && styles.pressed,
+            ]}>
+            <Text
+              numberOfLines={2}
+              maxFontSizeMultiplier={1.2}
+              style={[
+                styles.choiceText,
+                styles.choiceTextSliding,
+                { color: selected ? theme.text : theme.textSecondary },
+              ]}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 export function ChoiceRow<T extends string | number>({
   options,
   value,
   onChange,
-}: {
-  options: Array<{ label: string; value: T }>;
-  value: T;
-  onChange: (value: T) => void;
-}) {
+  slidable = false,
+}: ChoiceRowProps<T>) {
   const theme = useTheme();
+  if (slidable) {
+    return <SlidingChoiceRow options={options} value={value} onChange={onChange} />;
+  }
   return (
     <View style={[styles.choiceRow, { backgroundColor: theme.backgroundElement }]}>
       {options.map((option) => {
@@ -460,6 +633,28 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     padding: 3,
   },
+  choiceRowSliding: {
+    minHeight: 56,
+    flexWrap: 'nowrap',
+    gap: 0,
+  },
+  choiceSlidingPill: {
+    position: 'absolute',
+    left: CHOICE_ROW_INSET,
+    top: CHOICE_ROW_INSET,
+    bottom: CHOICE_ROW_INSET,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    overflow: 'hidden',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 7,
+    elevation: 3,
+  },
+  choiceSlidingTint: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.2,
+  },
   choice: {
     minWidth: 84,
     minHeight: 40,
@@ -470,7 +665,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  choiceSliding: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 50,
+    paddingHorizontal: 6,
+    zIndex: 1,
+  },
   choiceText: { fontSize: 13, fontWeight: '700', textAlign: 'center' },
+  choiceTextSliding: { fontSize: 12, lineHeight: 16 },
   pill: {
     alignSelf: 'flex-start',
     flexDirection: 'row',

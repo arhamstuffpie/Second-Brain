@@ -14,7 +14,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button, ErrorNotice, PageHeader, StatusPill } from '@/components/ui';
 import { Fonts, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
-import { useKeyboardHeight } from '@/hooks/use-keyboard-height';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useTheme } from '@/hooks/use-theme';
 import { ApiError } from '@/lib/api-client';
@@ -29,12 +28,104 @@ const STARTERS = [
   'What people, places, and tasks appear most often?',
 ];
 
+const THINKING_WORDS = ['Thinking', 'through', 'your', 'memory…'];
+
+type StreamBuffer = {
+  messageId: string;
+  pending: string;
+  timer?: ReturnType<typeof setTimeout>;
+  waiters: Array<() => void>;
+};
+
+function settleStreamWaiters(buffer: StreamBuffer) {
+  const waiters = buffer.waiters.splice(0);
+  waiters.forEach((resolve) => resolve());
+}
+
+function StreamingCursor() {
+  const theme = useTheme();
+  const reducedMotion = useReducedMotion();
+  const opacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (reducedMotion) {
+      opacity.setValue(1);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 0.28, duration: 430, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration: 430, useNativeDriver: true }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [opacity, reducedMotion]);
+
+  return (
+    <Animated.Text style={[styles.streamingCursor, { color: theme.accent, opacity }]}> ▍</Animated.Text>
+  );
+}
+
+function ThinkingTextShimmer() {
+  const theme = useTheme();
+  const reducedMotion = useReducedMotion();
+  const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    progress.setValue(0);
+    if (reducedMotion) return;
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(progress, { toValue: 1, duration: 1050, useNativeDriver: true }),
+        Animated.delay(180),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [progress, reducedMotion]);
+
+  return (
+    <View
+      accessible
+      accessibilityLabel="Thinking through your memory"
+      accessibilityLiveRegion="polite"
+      style={styles.thinkingTextShimmer}>
+      {THINKING_WORDS.map((word, index) => {
+        const start = 0.02 + index * 0.13;
+        const peak = start + 0.16;
+        const end = start + 0.34;
+        const opacity = reducedMotion
+          ? 1
+          : progress.interpolate({
+              inputRange: [0, start, peak, end, 1],
+              outputRange: [0.42, 0.42, 1, 0.42, 0.42],
+              extrapolate: 'clamp',
+            });
+        return (
+          <Animated.Text
+            key={word}
+            style={[
+              styles.messageText,
+              styles.thinkingWord,
+              index === THINKING_WORDS.length - 1 && styles.thinkingLastWord,
+              { color: theme.textSecondary, opacity },
+            ]}>
+            {word}
+          </Animated.Text>
+        );
+      })}
+    </View>
+  );
+}
+
 function ChatTile({ message }: { message: ChatMessage }) {
   const theme = useTheme();
   const reducedMotion = useReducedMotion();
   const opacity = useRef(new Animated.Value(0)).current;
   const offset = useRef(new Animated.Value(8)).current;
   const user = message.role === 'user';
+  const thinking = !user && message.status === 'streaming' && !message.content;
 
   useEffect(() => {
     if (reducedMotion) {
@@ -64,14 +155,19 @@ function ChatTile({ message }: { message: ChatMessage }) {
             borderColor: user ? theme.accent : theme.border,
           },
         ]}>
-        <Text
-          selectable
-          style={[
-            styles.messageText,
-            { color: user ? '#FFFFFF' : message.status === 'error' ? theme.danger : theme.text },
-        ]}>
-          {message.content || (message.status === 'streaming' ? 'Thinking through your memory…' : '')}
-        </Text>
+        {thinking ? (
+          <ThinkingTextShimmer />
+        ) : (
+          <Text
+            selectable
+            style={[
+              styles.messageText,
+              { color: user ? '#FFFFFF' : message.status === 'error' ? theme.danger : theme.text },
+            ]}>
+            {message.content}
+            {message.status === 'streaming' ? <StreamingCursor /> : null}
+          </Text>
+        )}
       </View>
       <View style={styles.messageMeta}>
         {message.status === 'streaming' ? (
@@ -98,7 +194,7 @@ function ChatTile({ message }: { message: ChatMessage }) {
 
 export function ChatScreen() {
   const theme = useTheme();
-  const keyboardHeight = useKeyboardHeight();
+  const reducedMotion = useReducedMotion();
   const { api, auth, network, settings, showError } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -110,6 +206,12 @@ export function ChatScreen() {
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const historyContextRef = useRef<{ userId: string; memoryId: string } | null>(null);
+  const streamBufferRef = useRef<StreamBuffer>({
+    messageId: '',
+    pending: '',
+    waiters: [],
+  });
+  const drainStreamRef = useRef<() => void>(() => undefined);
   const configuredMemoryId = settings.memoryId.trim();
   const userId = auth?.user.id ?? '';
   const historyIdentity = userId && configuredMemoryId ? `${userId}:${configuredMemoryId}` : '';
@@ -118,6 +220,18 @@ export function ChatScreen() {
   useEffect(
     () => () => {
       abortRef.current?.abort();
+      const buffer = streamBufferRef.current;
+      if (buffer.timer) clearTimeout(buffer.timer);
+      if (buffer.messageId && buffer.pending) {
+        messagesRef.current = messagesRef.current.map((message) =>
+          message.id === buffer.messageId
+            ? { ...message, content: message.content + buffer.pending }
+            : message,
+        );
+      }
+      buffer.pending = '';
+      buffer.timer = undefined;
+      settleStreamWaiters(buffer);
       const history = historyContextRef.current;
       if (history) {
         void saveChatHistory(history.userId, history.memoryId, messagesRef.current);
@@ -190,6 +304,81 @@ export function ChatScreen() {
     );
   }, [commitMessages]);
 
+  const drainStreamBuffer = useCallback(() => {
+    const buffer = streamBufferRef.current;
+    buffer.timer = undefined;
+    if (!buffer.messageId || !buffer.pending) {
+      settleStreamWaiters(buffer);
+      return;
+    }
+
+    const characters = Array.from(buffer.pending);
+    const revealCount = Math.max(1, Math.min(14, Math.ceil(characters.length / 10)));
+    const revealed = characters.slice(0, revealCount).join('');
+    buffer.pending = characters.slice(revealCount).join('');
+    appendToken(buffer.messageId, revealed);
+
+    if (buffer.pending) {
+      buffer.timer = setTimeout(() => drainStreamRef.current(), 28);
+    } else {
+      settleStreamWaiters(buffer);
+    }
+  }, [appendToken]);
+  drainStreamRef.current = drainStreamBuffer;
+
+  const enqueueStreamToken = useCallback(
+    (id: string, token: string) => {
+      if (reducedMotion) {
+        appendToken(id, token);
+        return;
+      }
+      const buffer = streamBufferRef.current;
+      if (buffer.messageId !== id) {
+        if (buffer.timer) clearTimeout(buffer.timer);
+        settleStreamWaiters(buffer);
+        buffer.messageId = id;
+        buffer.pending = '';
+        buffer.timer = undefined;
+      }
+      buffer.pending += token;
+      if (!buffer.timer) {
+        buffer.timer = setTimeout(() => drainStreamRef.current(), 16);
+      }
+    },
+    [appendToken, reducedMotion],
+  );
+
+  const flushStreamBuffer = useCallback(
+    (id: string) => {
+      const buffer = streamBufferRef.current;
+      if (buffer.messageId !== id) return;
+      if (buffer.timer) clearTimeout(buffer.timer);
+      buffer.timer = undefined;
+      const pending = buffer.pending;
+      buffer.pending = '';
+      if (pending) appendToken(id, pending);
+      settleStreamWaiters(buffer);
+    },
+    [appendToken],
+  );
+
+  function beginStreamBuffer(id: string) {
+    const buffer = streamBufferRef.current;
+    if (buffer.timer) clearTimeout(buffer.timer);
+    settleStreamWaiters(buffer);
+    buffer.messageId = id;
+    buffer.pending = '';
+    buffer.timer = undefined;
+  }
+
+  function waitForStreamBuffer(id: string) {
+    const buffer = streamBufferRef.current;
+    if (reducedMotion || buffer.messageId !== id || (!buffer.pending && !buffer.timer)) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => buffer.waiters.push(resolve));
+  }
+
   async function sendMessage(value = input) {
     const query = value.trim();
     const memoryId = configuredMemoryId;
@@ -226,6 +415,7 @@ export function ChatScreen() {
       status: 'streaming',
     };
     commitMessages((current) => [...current, userMessage, assistantMessage]);
+    beginStreamBuffer(assistantId);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -242,10 +432,9 @@ export function ChatScreen() {
           onMeta: (meta) => setMemoryName(meta.memory_name || ''),
           onToken: (token) => {
             receivedToken = true;
-            appendToken(assistantId, token);
+            enqueueStreamToken(assistantId, token);
           },
           onUsage: (usage) => updateMessage(assistantId, { usage }),
-          onDone: () => updateMessage(assistantId, { status: 'complete' }),
         },
         controller.signal,
       );
@@ -256,8 +445,13 @@ export function ChatScreen() {
           'MEMOGRAPH_ERROR',
         );
       }
+      await waitForStreamBuffer(assistantId);
+      if (controller.signal.aborted) {
+        throw new ApiError('The response was stopped.', 0, 'REQUEST_CANCELLED');
+      }
       updateMessage(assistantId, { status: 'complete' });
     } catch (error) {
+      flushStreamBuffer(assistantId);
       if (error instanceof ApiError && error.code === 'REQUEST_CANCELLED') {
         commitMessages((current) =>
           current.map((message) =>
@@ -287,6 +481,9 @@ export function ChatScreen() {
         );
       }
     } finally {
+      if (streamBufferRef.current.messageId === assistantId) {
+        streamBufferRef.current.messageId = '';
+      }
       if (abortRef.current === controller) abortRef.current = null;
       setStreaming(false);
     }
@@ -294,6 +491,8 @@ export function ChatScreen() {
 
   function stopResponse() {
     abortRef.current?.abort();
+    const activeMessageId = streamBufferRef.current.messageId;
+    if (activeMessageId) flushStreamBuffer(activeMessageId);
   }
 
   function clearChat() {
@@ -365,7 +564,7 @@ export function ChatScreen() {
           ]}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: !streaming })}
           ListEmptyComponent={
             <View style={styles.empty}>
               <View
@@ -412,7 +611,7 @@ export function ChatScreen() {
             {
               backgroundColor: theme.background,
               borderTopColor: theme.border,
-              paddingBottom: keyboardHeight > 0 ? keyboardHeight : Spacing.md,
+              paddingBottom: Spacing.md,
             },
           ]}>
           {inlineError ? (
@@ -513,6 +712,14 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 6,
   },
   streamingDot: { width: 6, height: 6, borderRadius: 3 },
+  streamingCursor: { fontSize: 14, fontWeight: '900' },
+  thinkingTextShimmer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignSelf: 'flex-start',
+  },
+  thinkingWord: { marginRight: Spacing.xs },
+  thinkingLastWord: { marginRight: 0 },
   messageText: { fontSize: 15, lineHeight: 22 },
   messageMeta: {
     flexDirection: 'row',

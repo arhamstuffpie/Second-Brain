@@ -228,6 +228,7 @@ export function SettingsScreen() {
         <SectionLabel>Capture quality</SectionLabel>
         <Body muted>Video quality</Body>
         <ChoiceRow
+          slidable
           value={draft.videoQuality}
           onChange={(value) => patch('videoQuality', value)}
           options={[
@@ -238,6 +239,7 @@ export function SettingsScreen() {
         />
         <Body muted>Upload chunk interval</Body>
         <ChoiceRow
+          slidable
           value={draft.chunkDurationSeconds}
           onChange={(value) => patch('chunkDurationSeconds', value)}
           options={[
@@ -248,6 +250,7 @@ export function SettingsScreen() {
         />
         <Body muted>Visual sampling interval</Body>
         <ChoiceRow
+          slidable
           value={draft.frameIntervalSeconds}
           onChange={(value) => patch('frameIntervalSeconds', value)}
           options={[
