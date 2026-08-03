@@ -26,6 +26,10 @@ type AuthService interface {
 }
 
 type VoiceRepository interface {
+	CreateEnrollmentSample(ctx context.Context, input CreateEnrollmentSampleInput) (VoiceEnrollmentRecord, error)
+	ListEnrollmentSamples(ctx context.Context, ownerUserID string) ([]VoiceEnrollmentRecord, error)
+	GetEnrollmentSample(ctx context.Context, id, ownerUserID string) (VoiceEnrollmentRecord, error)
+	DeleteEnrollmentSample(ctx context.Context, id, ownerUserID string) (VoiceEnrollmentRecord, error)
 	CreateRecording(ctx context.Context, input CreateRecordingInput, maxAttempts int) (VoiceRecording, error)
 	FindRecordingByChunk(ctx context.Context, ownerUserID, sessionID string, chunkIndex int) (VoiceRecording, bool, error)
 	GetRecording(ctx context.Context, id, ownerUserID string) (VoiceRecordingDetail, error)
@@ -33,7 +37,9 @@ type VoiceRepository interface {
 	GetRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVoiceSessionDetail, error)
 	StopRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVoiceSession, error)
 	ClaimJob(ctx context.Context) (VoiceJob, bool, error)
-	SaveTranscriptAndEpisodes(ctx context.Context, job VoiceJob, transcript Transcript, episodes []EpisodeDraft, provider, model string, maxAttempts int) error
+	SaveTranscriptAndQueueAssembly(ctx context.Context, job VoiceJob, transcript Transcript, referenceIDs []string, provider, model string, maxAttempts int) error
+	LoadAssembly(ctx context.Context, job VoiceJob) (VoiceAssemblySnapshot, error)
+	SaveAssembledEpisodes(ctx context.Context, job VoiceJob, snapshot VoiceAssemblySnapshot, episodes []EpisodeDraft, maxAttempts int) error
 	CompleteMemographEpisode(ctx context.Context, job VoiceJob, response json.RawMessage) error
 	RetryJob(ctx context.Context, job VoiceJob, cause string, runAt time.Time, dead bool) error
 }
@@ -42,6 +48,14 @@ type Transcriber interface {
 	Transcribe(ctx context.Context, input TranscriptionInput) (Transcript, error)
 	Provider() string
 	Model() string
+}
+
+type SpeakerAttributor interface {
+	Attribute(ctx context.Context, input SpeakerAttributionInput) (Transcript, error)
+}
+
+type AudioInspector interface {
+	Duration(ctx context.Context, path string) (float64, error)
 }
 
 type AudioStore interface {
@@ -93,6 +107,9 @@ type MemographClient interface {
 }
 
 type VoiceService interface {
+	EnrollVoice(ctx context.Context, input VoiceEnrollmentInput) (VoiceEnrollmentSample, error)
+	ListVoiceEnrollments(ctx context.Context, ownerUserID string) ([]VoiceEnrollmentSample, error)
+	DeleteVoiceEnrollment(ctx context.Context, id, ownerUserID string) error
 	Ingest(ctx context.Context, input VoiceIngestInput) (VoiceRecording, error)
 	GetRecording(ctx context.Context, id, ownerUserID string) (VoiceRecordingDetail, error)
 	StartRealtimeSession(ctx context.Context, input StartRealtimeSessionInput) (RealtimeVoiceSession, error)
@@ -164,6 +181,48 @@ type VoiceIngestInput struct {
 	IsFinal           bool
 	DefaultConfidence *float64
 	Content           io.Reader
+	BatchID           string
+	BatchClosed       bool
+}
+
+type VoiceEnrollmentInput struct {
+	OwnerUserID string
+	FileName    string
+	MediaType   string
+	Content     io.Reader
+}
+
+type CreateEnrollmentSampleInput struct {
+	OwnerUserID     string
+	ProviderLabel   string
+	FileName        string
+	FilePath        string
+	MediaType       string
+	SizeBytes       int64
+	DurationSeconds float64
+}
+
+type VoiceEnrollmentRecord struct {
+	ID              string
+	OwnerUserID     string
+	Slot            int
+	ProviderLabel   string
+	FileName        string
+	FilePath        string
+	MediaType       string
+	SizeBytes       int64
+	DurationSeconds float64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type VoiceEnrollmentSample struct {
+	ID              string    `json:"id"`
+	FileName        string    `json:"file_name"`
+	MediaType       string    `json:"media_type"`
+	SizeBytes       int64     `json:"size_bytes"`
+	DurationSeconds float64   `json:"duration_seconds"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type CreateRecordingInput struct {
@@ -181,6 +240,8 @@ type CreateRecordingInput struct {
 	ChunkIndex        *int
 	IsFinal           bool
 	DefaultConfidence *float64
+	BatchID           string
+	BatchClosed       bool
 }
 
 type VoiceRecording struct {
@@ -199,32 +260,44 @@ type VoiceRecording struct {
 
 type VoiceRecordingDetail struct {
 	VoiceRecording
-	DeviceID   string         `json:"device_id,omitempty"`
-	Location   string         `json:"location,omitempty"`
-	Transcript *Transcript    `json:"transcript,omitempty"`
-	Episodes   []VoiceEpisode `json:"episodes"`
-	LastError  string         `json:"last_error,omitempty"`
-	UpdatedAt  time.Time      `json:"updated_at"`
+	DeviceID            string         `json:"device_id,omitempty"`
+	Location            string         `json:"location,omitempty"`
+	BatchID             string         `json:"batch_id"`
+	STTProvider         string         `json:"stt_provider,omitempty"`
+	STTModel            string         `json:"stt_model,omitempty"`
+	SpeakerReferenceIDs []string       `json:"speaker_reference_ids"`
+	Transcript          *Transcript    `json:"transcript,omitempty"`
+	Episodes            []VoiceEpisode `json:"episodes"`
+	LastError           string         `json:"last_error,omitempty"`
+	UpdatedAt           time.Time      `json:"updated_at"`
 }
 
 type VoiceEpisode struct {
-	ID          string          `json:"id"`
-	BucketIndex int             `json:"bucket_index"`
-	StartTime   float64         `json:"start_time"`
-	EndTime     float64         `json:"end_time"`
-	Description string          `json:"description"`
-	Confidence  *float64        `json:"confidence,omitempty"`
-	Status      string          `json:"status"`
-	Response    json.RawMessage `json:"memograph_response,omitempty"`
-	LastError   string          `json:"last_error,omitempty"`
+	ID                    string           `json:"id"`
+	BucketIndex           int              `json:"bucket_index"`
+	StartTime             float64          `json:"start_time"`
+	EndTime               float64          `json:"end_time"`
+	Description           string           `json:"description"`
+	Confidence            *float64         `json:"confidence,omitempty"`
+	Status                string           `json:"status"`
+	Response              json.RawMessage  `json:"memograph_response,omitempty"`
+	LastError             string           `json:"last_error,omitempty"`
+	EpisodeIndex          int              `json:"episode_index"`
+	Segments              []EpisodeSegment `json:"segments"`
+	SourceRecordingIDs    []string         `json:"source_recording_ids"`
+	OwnerUtteranceCount   int              `json:"owner_utterance_count"`
+	OtherUtteranceCount   int              `json:"other_utterance_count"`
+	UnknownUtteranceCount int              `json:"unknown_utterance_count"`
 }
 
 type TranscriptSegment struct {
-	StartTime  float64  `json:"start_time"`
-	EndTime    float64  `json:"end_time"`
-	Speaker    string   `json:"speaker"`
-	Text       string   `json:"text"`
-	Confidence *float64 `json:"confidence,omitempty"`
+	ID          string   `json:"id,omitempty"`
+	StartTime   float64  `json:"start_time"`
+	EndTime     float64  `json:"end_time"`
+	Speaker     string   `json:"speaker"`
+	SpeakerRole string   `json:"speaker_role"`
+	Text        string   `json:"text"`
+	Confidence  *float64 `json:"confidence,omitempty"`
 }
 
 type Transcript struct {
@@ -237,39 +310,77 @@ type Transcript struct {
 }
 
 type TranscriptionInput struct {
-	FileName  string
-	MediaType string
-	Audio     io.Reader
+	FileName      string
+	MediaType     string
+	Audio         io.Reader
+	KnownSpeakers []KnownSpeakerReference
 }
 
-type EpisodeDraft struct {
-	BucketIndex int      `json:"bucket_index"`
+type KnownSpeakerReference struct {
+	ID            string
+	ProviderLabel string
+	MediaType     string
+	Audio         []byte
+}
+
+type SpeakerAttributionInput struct {
+	Transcript Transcript
+	References []KnownSpeakerReference
+}
+
+type EpisodeSegment struct {
+	ID          string   `json:"id,omitempty"`
+	RecordingID string   `json:"recording_id"`
 	StartTime   float64  `json:"start_time"`
 	EndTime     float64  `json:"end_time"`
-	Description string   `json:"description"`
+	Speaker     string   `json:"speaker"`
+	SpeakerRole string   `json:"speaker_role"`
+	Text        string   `json:"text"`
 	Confidence  *float64 `json:"confidence,omitempty"`
 }
 
+type EpisodeDraft struct {
+	BucketIndex           int              `json:"bucket_index"`
+	EpisodeIndex          int              `json:"episode_index"`
+	StartTime             float64          `json:"start_time"`
+	EndTime               float64          `json:"end_time"`
+	Description           string           `json:"description"`
+	Confidence            *float64         `json:"confidence,omitempty"`
+	Segments              []EpisodeSegment `json:"segments"`
+	SourceRecordingIDs    []string         `json:"source_recording_ids"`
+	OwnerUtteranceCount   int              `json:"owner_utterance_count"`
+	OtherUtteranceCount   int              `json:"other_utterance_count"`
+	UnknownUtteranceCount int              `json:"unknown_utterance_count"`
+}
+
 type VoiceJob struct {
-	ID           int64
-	Kind         string
-	RecordingID  string
-	EpisodeID    string
-	Attempts     int
-	MaxAttempts  int
-	FilePath     string
-	FileName     string
-	MediaType    string
-	SessionID    string
-	GroupID      string
-	MemoryID     string
-	DeviceID     string
-	Location     string
-	StartOffset  float64
-	Description  string
-	EpisodeStart float64
-	EpisodeEnd   float64
-	Confidence   *float64
+	ID                    int64
+	Kind                  string
+	RecordingID           string
+	EpisodeID             string
+	Attempts              int
+	MaxAttempts           int
+	FilePath              string
+	FileName              string
+	MediaType             string
+	SessionID             string
+	GroupID               string
+	MemoryID              string
+	DeviceID              string
+	Location              string
+	StartOffset           float64
+	Description           string
+	EpisodeStart          float64
+	EpisodeEnd            float64
+	Confidence            *float64
+	BatchID               string
+	OwnerUserID           string
+	BatchClosed           bool
+	EpisodeSegments       []EpisodeSegment
+	SourceRecordingIDs    []string
+	OwnerUtteranceCount   int
+	OtherUtteranceCount   int
+	UnknownUtteranceCount int
 }
 
 type StartRealtimeSessionInput struct {
@@ -303,6 +414,7 @@ type RealtimeVoiceSession struct {
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 	StoppedAt            *time.Time `json:"stopped_at,omitempty"`
+	BatchID              string     `json:"-"`
 }
 
 type RealtimeSessionProgress struct {
@@ -318,6 +430,30 @@ type RealtimeVoiceSessionDetail struct {
 	RealtimeVoiceSession
 	Progress RealtimeSessionProgress `json:"progress"`
 	Chunks   []VoiceRecording        `json:"chunks"`
+	Episodes []VoiceEpisode          `json:"episodes"`
+}
+
+type AssemblyRecording struct {
+	ID          string
+	StartOffset float64
+	ChunkIndex  *int
+	Status      string
+	Transcript  Transcript
+}
+
+type VoiceAssemblySnapshot struct {
+	BatchID            string
+	OwnerUserID        string
+	SessionID          string
+	GroupID            string
+	MemoryID           string
+	Location           string
+	DeviceID           string
+	Closed             bool
+	AllSTTTerminal     bool
+	TranscriptRevision int64
+	Watermark          float64
+	Recordings         []AssemblyRecording
 }
 
 type GraphConfig struct {

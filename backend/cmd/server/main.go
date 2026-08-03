@@ -75,6 +75,18 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct audio store: %w", err)
 	}
+	enrollmentStore, err := audio.NewLocalStore(
+		cfg.Voice.EnrollmentStorageDir, cfg.Voice.EnrollmentMaxUploadBytes,
+	)
+	if err != nil {
+		return fmt.Errorf("construct voice enrollment store: %w", err)
+	}
+	audioInspector, err := audio.NewFFprobeInspector(
+		cfg.Voice.FFprobePath, cfg.Voice.InspectionTimeout,
+	)
+	if err != nil {
+		return fmt.Errorf("construct voice audio inspector: %w", err)
+	}
 	videoStore, err := audio.NewLocalStore(cfg.Video.StorageDir, cfg.Video.MaxUploadBytes)
 	if err != nil {
 		return fmt.Errorf("construct video store: %w", err)
@@ -111,20 +123,23 @@ func run() error {
 		Msg("media analysis providers configured")
 	memographClient := memograph.NewClient(cfg.Memograph)
 	services, err := service.NewContainer(service.Dependencies{
-		HealthRepository: repositories.Health,
-		UserRepository:   repositories.User,
-		VoiceRepository:  repositories.Voice,
-		VideoRepository:  repositories.Video,
-		Transcriber:      transcriber,
-		AudioStore:       audioStore,
-		VideoStore:       videoStore,
-		MediaExtractor:   mediaExtractor,
-		VisualAnalyzer:   visualAnalyzer,
-		Memograph:        memographClient,
-		VoiceConfig:      cfg.Voice,
-		VideoConfig:      cfg.Video,
-		WorkerConfig:     cfg.Worker,
-		JWT:              cfg.JWT,
+		HealthRepository:  repositories.Health,
+		UserRepository:    repositories.User,
+		VoiceRepository:   repositories.Voice,
+		VideoRepository:   repositories.Video,
+		Transcriber:       transcriber,
+		SpeakerAttributor: stt.NewReferenceAttributor(),
+		AudioStore:        audioStore,
+		EnrollmentStore:   enrollmentStore,
+		AudioInspector:    audioInspector,
+		VideoStore:        videoStore,
+		MediaExtractor:    mediaExtractor,
+		VisualAnalyzer:    visualAnalyzer,
+		Memograph:         memographClient,
+		VoiceConfig:       cfg.Voice,
+		VideoConfig:       cfg.Video,
+		WorkerConfig:      cfg.Worker,
+		JWT:               cfg.JWT,
 	})
 	if err != nil {
 		return fmt.Errorf("construct services: %w", err)

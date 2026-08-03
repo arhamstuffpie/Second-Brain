@@ -26,6 +26,14 @@ func (stubAuthService) Login(context.Context, string, string) (service.AuthResul
 
 type stubVoiceService struct{}
 
+func (stubVoiceService) EnrollVoice(context.Context, service.VoiceEnrollmentInput) (service.VoiceEnrollmentSample, error) {
+	return service.VoiceEnrollmentSample{}, nil
+}
+func (stubVoiceService) ListVoiceEnrollments(context.Context, string) ([]service.VoiceEnrollmentSample, error) {
+	return nil, nil
+}
+func (stubVoiceService) DeleteVoiceEnrollment(context.Context, string, string) error { return nil }
+
 func (stubVoiceService) Ingest(context.Context, service.VoiceIngestInput) (service.VoiceRecording, error) {
 	return service.VoiceRecording{}, nil
 }

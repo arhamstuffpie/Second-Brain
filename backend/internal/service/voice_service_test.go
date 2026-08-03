@@ -41,6 +41,77 @@ func TestBuildAudioEpisodesBucketsSegmentsAndAppliesOffset(t *testing.T) {
 	}
 }
 
+func TestBuildConversationEpisodesBuffersActiveTailAndSeparatesAttribution(t *testing.T) {
+	chunkZero, chunkOne := 0, 1
+	snapshot := VoiceAssemblySnapshot{
+		SessionID: "session-1", Location: "office", Watermark: 60,
+		Recordings: []AssemblyRecording{
+			{ID: "recording-0", ChunkIndex: &chunkZero, Transcript: Transcript{
+				Duration: 30, Segments: []TranscriptSegment{{
+					StartTime: 2, EndTime: 5, Speaker: "owner_ref",
+					SpeakerRole: "owner", Text: "I prefer tea.",
+				}},
+			}},
+			{ID: "recording-1", StartOffset: 30, ChunkIndex: &chunkOne, Transcript: Transcript{
+				Duration: 5, Segments: []TranscriptSegment{{
+					StartTime: 2, EndTime: 4, Speaker: "A",
+					SpeakerRole: "other", Text: "I prefer coffee.",
+				}},
+			}},
+		},
+	}
+	episodes := BuildConversationEpisodes(snapshot, 8*time.Second, 2*time.Minute)
+	if len(episodes) != 1 {
+		t.Fatalf("len(episodes) = %d, want 1 finalized episode", len(episodes))
+	}
+	if episodes[0].OwnerUtteranceCount != 1 || episodes[0].OtherUtteranceCount != 0 {
+		t.Fatalf("attribution counts = %+v", episodes[0])
+	}
+	if !strings.Contains(episodes[0].Description, "Owner-attributed utterances") ||
+		strings.Contains(episodes[0].Description, "I prefer coffee") {
+		t.Fatalf("description = %q", episodes[0].Description)
+	}
+
+	snapshot.Closed = true
+	snapshot.AllSTTTerminal = true
+	episodes = BuildConversationEpisodes(snapshot, 8*time.Second, 2*time.Minute)
+	if len(episodes) != 2 {
+		t.Fatalf("closed len(episodes) = %d, want 2", len(episodes))
+	}
+	if episodes[1].OwnerUtteranceCount != 0 || episodes[1].OtherUtteranceCount != 1 ||
+		!strings.Contains(episodes[1].Description, "must not be treated as owner statements") {
+		t.Fatalf("non-owner episode = %+v", episodes[1])
+	}
+}
+
+func TestBuildConversationEpisodesCombinesAcrossChunkBoundary(t *testing.T) {
+	chunkZero, chunkOne := 0, 1
+	snapshot := VoiceAssemblySnapshot{
+		SessionID: "session-1", Closed: true, AllSTTTerminal: true,
+		Recordings: []AssemblyRecording{
+			{ID: "recording-0", ChunkIndex: &chunkZero, Transcript: Transcript{
+				Duration: 30, Segments: []TranscriptSegment{{
+					StartTime: 28, EndTime: 29.5, Speaker: "owner_ref",
+					SpeakerRole: "owner", Text: "Let's ship it.",
+				}},
+			}},
+			{ID: "recording-1", StartOffset: 30, ChunkIndex: &chunkOne, Transcript: Transcript{
+				Duration: 30, Segments: []TranscriptSegment{{
+					StartTime: 1, EndTime: 3, Speaker: "A",
+					SpeakerRole: "other", Text: "Agreed.",
+				}},
+			}},
+		},
+	}
+	episodes := BuildConversationEpisodes(snapshot, 8*time.Second, 2*time.Minute)
+	if len(episodes) != 1 || len(episodes[0].SourceRecordingIDs) != 2 {
+		t.Fatalf("episodes = %+v", episodes)
+	}
+	if episodes[0].StartTime != 28 || episodes[0].EndTime != 33 {
+		t.Fatalf("episode times = %.1f..%.1f", episodes[0].StartTime, episodes[0].EndTime)
+	}
+}
+
 func TestValidateGraphConfigModes(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -106,7 +177,8 @@ func (r *realtimeTestRepository) StopRealtimeSession(context.Context, string, st
 }
 
 type realtimeTestStore struct {
-	saveCalls int
+	saveCalls   int
+	deleteCalls int
 }
 
 func (s *realtimeTestStore) Save(context.Context, string, io.Reader) (StoredAudio, error) {
@@ -116,7 +188,87 @@ func (s *realtimeTestStore) Save(context.Context, string, io.Reader) (StoredAudi
 func (*realtimeTestStore) Open(context.Context, string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }
-func (*realtimeTestStore) Delete(context.Context, string) error { return nil }
+func (s *realtimeTestStore) Delete(context.Context, string) error {
+	s.deleteCalls++
+	return nil
+}
+
+type enrollmentTestRepository struct {
+	stubVoiceRepository
+	created   CreateEnrollmentSampleInput
+	createErr error
+}
+
+func (r *enrollmentTestRepository) CreateEnrollmentSample(
+	_ context.Context,
+	input CreateEnrollmentSampleInput,
+) (VoiceEnrollmentRecord, error) {
+	r.created = input
+	if r.createErr != nil {
+		return VoiceEnrollmentRecord{}, r.createErr
+	}
+	return VoiceEnrollmentRecord{
+		ID: "sample-1", FileName: input.FileName, MediaType: input.MediaType,
+		SizeBytes: input.SizeBytes, DurationSeconds: input.DurationSeconds,
+		CreatedAt: time.Unix(1, 0).UTC(), FilePath: input.FilePath,
+	}, nil
+}
+
+type enrollmentInspector struct{ duration float64 }
+
+func (i enrollmentInspector) Duration(context.Context, string) (float64, error) {
+	return i.duration, nil
+}
+
+func TestEnrollVoiceValidatesDurationAndPersistsOpaqueReference(t *testing.T) {
+	repository := &enrollmentTestRepository{}
+	store := &realtimeTestStore{}
+	voice := newVoiceService(
+		repository, stubTranscriber{}, stubSpeakerAttributor{}, store, store,
+		enrollmentInspector{duration: 5}, stubMemographClient{},
+		config.VoiceConfig{
+			EnrollmentMinDuration: 2 * time.Second,
+			EnrollmentMaxDuration: 10 * time.Second,
+		},
+		config.WorkerConfig{MaxAttempts: 5},
+	)
+	result, err := voice.EnrollVoice(context.Background(), VoiceEnrollmentInput{
+		OwnerUserID: "owner-1", FileName: "owner.wav",
+		MediaType: "application/octet-stream", Content: strings.NewReader("audio"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "sample-1" || repository.created.DurationSeconds != 5 ||
+		repository.created.MediaType != "audio/wav" ||
+		!strings.HasPrefix(repository.created.ProviderLabel, "owner_") {
+		t.Fatalf("result/input = %+v / %+v", result, repository.created)
+	}
+	if store.deleteCalls != 0 {
+		t.Fatalf("valid sample was deleted %d times", store.deleteCalls)
+	}
+}
+
+func TestEnrollVoiceDeletesRejectedSample(t *testing.T) {
+	repository := &enrollmentTestRepository{}
+	store := &realtimeTestStore{}
+	voice := newVoiceService(
+		repository, stubTranscriber{}, stubSpeakerAttributor{}, store, store,
+		enrollmentInspector{duration: 1}, stubMemographClient{},
+		config.VoiceConfig{
+			EnrollmentMinDuration: 2 * time.Second,
+			EnrollmentMaxDuration: 10 * time.Second,
+		},
+		config.WorkerConfig{MaxAttempts: 5},
+	)
+	_, err := voice.EnrollVoice(context.Background(), VoiceEnrollmentInput{
+		OwnerUserID: "owner-1", FileName: "owner.wav",
+		MediaType: "audio/wav", Content: strings.NewReader("audio"),
+	})
+	if err == nil || store.deleteCalls != 1 {
+		t.Fatalf("error = %v, deleteCalls = %d", err, store.deleteCalls)
+	}
+}
 
 func TestIngestRealtimeChunkUsesSessionAndDerivedOffset(t *testing.T) {
 	repository := &realtimeTestRepository{session: RealtimeVoiceSessionDetail{
@@ -128,7 +280,8 @@ func TestIngestRealtimeChunkUsesSessionAndDerivedOffset(t *testing.T) {
 	}}
 	store := &realtimeTestStore{}
 	voice := newVoiceService(
-		repository, stubTranscriber{}, store, stubMemographClient{},
+		repository, stubTranscriber{}, stubSpeakerAttributor{},
+		store, store, stubAudioInspector{}, stubMemographClient{},
 		config.VoiceConfig{EpisodeDuration: 30 * time.Second},
 		config.WorkerConfig{MaxAttempts: 5},
 	)
@@ -169,7 +322,8 @@ func TestIngestRealtimeChunkIsIdempotent(t *testing.T) {
 	}
 	store := &realtimeTestStore{}
 	voice := newVoiceService(
-		repository, stubTranscriber{}, store, stubMemographClient{},
+		repository, stubTranscriber{}, stubSpeakerAttributor{},
+		store, store, stubAudioInspector{}, stubMemographClient{},
 		config.VoiceConfig{EpisodeDuration: 30 * time.Second},
 		config.WorkerConfig{MaxAttempts: 5},
 	)

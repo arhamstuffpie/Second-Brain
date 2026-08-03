@@ -14,6 +14,7 @@ import {
   StatusPill,
 } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/theme';
+import { VoiceSampleRecorder } from '@/features/voice-enrollment/voice-sample-recorder';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
@@ -50,12 +51,28 @@ function ToggleRow({
 
 export function SettingsScreen() {
   const theme = useTheme();
-  const { settings, auth, network, power, updateSettings, checkHealth, logout, showError } = useApp();
+  const {
+    settings,
+    auth,
+    network,
+    power,
+    voiceEnrollment,
+    updateSettings,
+    checkHealth,
+    enrollOwnerVoice,
+    replaceOwnerVoice,
+    deleteOwnerVoice,
+    refreshVoiceEnrollment,
+    logout,
+    showError,
+  } = useApp();
   const [draft, setDraft] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [health, setHealth] = useState<'idle' | 'checking' | 'healthy' | 'failed'>('idle');
   const [healthError, setHealthError] = useState('');
+  const [editingVoice, setEditingVoice] = useState(false);
+  const [deletingVoice, setDeletingVoice] = useState<string | null>(null);
   const [snackbarVisible, setSnackbarVisible] = useState(false);
   const reducedMotion = useReducedMotion();
   const snackbarOpacity = useRef(new Animated.Value(0)).current;
@@ -141,13 +158,25 @@ export function SettingsScreen() {
     }
   }
 
+  async function removeVoiceSample(sampleId: string) {
+    setDeletingVoice(sampleId);
+    try {
+      await deleteOwnerVoice(sampleId);
+    } catch (error) {
+      const message = getReadableError(error, 'backend');
+      showError(message);
+    } finally {
+      setDeletingVoice(null);
+    }
+  }
+
   return (
     <View style={styles.root}>
       <Screen contentStyle={styles.screen}>
       <PageHeader
         eyebrow="PREFERENCES"
         title="Settings"
-        subtitle="Manage capture quality, network use, and your Memograph destination."
+        subtitle="Manage owner voice recognition, capture quality, and your memory destination."
         action={
           <StatusPill
             label={network.online ? network.type.toLowerCase() : 'offline'}
@@ -155,6 +184,116 @@ export function SettingsScreen() {
           />
         }
       />
+
+      <Card>
+        <View style={styles.voiceHeader}>
+          <View style={styles.voiceHeaderCopy}>
+            <SectionLabel>Owner voice</SectionLabel>
+            <Body muted>
+              Owner recognition keeps other people&apos;s statements as context without turning
+              them into facts about you.
+            </Body>
+          </View>
+          {voiceEnrollment.status === 'enrolled' ? (
+            <StatusPill label="active" tone="success" />
+          ) : voiceEnrollment.status === 'checking' || voiceEnrollment.status === 'idle' ? (
+            <StatusPill label="checking" tone="live" />
+          ) : (
+            <StatusPill label="setup needed" tone="warning" />
+          )}
+        </View>
+
+        {voiceEnrollment.status === 'checking' || voiceEnrollment.status === 'idle' ? (
+          <Body muted>Checking this account&apos;s enrolled voice samples…</Body>
+        ) : voiceEnrollment.status === 'error' ? (
+          <View style={styles.voiceActions}>
+            <ErrorNotice
+              title="Could not check owner voice"
+              message={voiceEnrollment.error ?? 'The backend could not be reached.'}
+            />
+            <Button
+              label="Try again"
+              variant="secondary"
+              onPress={() => void refreshVoiceEnrollment()}
+            />
+          </View>
+        ) : voiceEnrollment.status === 'required' ? (
+          <View style={styles.voiceActions}>
+            <ErrorNotice
+              title="Owner voice is not configured"
+              message="Record a short sample so future conversations can identify your speech. Until then, every speaker remains unknown."
+            />
+            {editingVoice ? (
+              <VoiceSampleRecorder
+                onSubmit={enrollOwnerVoice}
+                onComplete={() => setEditingVoice(false)}
+                onCancel={() => setEditingVoice(false)}
+              />
+            ) : (
+              <Button label="Add my voice" onPress={() => setEditingVoice(true)} />
+            )}
+          </View>
+        ) : (
+          <View style={styles.voiceActions}>
+            {voiceEnrollment.samples.map((sample, index) => (
+              <View
+                key={sample.id}
+                style={[styles.voiceSample, { borderTopColor: theme.border }]}>
+                <View style={styles.voiceSampleCopy}>
+                  <Text style={[styles.voiceSampleTitle, { color: theme.text }]}>
+                    Voice sample {index + 1}
+                  </Text>
+                  <Body muted>
+                    {sample.duration_seconds.toFixed(1)} sec · saved{' '}
+                    {new Date(sample.created_at).toLocaleDateString()}
+                  </Body>
+                </View>
+                <Button
+                  label={deletingVoice === sample.id ? 'Removing…' : 'Remove'}
+                  variant="danger"
+                  compact
+                  disabled={deletingVoice !== null || editingVoice}
+                  onPress={() =>
+                    Alert.alert(
+                      'Remove voice sample?',
+                      voiceEnrollment.samples.length === 1
+                        ? 'Owner recognition will be turned off until you add another sample.'
+                        : 'This reference will no longer be used for owner recognition.',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Remove',
+                          style: 'destructive',
+                          onPress: () => void removeVoiceSample(sample.id),
+                        },
+                      ],
+                    )
+                  }
+                />
+              </View>
+            ))}
+            {editingVoice ? (
+              <View style={[styles.replacement, { borderTopColor: theme.border }]}>
+                <Body muted>
+                  The current sample stays active until the replacement uploads successfully.
+                </Body>
+                <VoiceSampleRecorder
+                  onSubmit={replaceOwnerVoice}
+                  submitLabel="Use as replacement"
+                  onComplete={() => setEditingVoice(false)}
+                  onCancel={() => setEditingVoice(false)}
+                />
+              </View>
+            ) : (
+              <Button
+                label="Replace voice sample"
+                variant="secondary"
+                onPress={() => setEditingVoice(true)}
+              />
+            )}
+          </View>
+        )}
+      </Card>
 
       <Card>
         <SectionLabel>Backend</SectionLabel>
@@ -333,6 +472,23 @@ const styles = StyleSheet.create({
   toggleLabel: { fontSize: 15, fontWeight: '800' },
   inline: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: Spacing.md },
   powerRow: { borderRadius: Radius.md, padding: Spacing.md },
+  voiceHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.lg },
+  voiceHeaderCopy: { flex: 1, gap: Spacing.sm },
+  voiceActions: { gap: Spacing.lg },
+  voiceSample: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: Spacing.md,
+  },
+  voiceSampleCopy: { flex: 1, gap: 2 },
+  voiceSampleTitle: { fontSize: 15, fontWeight: '800' },
+  replacement: {
+    gap: Spacing.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: Spacing.lg,
+  },
   snackbar: {
     position: 'absolute',
     left: Spacing.lg,

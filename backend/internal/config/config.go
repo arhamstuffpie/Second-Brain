@@ -66,9 +66,17 @@ type LogConfig struct {
 }
 
 type VoiceConfig struct {
-	StorageDir      string
-	MaxUploadBytes  int64
-	EpisodeDuration time.Duration
+	StorageDir               string
+	EnrollmentStorageDir     string
+	MaxUploadBytes           int64
+	EnrollmentMaxUploadBytes int64
+	EnrollmentMinDuration    time.Duration
+	EnrollmentMaxDuration    time.Duration
+	FFprobePath              string
+	InspectionTimeout        time.Duration
+	EpisodeDuration          time.Duration
+	EpisodeSilenceGap        time.Duration
+	EpisodeMaxDuration       time.Duration
 }
 
 type VideoConfig struct {
@@ -153,9 +161,17 @@ func Load() (Config, error) {
 			Pretty: GetEnvBool("APP_LOG_PRETTY", environment != "production"),
 		},
 		Voice: VoiceConfig{
-			StorageDir:      GetEnv("APP_VOICE_STORAGE_DIR", "./data/audio"),
-			MaxUploadBytes:  int64(GetEnvInt("APP_VOICE_MAX_UPLOAD_MB", 25)) << 20,
-			EpisodeDuration: getEnvDuration("APP_VOICE_EPISODE_DURATION", 30*time.Second),
+			StorageDir:               GetEnv("APP_VOICE_STORAGE_DIR", "./data/audio"),
+			EnrollmentStorageDir:     GetEnv("APP_VOICE_ENROLLMENT_STORAGE_DIR", "./data/voice-enrollment"),
+			MaxUploadBytes:           int64(GetEnvInt("APP_VOICE_MAX_UPLOAD_MB", 25)) << 20,
+			EnrollmentMaxUploadBytes: int64(GetEnvInt("APP_VOICE_ENROLLMENT_MAX_UPLOAD_MB", 10)) << 20,
+			EnrollmentMinDuration:    getEnvDuration("APP_VOICE_ENROLLMENT_MIN_DURATION", 2*time.Second),
+			EnrollmentMaxDuration:    getEnvDuration("APP_VOICE_ENROLLMENT_MAX_DURATION", 10*time.Second),
+			FFprobePath:              GetEnv("APP_VOICE_FFPROBE_PATH", "ffprobe"),
+			InspectionTimeout:        getEnvDuration("APP_VOICE_INSPECTION_TIMEOUT", 15*time.Second),
+			EpisodeDuration:          getEnvDuration("APP_VOICE_EPISODE_DURATION", 30*time.Second),
+			EpisodeSilenceGap:        getEnvDuration("APP_VOICE_EPISODE_SILENCE_GAP", 8*time.Second),
+			EpisodeMaxDuration:       getEnvDuration("APP_VOICE_EPISODE_MAX_DURATION", 2*time.Minute),
 		},
 		Video: VideoConfig{
 			StorageDir:        GetEnv("APP_VIDEO_STORAGE_DIR", "./data/video"),
@@ -263,6 +279,17 @@ func (c Config) Validate() error {
 	}
 	if c.Voice.EpisodeDuration <= 0 {
 		return fmt.Errorf("APP_VOICE_EPISODE_DURATION must be positive")
+	}
+	if strings.TrimSpace(c.Voice.EnrollmentStorageDir) == "" ||
+		c.Voice.EnrollmentMaxUploadBytes < 1 ||
+		c.Voice.EnrollmentMinDuration < 2*time.Second ||
+		c.Voice.EnrollmentMaxDuration < c.Voice.EnrollmentMinDuration ||
+		c.Voice.EnrollmentMaxDuration > 10*time.Second ||
+		strings.TrimSpace(c.Voice.FFprobePath) == "" || c.Voice.InspectionTimeout <= 0 {
+		return fmt.Errorf("valid voice enrollment configuration is required")
+	}
+	if c.Voice.EpisodeSilenceGap <= 0 || c.Voice.EpisodeMaxDuration <= c.Voice.EpisodeSilenceGap {
+		return fmt.Errorf("valid voice episode assembly configuration is required")
 	}
 	if strings.TrimSpace(c.Video.StorageDir) == "" {
 		return fmt.Errorf("APP_VIDEO_STORAGE_DIR must not be empty")

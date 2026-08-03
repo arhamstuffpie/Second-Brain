@@ -3,6 +3,27 @@
 Managed Expo SDK 54 application for foreground video + microphone capture,
 near-realtime backend delivery, offline buffering, and Memograph access.
 
+## Account and voice setup
+
+- A new account must enroll a clean 2–10 second owner voice sample before the
+  dashboard opens. Existing accounts without a sample can continue into the
+  app and receive a warning plus enrollment controls in Settings.
+- Settings lists enrolled samples and lets a user add, replace, or remove their
+  owner reference later.
+- The sample is uploaded to the authenticated backend enrollment endpoint. It
+  is used as a known-speaker reference during diarized transcription and is not
+  inserted into Memograph as a memory.
+- Without an enrolled sample the backend can still preserve audio, but all
+  transcript speakers remain `unknown`; new-account onboarding prevents that
+  degraded mode, while existing accounts receive a persistent Settings warning.
+- Upload activity and retry history are stored under the authenticated user ID.
+  Signing out clears the in-memory activity immediately, while that user's
+  pending uploads remain available when the same account signs in again.
+- Memograph IDs, credentials, capture preferences, and other Settings values
+  are stored per account. Switching accounts reloads that account's Settings
+  and Activity data and resets transient tab state such as open details,
+  in-progress chat responses, memory results, and unsaved form drafts.
+
 ## Run
 
 ```bash

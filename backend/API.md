@@ -12,8 +12,11 @@ except `/health` live below `/api/v1`.
 | `POST` | `/api/v1/auth/signup` | no | Create account and token |
 | `POST` | `/api/v1/auth/login` | no | Authenticate and create token |
 | `GET` | `/api/v1/secure` | yes | Verify token |
+| `POST` | `/api/v1/voice/enrollments/samples` | yes | Enroll an owner voice sample |
+| `GET` | `/api/v1/voice/enrollments/samples` | yes | List owner voice samples |
+| `DELETE` | `/api/v1/voice/enrollments/samples/:sample_id` | yes | Delete an owner voice sample |
 | `POST` | `/api/v1/voice/recordings` | yes | Queue audio recording |
-| `POST` | `/api/v1/voice/chunks` | yes | Queue audio through the non-realtime chunk alias |
+| `POST` | `/api/v1/voice/chunks` | yes | Queue a legacy standalone offset chunk |
 | `GET` | `/api/v1/voice/recordings/:recording_id` | yes | Read audio processing result |
 | `POST` | `/api/v1/voice/realtime/sessions` | yes | Start realtime audio capture |
 | `POST` | `/api/v1/voice/realtime/sessions/:session_id/chunks` | yes | Queue ordered realtime audio chunk |
@@ -142,6 +145,14 @@ insertion is finished. Save `data.id` and poll the corresponding
 `GET .../recordings/:recording_id` endpoint. For realtime capture, the session
 status endpoint provides chunk-level progress.
 
+### Owner voice enrollment
+
+`POST /api/v1/voice/enrollments/samples` accepts multipart field `file`. A user
+may retain up to four supported 2–10 second clips. `GET` lists metadata and
+`DELETE .../:sample_id` permanently removes an owned reference. Recording
+ingestion remains available without enrollment, but every speaker is then
+classified as `unknown` and no owner-attributed utterance is generated.
+
 ## Shared response types
 
 ### `AuthResult`
@@ -171,6 +182,7 @@ type VoiceRecording = {
   status:
     | "queued"
     | "transcribing"
+    | "assembling"
     | "memograph_pending"
     | "completed"
     | "failed";
@@ -182,10 +194,21 @@ type VoiceRecording = {
   created_at: string;
 };
 
+type VoiceEnrollmentSample = {
+  id: string;
+  file_name: string;
+  media_type: string;
+  size_bytes: number;
+  duration_seconds: number;
+  created_at: string;
+};
+
 type TranscriptSegment = {
+  id?: string;
   start_time: number;
   end_time: number;
   speaker: string;
+  speaker_role: "owner" | "other" | "unknown";
   text: string;
   confidence?: number;
 };
@@ -209,11 +232,21 @@ type VoiceEpisode = {
   status: "queued" | "writing" | "completed" | "failed";
   memograph_response?: unknown;
   last_error?: string;
+  episode_index: number;
+  segments: Array<TranscriptSegment & {recording_id: string}>;
+  source_recording_ids: string[];
+  owner_utterance_count: number;
+  other_utterance_count: number;
+  unknown_utterance_count: number;
 };
 
 type VoiceRecordingDetail = VoiceRecording & {
   device_id?: string;
   location?: string;
+  batch_id: string;
+  stt_provider?: string;
+  stt_model?: string;
+  speaker_reference_ids: string[];
   transcript?: Transcript;
   episodes: VoiceEpisode[];
   last_error?: string;
@@ -245,6 +278,7 @@ type RealtimeVoiceSession = {
 type RealtimeVoiceSessionDetail = RealtimeVoiceSession & {
   progress: RealtimeProgress;
   chunks: VoiceRecording[];
+  episodes: VoiceEpisode[];
 };
 ```
 

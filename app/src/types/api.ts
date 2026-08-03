@@ -38,10 +38,21 @@ export type Credentials = {
   password: string;
 };
 
+export type VoiceEnrollmentSample = {
+  id: string;
+  file_name: string;
+  media_type: string;
+  size_bytes: number;
+  duration_seconds: number;
+  created_at: string;
+};
+
 export type TranscriptSegment = {
+  id?: string;
   start_time: number;
   end_time: number;
   speaker: string;
+  speaker_role: 'owner' | 'other' | 'unknown';
   text: string;
   confidence?: number;
 };
@@ -58,6 +69,7 @@ export type Transcript = {
 export type VoiceRecordingStatus =
   | 'queued'
   | 'transcribing'
+  | 'assembling'
   | 'memograph_pending'
   | 'completed'
   | 'failed';

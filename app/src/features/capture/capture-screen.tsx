@@ -40,6 +40,7 @@ export function CaptureScreen() {
   const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
   const {
+    auth,
     api,
     settings,
     network,
@@ -151,6 +152,7 @@ export function CaptureScreen() {
         const fileUri = persistCapturedVideo(result.uri, fileName);
         const item: QueuedVideoChunk = {
           id: chunkId,
+          ownerUserId: auth!.user.id,
           sessionId,
           chunkId,
           fileUri,

@@ -40,8 +40,11 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	container := &Container{
 		Health: newHealthHandler(deps.HealthService),
 		Auth:   newAuthHandler(deps.AuthService),
-		Voice:  newVoiceHandler(deps.VoiceService, deps.VoiceConfig.MaxUploadBytes),
-		Video:  newVideoHandler(deps.VideoService, deps.VideoConfig.MaxUploadBytes),
+		Voice: newVoiceHandler(
+			deps.VoiceService, deps.VoiceConfig.MaxUploadBytes,
+			deps.VoiceConfig.EnrollmentMaxUploadBytes,
+		),
+		Video: newVideoHandler(deps.VideoService, deps.VideoConfig.MaxUploadBytes),
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err

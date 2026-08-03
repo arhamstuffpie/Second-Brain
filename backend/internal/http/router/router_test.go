@@ -39,6 +39,14 @@ type fakeAuthService struct {
 
 type fakeVoiceService struct{}
 
+func (fakeVoiceService) EnrollVoice(context.Context, service.VoiceEnrollmentInput) (service.VoiceEnrollmentSample, error) {
+	return service.VoiceEnrollmentSample{}, nil
+}
+func (fakeVoiceService) ListVoiceEnrollments(context.Context, string) ([]service.VoiceEnrollmentSample, error) {
+	return nil, nil
+}
+func (fakeVoiceService) DeleteVoiceEnrollment(context.Context, string, string) error { return nil }
+
 func (fakeVoiceService) Ingest(context.Context, service.VoiceIngestInput) (service.VoiceRecording, error) {
 	return service.VoiceRecording{}, nil
 }
@@ -161,6 +169,25 @@ func TestSecureRouteRequiresJWT(t *testing.T) {
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+}
+
+func TestVoiceEnrollmentRoutesRequireJWT(t *testing.T) {
+	engine := testRouterWithAuth(t, fakeHealthService{}, fakeAuthService{})
+	for _, target := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPost, path: "/api/v1/voice/enrollments/samples"},
+		{method: http.MethodGet, path: "/api/v1/voice/enrollments/samples"},
+		{method: http.MethodDelete, path: "/api/v1/voice/enrollments/samples/sample-1"},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(target.method, target.path, nil)
+		engine.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s status = %d, want 401", target.method, target.path, recorder.Code)
+		}
 	}
 }
 

@@ -32,16 +32,27 @@ transcribes them asynchronously, turns timestamped speech into natural-language
 episodes, and writes each episode into a Memograph graph memory.
 
 ```text
-upload/chunk -> local audio store -> PostgreSQL STT job
-             -> timestamped transcript -> 30s episode buckets
+upload/chunk -> local audio store -> PostgreSQL STT job + owner references
+             -> attributed timestamped transcript -> session episode assembler
              -> independent PostgreSQL Memograph jobs -> graph memory
 ```
 
-The speech-to-text boundary is an interface, so another provider can replace the
-included OpenAI-compatible adapter. PostgreSQL is the durable queue: workers
-claim rows with `FOR UPDATE SKIP LOCKED`, and STT and Memograph jobs have
-separate retry lifecycles. A failed graph write therefore does not transcribe
-the audio again.
+Owners may enroll up to four clean 2–10 second reference clips. The OpenAI
+adapter sends those clips to `gpt-4o-transcribe-diarize`; returned labels are
+normalized to `owner`, `other`, or `unknown` by a separate attribution boundary.
+Without enrollment, transcription continues and every speaker remains unknown.
+The speech-to-text and attribution boundaries are interfaces, so a dedicated
+voiceprint implementation can replace provider-assisted matching later.
+PostgreSQL is the durable queue: workers claim rows with
+`FOR UPDATE SKIP LOCKED`, and STT, episode-assembly, and Memograph jobs have
+separate retry lifecycles. A failed graph
+write therefore does not transcribe or reassemble the audio again.
+
+Realtime transcripts are assembled across chunk boundaries. An episode closes
+after 8 seconds of silence or at a 2-minute maximum span; the newest tail stays
+buffered until it becomes coherent or the stopped session has finished STT.
+Memograph payloads place owner utterances in a distinct section and preserve
+all other speech as context explicitly marked as non-owner.
 
 The production adapter calls `POST /v1/audio/transcriptions`. With
 `gpt-4o-transcribe-diarize`, it requests `diarized_json` and automatic chunking;
@@ -56,8 +67,11 @@ All routes require this application's JWT in
 
 | Method | Route | Purpose |
 | --- | --- | --- |
+| `POST` | `/api/v1/voice/enrollments/samples` | Enroll one owner voice reference |
+| `GET` | `/api/v1/voice/enrollments/samples` | List enrolled reference metadata |
+| `DELETE` | `/api/v1/voice/enrollments/samples/:sample_id` | Delete an owner reference |
 | `POST` | `/api/v1/voice/recordings` | Upload a complete audio file |
-| `POST` | `/api/v1/voice/chunks` | Upload one live-stream chunk |
+| `POST` | `/api/v1/voice/chunks` | Upload one legacy standalone chunk |
 | `GET` | `/api/v1/voice/recordings/:recording_id` | Poll transcript, episodes, and write status |
 | `POST` | `/api/v1/voice/realtime/sessions` | Start a persistent microphone session |
 | `POST` | `/api/v1/voice/realtime/sessions/:session_id/chunks` | Upload an ordered realtime chunk |
@@ -81,10 +95,23 @@ curl -X POST http://localhost:8080/api/v1/voice/recordings \
   -F "location=home-office"
 ```
 
-`group_id` defaults to `session_id`. For a stream chunk, use `/chunks` with the
-same fields and add `start_time` as the chunk offset in seconds. Both routes
-return `202 Accepted` with a recording ID. Poll it until `status` is `completed`
-or `failed`.
+Enroll a clean owner reference before capture (optional but required for owner
+recognition):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/voice/enrollments/samples \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F "file=@owner-reference.wav"
+```
+
+Reference clips are retained in `APP_VOICE_ENROLLMENT_STORAGE_DIR` until the
+authenticated owner deletes them. The API never returns their storage paths.
+
+`group_id` defaults to `session_id`. The legacy `/chunks` alias accepts the same
+fields plus `start_time`, but treats each request as a closed standalone batch.
+Use the realtime session routes below when episodes must span chunk boundaries.
+Both upload routes return `202 Accepted` with a recording ID. Poll it until
+`status` is `completed` or `failed`.
 
 ### Realtime 30-second microphone sessions
 
@@ -193,11 +220,15 @@ Production UI should retry failed uploads with the same `chunk_index`, display
 a persistent microphone indicator, require explicit user consent, and use
 HTTPS because browsers restrict microphone access on insecure origins.
 
-Each Memograph episode contains a description similar to:
+Each Memograph episode contains an attribution-safe description similar to:
 
 ```text
-Audio memory from session session-123 between 0.00s and 18.40s.
-Recorded at home-office. A said: "Let's ship on Friday."
+Conversation episode from session session-123 between 0.00s and 18.40s.
+Recorded at home-office.
+Owner-attributed utterances:
+- [2.10s–4.20s] Owner: Let's ship on Friday.
+Non-owner conversational context (must not be treated as owner statements):
+- [4.50s–5.10s] Other speaker A: Agreed.
 ```
 
 Metadata includes `source`, `session_id`, `group_id`, `start_time`, `end_time`,
@@ -469,6 +500,6 @@ make build
 ```
 
 The test suite covers container dependency contracts, configuration fallbacks,
-authentication, episode bucketing and offsets, graph-configuration validation,
+authentication, owner attribution, cross-chunk episode assembly, graph-configuration validation,
 OpenAI diarized and visual structured-output parsing, backend-assigned video
 chunk ordering, Memograph auth selection, custom fields, and answer scoping.

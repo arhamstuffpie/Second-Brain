@@ -21,6 +21,7 @@ import type {
   VideoRecording,
   VideoRecordingDetail,
   VoiceChunkUploadInput,
+  VoiceEnrollmentSample,
   VoiceRecording,
   VoiceRecordingDetail,
 } from '@/types/api';
@@ -30,7 +31,7 @@ import { randomUUID } from 'expo-crypto';
 import { ServerSentEventParser, type ServerSentEvent } from '@/lib/sse';
 
 type RequestOptions = {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'DELETE';
   body?: unknown;
   form?: FormData;
   authenticated?: boolean;
@@ -354,6 +355,24 @@ export class ApiClient {
   }
 
   voice = {
+    listEnrollmentSamples: () =>
+      this.request<VoiceEnrollmentSample[]>('/api/v1/voice/enrollments/samples'),
+
+    enrollSample: (file: UploadFile) => {
+      const form = new FormData();
+      appendFile(form, file);
+      return this.request<VoiceEnrollmentSample>('/api/v1/voice/enrollments/samples', {
+        method: 'POST',
+        form,
+      });
+    },
+
+    deleteEnrollmentSample: (sampleId: string) =>
+      this.request<null>(
+        `/api/v1/voice/enrollments/samples/${encodeURIComponent(sampleId)}`,
+        { method: 'DELETE' },
+      ),
+
     ingestRecording: (input: RecordingUploadInput) =>
       this.request<VoiceRecording>('/api/v1/voice/recordings', {
         method: 'POST',

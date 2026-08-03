@@ -32,6 +32,19 @@ func (stubUserRepository) FindByEmail(context.Context, string) (StoredUser, bool
 
 type stubVoiceRepository struct{}
 
+func (stubVoiceRepository) CreateEnrollmentSample(context.Context, CreateEnrollmentSampleInput) (VoiceEnrollmentRecord, error) {
+	return VoiceEnrollmentRecord{}, nil
+}
+func (stubVoiceRepository) ListEnrollmentSamples(context.Context, string) ([]VoiceEnrollmentRecord, error) {
+	return nil, nil
+}
+func (stubVoiceRepository) GetEnrollmentSample(context.Context, string, string) (VoiceEnrollmentRecord, error) {
+	return VoiceEnrollmentRecord{}, nil
+}
+func (stubVoiceRepository) DeleteEnrollmentSample(context.Context, string, string) (VoiceEnrollmentRecord, error) {
+	return VoiceEnrollmentRecord{}, nil
+}
+
 func (stubVoiceRepository) CreateRecording(context.Context, CreateRecordingInput, int) (VoiceRecording, error) {
 	return VoiceRecording{}, nil
 }
@@ -53,7 +66,13 @@ func (stubVoiceRepository) StopRealtimeSession(context.Context, string, string) 
 func (stubVoiceRepository) ClaimJob(context.Context) (VoiceJob, bool, error) {
 	return VoiceJob{}, false, nil
 }
-func (stubVoiceRepository) SaveTranscriptAndEpisodes(context.Context, VoiceJob, Transcript, []EpisodeDraft, string, string, int) error {
+func (stubVoiceRepository) SaveTranscriptAndQueueAssembly(context.Context, VoiceJob, Transcript, []string, string, string, int) error {
+	return nil
+}
+func (stubVoiceRepository) LoadAssembly(context.Context, VoiceJob) (VoiceAssemblySnapshot, error) {
+	return VoiceAssemblySnapshot{}, nil
+}
+func (stubVoiceRepository) SaveAssembledEpisodes(context.Context, VoiceJob, VoiceAssemblySnapshot, []EpisodeDraft, int) error {
 	return nil
 }
 func (stubVoiceRepository) CompleteMemographEpisode(context.Context, VoiceJob, json.RawMessage) error {
@@ -112,6 +131,16 @@ func (stubTranscriber) Transcribe(context.Context, TranscriptionInput) (Transcri
 }
 func (stubTranscriber) Provider() string { return "stub" }
 func (stubTranscriber) Model() string    { return "stub" }
+
+type stubSpeakerAttributor struct{}
+
+func (stubSpeakerAttributor) Attribute(_ context.Context, input SpeakerAttributionInput) (Transcript, error) {
+	return input.Transcript, nil
+}
+
+type stubAudioInspector struct{}
+
+func (stubAudioInspector) Duration(context.Context, string) (float64, error) { return 5, nil }
 
 type stubAudioStore struct{}
 
@@ -177,17 +206,20 @@ func TestNewContainerRequiresRepositories(t *testing.T) {
 
 func TestNewContainerPopulatesDependencies(t *testing.T) {
 	container, err := NewContainer(Dependencies{
-		HealthRepository: stubHealthRepository{},
-		UserRepository:   stubUserRepository{},
-		VoiceRepository:  stubVoiceRepository{},
-		VideoRepository:  stubVideoRepository{},
-		Transcriber:      stubTranscriber{},
-		AudioStore:       stubAudioStore{},
-		VideoStore:       stubAudioStore{},
-		MediaExtractor:   stubMediaExtractor{},
-		VisualAnalyzer:   stubVisualAnalyzer{},
-		Memograph:        stubMemographClient{},
-		VoiceConfig:      config.VoiceConfig{EpisodeDuration: 30 * time.Second},
+		HealthRepository:  stubHealthRepository{},
+		UserRepository:    stubUserRepository{},
+		VoiceRepository:   stubVoiceRepository{},
+		VideoRepository:   stubVideoRepository{},
+		Transcriber:       stubTranscriber{},
+		SpeakerAttributor: stubSpeakerAttributor{},
+		AudioStore:        stubAudioStore{},
+		EnrollmentStore:   stubAudioStore{},
+		AudioInspector:    stubAudioInspector{},
+		VideoStore:        stubAudioStore{},
+		MediaExtractor:    stubMediaExtractor{},
+		VisualAnalyzer:    stubVisualAnalyzer{},
+		Memograph:         stubMemographClient{},
+		VoiceConfig:       config.VoiceConfig{EpisodeDuration: 30 * time.Second},
 		VideoConfig: config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
 		},

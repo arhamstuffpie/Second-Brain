@@ -3,6 +3,7 @@ package stt
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -61,6 +62,20 @@ func (t *OpenAITranscriber) Transcribe(ctx context.Context, input service.Transc
 	if strings.Contains(t.model, "diarize") {
 		_ = writer.WriteField("response_format", "diarized_json")
 		_ = writer.WriteField("chunking_strategy", "auto")
+		for _, reference := range input.KnownSpeakers {
+			if strings.TrimSpace(reference.ProviderLabel) == "" || len(reference.Audio) == 0 {
+				continue
+			}
+			mediaType := strings.TrimSpace(reference.MediaType)
+			if mediaType == "" {
+				mediaType = "audio/wav"
+			}
+			_ = writer.WriteField("known_speaker_names[]", reference.ProviderLabel)
+			_ = writer.WriteField(
+				"known_speaker_references[]",
+				"data:"+mediaType+";base64,"+base64.StdEncoding.EncodeToString(reference.Audio),
+			)
+		}
 	} else {
 		if t.model == "whisper-1" {
 			_ = writer.WriteField("response_format", "verbose_json")
@@ -104,6 +119,7 @@ func (t *OpenAITranscriber) Transcribe(ctx context.Context, input service.Transc
 		Language string  `json:"language"`
 		Duration float64 `json:"duration"`
 		Segments []struct {
+			ID         string   `json:"id"`
 			Start      float64  `json:"start"`
 			End        float64  `json:"end"`
 			Speaker    string   `json:"speaker"`
@@ -126,7 +142,7 @@ func (t *OpenAITranscriber) Transcribe(ctx context.Context, input service.Transc
 			confidence = &value
 		}
 		segments = append(segments, service.TranscriptSegment{
-			StartTime: segment.Start, EndTime: segment.End, Speaker: speaker,
+			ID: segment.ID, StartTime: segment.Start, EndTime: segment.End, Speaker: speaker,
 			Text: strings.TrimSpace(segment.Text), Confidence: confidence,
 		})
 	}

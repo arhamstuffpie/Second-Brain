@@ -24,6 +24,7 @@ export type UploadState = 'pending' | 'uploading' | 'retrying' | 'uploaded' | 'f
 
 export type QueuedVideoChunk = {
   id: string;
+  ownerUserId: string;
   sessionId: string;
   chunkId: string;
   fileUri: string;
