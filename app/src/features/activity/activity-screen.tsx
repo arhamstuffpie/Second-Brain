@@ -16,7 +16,7 @@ import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
 import type { QueuedVideoChunk, UploadState } from '@/types/app';
-import type { VideoRecordingDetail } from '@/types/api';
+import type { TranscriptSegment, VideoRecordingDetail } from '@/types/api';
 import { useTheme } from '@/hooks/use-theme';
 
 function stateTone(state: UploadState) {
@@ -30,6 +30,22 @@ function formatBytes(value?: number) {
   if (!value) return '—';
   if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatTimestamp(seconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  return `${minutes}:${String(safeSeconds % 60).padStart(2, '0')}`;
+}
+
+function speakerLabel(segment: TranscriptSegment) {
+  if (segment.speaker_role === 'owner') return 'Owner';
+  if (segment.speaker_role === 'other') {
+    return segment.speaker ? `Other speaker ${segment.speaker}` : 'Other speaker';
+  }
+  return segment.speaker && segment.speaker !== 'speaker'
+    ? `Unknown speaker ${segment.speaker}`
+    : 'Unknown speaker';
 }
 
 export function ActivityScreen() {
@@ -141,13 +157,51 @@ export function ActivityScreen() {
                 <Body muted>Vision · {detail.visual_status}</Body>
                 <Body muted>Merge · {detail.merge_status}</Body>
               </View>
+              <Body muted>
+                {(detail.speaker_reference_ids?.length ?? 0) > 0
+                  ? `Owner recognition used ${detail.speaker_reference_ids.length} voice sample${detail.speaker_reference_ids.length === 1 ? '' : 's'}.`
+                  : 'No owner voice sample was available for this recording.'}
+              </Body>
               {detail.last_error ? (
                 <ErrorNotice
                   title="Processing failed"
                   message={getReadableError(detail.last_error, 'upload')}
                 />
               ) : null}
-              {detail.transcript?.text ? <Body>{detail.transcript.text}</Body> : null}
+              {detail.transcript?.segments.length ? (
+                <View style={styles.transcript}>
+                  <SectionLabel>Speaker transcript</SectionLabel>
+                  {detail.transcript.segments.map((segment, index) => (
+                    <View
+                      key={segment.id ?? `${segment.start_time}-${segment.end_time}-${index}`}
+                      style={[
+                        styles.transcriptRow,
+                        index > 0 && { borderTopColor: theme.border, borderTopWidth: StyleSheet.hairlineWidth },
+                      ]}>
+                      <Text
+                        style={[
+                          styles.speaker,
+                          {
+                            color:
+                              segment.speaker_role === 'owner'
+                                ? theme.success
+                                : segment.speaker_role === 'unknown'
+                                  ? theme.warning
+                                  : theme.textSecondary,
+                          },
+                        ]}>
+                        {speakerLabel(segment)} · {formatTimestamp(segment.start_time)}–
+                        {formatTimestamp(segment.end_time)}
+                      </Text>
+                      <Text selectable style={[styles.utterance, { color: theme.text }]}>
+                        {segment.text}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : detail.transcript?.text ? (
+                <Body>{detail.transcript.text}</Body>
+              ) : null}
               {detail.episodes.map((episode) => (
                 <View
                   key={episode.id}
@@ -261,6 +315,10 @@ const styles = StyleSheet.create({
   itemTitle: { fontSize: 16, fontWeight: '800' },
   detailTitle: { fontSize: 22, fontWeight: '800' },
   pipeline: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.lg },
+  transcript: { gap: Spacing.sm },
+  transcriptRow: { gap: Spacing.xs, paddingVertical: Spacing.sm },
+  speaker: { fontSize: 12, fontWeight: '800', textTransform: 'uppercase' },
+  utterance: { fontSize: 15, lineHeight: 22 },
   episode: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: Spacing.lg, gap: Spacing.md },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   chunkList: {

@@ -302,12 +302,16 @@ video upload -> audio extraction -> speech-to-text ----\
 ```
 
 FFmpeg extracts a mono WAV track and timestamped JPEG frames. The audio branch
-uses the same swappable transcriber as voice ingestion. The visual branch uses
-a `VisualAnalyzer` interface; the included OpenAI adapter sends image frames to
-the Responses API with a strict JSON schema for objects, readable text,
-activity, location, summary, and confidence. Raw video is never sent to the
-vision model. Videos without an audio track are valid and produce visual-only
-episodes.
+uses the same enrolled owner references, swappable transcriber, and speaker
+attribution boundary as voice ingestion. Video transcripts therefore retain
+timestamped `owner`, `other`, and `unknown` roles, and recording details expose
+the enrollment sample IDs used for attribution. Episode speech labels every
+owner utterance explicitly while retaining other speakers as marked context.
+The visual branch uses a `VisualAnalyzer` interface; the included OpenAI adapter
+sends image frames to the Responses API with a strict JSON schema for objects,
+readable text, activity, location, summary, and confidence. Raw video is never
+sent to the vision model. Videos without an audio track are valid and produce
+visual-only episodes.
 
 PostgreSQL queues `audio` and `visual` jobs together. A `merge` job is created
 exactly once after both branches complete, and every resulting episode receives

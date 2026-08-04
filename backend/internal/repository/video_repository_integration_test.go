@@ -81,7 +81,7 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 				service.Transcript{Segments: []service.TranscriptSegment{{
 					StartTime: 0, EndTime: 2, Speaker: "A", Text: "Hello",
 				}}},
-				"test", "test", 3,
+				[]string{"sample-1"}, "test", "test", 3,
 			)
 		case "visual":
 			err = repository.SaveVideoAnalysis(
@@ -137,6 +137,9 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 	if detail.Status != "completed" || len(detail.Episodes) != 1 ||
 		detail.Episodes[0].Status != "completed" {
 		t.Fatalf("recording detail = %+v", detail)
+	}
+	if len(detail.SpeakerReferenceIDs) != 1 || detail.SpeakerReferenceIDs[0] != "sample-1" {
+		t.Fatalf("speaker reference IDs = %+v", detail.SpeakerReferenceIDs)
 	}
 	if detail.STTProvider != "test" || detail.STTModel != "test" ||
 		detail.VisualProvider != "test" || detail.VisualModel != "test" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestBuildVideoEpisodesMergesSpeechAndVisualContext(t *testing.T) {
 		"Two people are reviewing a document.",
 		"Objects visible: printed contract.",
 		"Readable text: Employment Agreement.",
-		"A Said : Update the contract before Friday.",
+		"[62.00s-67.00s] Unknown speaker A: Update the contract before Friday.",
 	} {
 		if !strings.Contains(episode.Description, expected) {
 			t.Fatalf("description %q does not contain %q", episode.Description, expected)
@@ -55,7 +56,7 @@ func TestBuildVideoEpisodesMergesSpeechAndVisualContext(t *testing.T) {
 		strings.Contains(episode.VisualDescription, "Visible context:") {
 		t.Fatalf("visual Memograph data contains a wrapper label: %q", episode.VisualDescription)
 	}
-	if episode.SpeechDescription != "A Said : Update the contract before Friday." {
+	if episode.SpeechDescription != "[62.00s-67.00s] Unknown speaker A: Update the contract before Friday." {
 		t.Fatalf("speech description = %q", episode.SpeechDescription)
 	}
 	if strings.Contains(episode.SpeechDescription, "Speech:") ||
@@ -132,7 +133,8 @@ func TestVideoRealtimeChunkUsesClientIDAndBackendAssignedIndex(t *testing.T) {
 	}}
 	store := &realtimeTestStore{}
 	video := newVideoService(
-		repository, stubTranscriber{}, store, noAudioExtractor{},
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, store, noAudioExtractor{},
 		stubVisualAnalyzer{}, stubMemographClient{},
 		config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
@@ -164,7 +166,8 @@ func TestVideoRealtimeChunkRetryReturnsExistingRecording(t *testing.T) {
 	repository := &videoRealtimeRepository{existing: existing, existingFound: true}
 	store := &realtimeTestStore{}
 	video := newVideoService(
-		repository, stubTranscriber{}, store, noAudioExtractor{},
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, store, noAudioExtractor{},
 		stubVisualAnalyzer{}, stubMemographClient{},
 		config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
@@ -194,26 +197,135 @@ func (noAudioExtractor) ExtractFrames(context.Context, string, time.Duration, in
 
 type transcriptCaptureRepository struct {
 	stubVideoRepository
-	saved      bool
-	transcript Transcript
+	saved        bool
+	transcript   Transcript
+	referenceIDs []string
 }
 
 func (r *transcriptCaptureRepository) SaveVideoTranscript(
 	_ context.Context,
 	_ VideoJob,
 	transcript Transcript,
+	referenceIDs []string,
 	_, _ string,
 	_ int,
 ) error {
 	r.saved = true
 	r.transcript = transcript
+	r.referenceIDs = referenceIDs
 	return nil
+}
+
+type videoEnrollmentRepository struct {
+	stubVoiceRepository
+	samples []VoiceEnrollmentRecord
+}
+
+func (r videoEnrollmentRepository) ListEnrollmentSamples(
+	context.Context, string,
+) ([]VoiceEnrollmentRecord, error) {
+	return r.samples, nil
+}
+
+type videoEnrollmentStore struct{ stubAudioStore }
+
+func (videoEnrollmentStore) Open(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("voice")), nil
+}
+
+type videoOwnerTranscriber struct{ input TranscriptionInput }
+
+func (t *videoOwnerTranscriber) Transcribe(
+	_ context.Context, input TranscriptionInput,
+) (Transcript, error) {
+	t.input = input
+	return Transcript{Segments: []TranscriptSegment{
+		{StartTime: 0, EndTime: 2, Speaker: "owner_ref", Text: "What time is the meeting?"},
+		{StartTime: 2, EndTime: 4, Speaker: "A", Text: "It starts at three."},
+	}}, nil
+}
+func (*videoOwnerTranscriber) Provider() string { return "test" }
+func (*videoOwnerTranscriber) Model() string    { return "test-diarize" }
+
+type videoOwnerAttributor struct{ called bool }
+
+func (a *videoOwnerAttributor) Attribute(
+	_ context.Context, input SpeakerAttributionInput,
+) (Transcript, error) {
+	a.called = true
+	for index := range input.Transcript.Segments {
+		if input.Transcript.Segments[index].Speaker == input.References[0].ProviderLabel {
+			input.Transcript.Segments[index].SpeakerRole = "owner"
+		} else {
+			input.Transcript.Segments[index].SpeakerRole = "other"
+		}
+	}
+	return input.Transcript, nil
+}
+
+func TestVideoAudioJobUsesOwnerEnrollmentAndPersistsAttribution(t *testing.T) {
+	repository := &transcriptCaptureRepository{}
+	enrollments := videoEnrollmentRepository{samples: []VoiceEnrollmentRecord{{
+		ID: "sample-1", ProviderLabel: "owner_ref", FilePath: "owner.m4a",
+		MediaType: "audio/mp4", SizeBytes: 5,
+	}}}
+	transcriber := &videoOwnerTranscriber{}
+	attributor := &videoOwnerAttributor{}
+	video := newVideoService(
+		repository, enrollments, transcriber, attributor,
+		videoEnrollmentStore{}, stubAudioStore{}, stubMediaExtractor{},
+		stubVisualAnalyzer{}, stubMemographClient{},
+		config.VideoConfig{
+			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
+		},
+		config.WorkerConfig{MaxAttempts: 5},
+	)
+
+	err := video.processVideoAudio(context.Background(), VideoJob{
+		RecordingID: "video-1", OwnerUserID: "owner-1",
+	})
+	if err != nil {
+		t.Fatalf("processVideoAudio() error = %v", err)
+	}
+	if len(transcriber.input.KnownSpeakers) != 1 ||
+		transcriber.input.KnownSpeakers[0].ProviderLabel != "owner_ref" {
+		t.Fatalf("known speakers = %+v", transcriber.input.KnownSpeakers)
+	}
+	if !attributor.called {
+		t.Fatal("speaker attributor was not called")
+	}
+	if len(repository.referenceIDs) != 1 || repository.referenceIDs[0] != "sample-1" {
+		t.Fatalf("saved reference IDs = %+v", repository.referenceIDs)
+	}
+	if got := repository.transcript.Segments; len(got) != 2 ||
+		got[0].SpeakerRole != "owner" || got[1].SpeakerRole != "other" {
+		t.Fatalf("attributed transcript = %+v", got)
+	}
+}
+
+func TestBuildVideoEpisodesLabelsOwnerAndOtherSpeech(t *testing.T) {
+	episodes := BuildVideoEpisodes(Transcript{Segments: []TranscriptSegment{
+		{StartTime: 1, EndTime: 2, Speaker: "owner_ref", SpeakerRole: "owner", Text: "Can you send the notes?"},
+		{StartTime: 2, EndTime: 3, Speaker: "A", SpeakerRole: "other", Text: "Yes, I will."},
+	}}, VisualAnalysis{}, 30*time.Second, 10, "session-1", "")
+	if len(episodes) != 1 {
+		t.Fatalf("len(episodes) = %d, want 1", len(episodes))
+	}
+	for _, expected := range []string{
+		"[11.00s-12.00s] Owner: Can you send the notes?",
+		"[12.00s-13.00s] Other speaker A: Yes, I will.",
+	} {
+		if !strings.Contains(episodes[0].SpeechDescription, expected) {
+			t.Fatalf("speech description %q does not contain %q", episodes[0].SpeechDescription, expected)
+		}
+	}
 }
 
 func TestVideoAudioJobAllowsVideoWithoutAudioTrack(t *testing.T) {
 	repository := &transcriptCaptureRepository{}
 	video := newVideoService(
-		repository, stubTranscriber{}, stubAudioStore{}, noAudioExtractor{},
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, stubAudioStore{}, noAudioExtractor{},
 		stubVisualAnalyzer{}, stubMemographClient{},
 		config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
@@ -238,7 +350,8 @@ func TestVideoAudioJobAllowsVideoWithoutAudioTrack(t *testing.T) {
 func TestVideoAudioJobReportsAudioWithNoDetectedSpeech(t *testing.T) {
 	repository := &transcriptCaptureRepository{}
 	video := newVideoService(
-		repository, stubTranscriber{}, stubAudioStore{}, stubMediaExtractor{},
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, stubAudioStore{}, stubMediaExtractor{},
 		stubVisualAnalyzer{}, stubMemographClient{},
 		config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
@@ -304,7 +417,8 @@ func TestVideoMemographWritesVisualAndSpeechInParallel(t *testing.T) {
 		requests: make(chan EpisodeInsertRequest, 2),
 	}
 	video := newVideoService(
-		repository, stubTranscriber{}, stubAudioStore{}, stubMediaExtractor{},
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, stubAudioStore{}, stubMediaExtractor{},
 		stubVisualAnalyzer{}, client,
 		config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,

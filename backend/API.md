@@ -355,6 +355,7 @@ type VideoRecordingDetail = VideoRecording & {
   location?: string;
   stt_provider?: string;
   stt_model?: string;
+  speaker_reference_ids: string[];
   visual_provider?: string;
   visual_model?: string;
   transcript?: Transcript;
@@ -384,6 +385,12 @@ type RealtimeVideoSessionDetail = RealtimeVideoSession & {
   chunks: VideoRecording[];
 };
 ```
+
+Video audio uses the authenticated owner's current enrolled voice samples.
+Each transcript segment retains timestamps, the provider speaker label, and a
+semantic `speaker_role`. Speech episode text uses timestamped `Owner`,
+`Other speaker`, or `Unknown speaker` labels; only a provider label matching an
+enrollment reference is promoted to `owner`.
 
 ## Health
 

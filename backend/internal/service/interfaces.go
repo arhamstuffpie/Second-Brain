@@ -79,7 +79,7 @@ type VideoRepository interface {
 	GetVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSessionDetail, error)
 	StopVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSession, error)
 	ClaimVideoJob(ctx context.Context) (VideoJob, bool, error)
-	SaveVideoTranscript(ctx context.Context, job VideoJob, transcript Transcript, provider, model string, maxAttempts int) error
+	SaveVideoTranscript(ctx context.Context, job VideoJob, transcript Transcript, referenceIDs []string, provider, model string, maxAttempts int) error
 	SaveVideoAnalysis(ctx context.Context, job VideoJob, analysis VisualAnalysis, provider, model string, maxAttempts int) error
 	SaveVideoEpisodes(ctx context.Context, job VideoJob, episodes []VideoEpisodeDraft, maxAttempts int) error
 	CompleteVideoMemographEpisode(ctx context.Context, job VideoJob, response json.RawMessage) error

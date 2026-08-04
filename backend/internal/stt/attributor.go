@@ -22,7 +22,7 @@ func (*ReferenceAttributor) Attribute(
 	}
 	ownerLabels := make(map[string]struct{}, len(input.References))
 	for _, reference := range input.References {
-		if label := strings.TrimSpace(reference.ProviderLabel); label != "" {
+		if label := canonicalSpeakerLabel(reference.ProviderLabel); label != "" {
 			ownerLabels[label] = struct{}{}
 		}
 	}
@@ -33,13 +33,17 @@ func (*ReferenceAttributor) Attribute(
 		if len(ownerLabels) == 0 {
 			continue
 		}
-		if _, owner := ownerLabels[strings.TrimSpace(segment.Speaker)]; owner {
+		if _, owner := ownerLabels[canonicalSpeakerLabel(segment.Speaker)]; owner {
 			segment.SpeakerRole = "owner"
-		} else if strings.TrimSpace(segment.Speaker) != "" && segment.Speaker != "speaker" {
+		} else if label := canonicalSpeakerLabel(segment.Speaker); label != "" && label != "speaker" {
 			segment.SpeakerRole = "other"
 		}
 	}
 	return transcript, nil
+}
+
+func canonicalSpeakerLabel(label string) string {
+	return strings.ToLower(strings.TrimSpace(label))
 }
 
 var _ service.SpeakerAttributor = (*ReferenceAttributor)(nil)

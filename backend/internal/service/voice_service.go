@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"path/filepath"
 	"regexp"
@@ -482,31 +481,11 @@ func (s *voiceService) ProcessNextJob(ctx context.Context) (bool, error) {
 }
 
 func (s *voiceService) processSTT(ctx context.Context, job VoiceJob) error {
-	records, err := s.repository.ListEnrollmentSamples(ctx, job.OwnerUserID)
+	references, err := loadOwnerSpeakerReferences(
+		ctx, s.repository, s.enrollmentStore, job.OwnerUserID,
+	)
 	if err != nil {
 		return err
-	}
-	references := make([]KnownSpeakerReference, 0, len(records))
-	for _, record := range records {
-		reference, openErr := s.enrollmentStore.Open(ctx, record.FilePath)
-		if openErr != nil {
-			return fmt.Errorf("open owner voice sample %s: %w", record.ID, openErr)
-		}
-		content, readErr := io.ReadAll(io.LimitReader(reference, record.SizeBytes+1))
-		closeErr := reference.Close()
-		if readErr != nil {
-			return fmt.Errorf("read owner voice sample %s: %w", record.ID, readErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close owner voice sample %s: %w", record.ID, closeErr)
-		}
-		if int64(len(content)) != record.SizeBytes {
-			return fmt.Errorf("owner voice sample %s size changed", record.ID)
-		}
-		references = append(references, KnownSpeakerReference{
-			ID: record.ID, ProviderLabel: record.ProviderLabel,
-			MediaType: record.MediaType, Audio: content,
-		})
 	}
 	audio, err := s.store.Open(ctx, job.FilePath)
 	if err != nil {
@@ -526,12 +505,8 @@ func (s *voiceService) processSTT(ctx context.Context, job VoiceJob) error {
 	if err != nil {
 		return fmt.Errorf("attribute transcript speakers: %w", err)
 	}
-	referenceIDs := make([]string, 0, len(references))
-	for _, reference := range references {
-		referenceIDs = append(referenceIDs, reference.ID)
-	}
 	if err := s.repository.SaveTranscriptAndQueueAssembly(
-		ctx, job, transcript, referenceIDs,
+		ctx, job, transcript, speakerReferenceIDs(references),
 		s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
 	); err != nil {
 		return err

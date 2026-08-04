@@ -62,7 +62,8 @@ func NewContainer(deps Dependencies) (*Container, error) {
 			deps.VoiceConfig, deps.WorkerConfig,
 		),
 		Video: newVideoService(
-			deps.VideoRepository, deps.Transcriber, deps.VideoStore,
+			deps.VideoRepository, deps.VoiceRepository, deps.Transcriber,
+			deps.SpeakerAttributor, deps.EnrollmentStore, deps.VideoStore,
 			deps.MediaExtractor, deps.VisualAnalyzer, deps.Memograph,
 			deps.VideoConfig, deps.WorkerConfig,
 		),

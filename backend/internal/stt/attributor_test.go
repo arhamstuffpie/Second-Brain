@@ -38,3 +38,18 @@ func TestReferenceAttributorWithoutEnrollmentMarksEveryoneUnknown(t *testing.T) 
 		t.Fatalf("role = %q, want unknown", result.Segments[0].SpeakerRole)
 	}
 }
+
+func TestReferenceAttributorMatchesProviderLabelsCaseInsensitively(t *testing.T) {
+	result, err := NewReferenceAttributor().Attribute(context.Background(), service.SpeakerAttributionInput{
+		Transcript: service.Transcript{Segments: []service.TranscriptSegment{{
+			Speaker: "  OWNER_REF  ", Text: "Is the meeting still at three?",
+		}}},
+		References: []service.KnownSpeakerReference{{ProviderLabel: "owner_ref"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Segments[0].SpeakerRole != "owner" {
+		t.Fatalf("role = %q, want owner", result.Segments[0].SpeakerRole)
+	}
+}

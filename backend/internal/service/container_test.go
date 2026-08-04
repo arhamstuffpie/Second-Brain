@@ -108,7 +108,7 @@ func (stubVideoRepository) StopVideoRealtimeSession(context.Context, string, str
 func (stubVideoRepository) ClaimVideoJob(context.Context) (VideoJob, bool, error) {
 	return VideoJob{}, false, nil
 }
-func (stubVideoRepository) SaveVideoTranscript(context.Context, VideoJob, Transcript, string, string, int) error {
+func (stubVideoRepository) SaveVideoTranscript(context.Context, VideoJob, Transcript, []string, string, string, int) error {
 	return nil
 }
 func (stubVideoRepository) SaveVideoAnalysis(context.Context, VideoJob, VisualAnalysis, string, string, int) error {

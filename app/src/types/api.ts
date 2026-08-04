@@ -103,6 +103,7 @@ export type VoiceEpisode = {
 export type VoiceRecordingDetail = VoiceRecording & {
   device_id?: string;
   location?: string;
+  speaker_reference_ids: string[];
   transcript?: Transcript;
   episodes: VoiceEpisode[];
   last_error?: string;
@@ -205,6 +206,7 @@ export type VideoRecordingDetail = VideoRecording & {
   location?: string;
   stt_provider?: string;
   stt_model?: string;
+  speaker_reference_ids: string[];
   visual_provider?: string;
   visual_model?: string;
   transcript?: Transcript;

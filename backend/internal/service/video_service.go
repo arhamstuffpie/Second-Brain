@@ -17,7 +17,10 @@ import (
 
 type videoService struct {
 	repository      VideoRepository
+	enrollments     VoiceRepository
 	transcriber     Transcriber
+	attributor      SpeakerAttributor
+	enrollmentStore AudioStore
 	store           VideoStore
 	extractor       MediaExtractor
 	analyzer        VisualAnalyzer
@@ -30,7 +33,10 @@ type videoService struct {
 
 func newVideoService(
 	repository VideoRepository,
+	enrollments VoiceRepository,
 	transcriber Transcriber,
+	attributor SpeakerAttributor,
+	enrollmentStore AudioStore,
 	store VideoStore,
 	extractor MediaExtractor,
 	analyzer VisualAnalyzer,
@@ -39,7 +45,8 @@ func newVideoService(
 	workerConfig config.WorkerConfig,
 ) *videoService {
 	return &videoService{
-		repository: repository, transcriber: transcriber, store: store,
+		repository: repository, enrollments: enrollments, transcriber: transcriber,
+		attributor: attributor, enrollmentStore: enrollmentStore, store: store,
 		extractor: extractor, analyzer: analyzer, memograph: memograph,
 		episodeDuration: videoConfig.EpisodeDuration,
 		frameInterval:   videoConfig.FrameInterval,
@@ -306,18 +313,31 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 				AudioTrackPresent: &audioTrackPresent,
 				Warning:           "video contains no audio track",
 			},
-			s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
+			[]string{}, s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
 		)
 	}
 	if err != nil {
 		return err
 	}
 	defer extracted.Audio.Close()
+	references, err := loadOwnerSpeakerReferences(
+		ctx, s.enrollments, s.enrollmentStore, job.OwnerUserID,
+	)
+	if err != nil {
+		return err
+	}
 	transcript, err := s.transcriber.Transcribe(ctx, TranscriptionInput{
 		FileName: extracted.FileName, MediaType: extracted.MediaType, Audio: extracted.Audio,
+		KnownSpeakers: references,
 	})
 	if err != nil {
 		return err
+	}
+	transcript, err = s.attributor.Attribute(ctx, SpeakerAttributionInput{
+		Transcript: transcript, References: references,
+	})
+	if err != nil {
+		return fmt.Errorf("attribute video transcript speakers: %w", err)
 	}
 	if transcript.Segments == nil {
 		transcript.Segments = []TranscriptSegment{}
@@ -328,7 +348,8 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 		transcript.Warning = "audio track was present, but no speech was detected"
 	}
 	return s.repository.SaveVideoTranscript(
-		ctx, job, transcript, s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
+		ctx, job, transcript, speakerReferenceIDs(references),
+		s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
 	)
 }
 
@@ -534,13 +555,14 @@ func BuildVideoEpisodes(
 		absoluteObservations := make([]VideoObservation, 0, len(bucket.observations))
 
 		for _, segment := range bucket.segments {
-			speaker := strings.TrimSpace(segment.Speaker)
-			if speaker == "" {
-				speaker = "speaker"
-			}
+			speaker := videoEpisodeSpeaker(segment)
 			speech = append(
 				speech,
-				fmt.Sprintf("%s Said : %s", speaker, strings.TrimSpace(segment.Text)),
+				fmt.Sprintf(
+					"[%.2fs-%.2fs] %s: %s",
+					offset+segment.StartTime, offset+segment.EndTime,
+					speaker, strings.TrimSpace(segment.Text),
+				),
 			)
 			if segmentEnd := offset + segment.EndTime; segmentEnd > end {
 				end = segmentEnd
@@ -615,6 +637,23 @@ func BuildVideoEpisodes(
 		})
 	}
 	return result
+}
+
+func videoEpisodeSpeaker(segment TranscriptSegment) string {
+	switch segment.SpeakerRole {
+	case "owner":
+		return "Owner"
+	case "other":
+		if label := strings.TrimSpace(segment.Speaker); label != "" {
+			return "Other speaker " + label
+		}
+		return "Other speaker"
+	default:
+		if label := strings.TrimSpace(segment.Speaker); label != "" && label != "speaker" {
+			return "Unknown speaker " + label
+		}
+		return "Unknown speaker"
+	}
 }
 
 func supportedVideo(filename, mediaType string) bool {
