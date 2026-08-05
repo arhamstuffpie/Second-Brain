@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -296,7 +295,8 @@ func (s *videoService) ProcessNextVideoJob(ctx context.Context) (bool, error) {
 		defer cancel()
 	}
 	if retryErr := s.repository.RetryVideoJob(
-		retryCtx, job, err.Error(), time.Now().UTC().Add(retryDelay(job.Attempts)), dead,
+		retryCtx, job, err.Error(),
+		time.Now().UTC().Add(retryDelayForError(err, job.Attempts)), dead,
 	); retryErr != nil {
 		return true, fmt.Errorf("%v; persist video retry: %w", err, retryErr)
 	}
@@ -391,8 +391,10 @@ func (s *videoService) processVideoMerge(ctx context.Context, job VideoJob) erro
 func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) error {
 	baseMeta := map[string]any{
 		"session_id": job.SessionID, "group_id": job.GroupID,
+		"episode_id": job.EpisodeID,
 		"start_time": job.EpisodeStart, "end_time": job.EpisodeEnd,
 	}
+	addOwnerIdentityMeta(baseMeta, job.OwnerUserID)
 	if job.ClientChunkID != "" {
 		baseMeta["chunk_id"] = job.ClientChunkID
 	}
@@ -407,70 +409,38 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 		custom["confidence"] = *job.Confidence
 	}
 
-	type branch struct {
-		name string
-		data string
-	}
 	visualDescription := strings.TrimSpace(job.VisualDescription)
 	speechDescription := strings.TrimSpace(job.SpeechDescription)
 	if visualDescription == "" && speechDescription == "" {
 		visualDescription, speechDescription = legacyVideoMemographData(job.Description)
 	}
-	branches := make([]branch, 0, 2)
-	if visualDescription != "" {
-		branches = append(branches, branch{name: "visual", data: visualDescription})
+	source := strings.TrimSpace(job.MemographSource)
+	data := ""
+	switch source {
+	case "visual":
+		data = visualDescription
+	case "speech":
+		data = ownerAwareMemographData(speechDescription, job.OwnerUserID)
+	case "legacy":
+		data = ownerAwareMemographData(strings.TrimSpace(job.Description), job.OwnerUserID)
+	default:
+		return fmt.Errorf("unsupported video Memograph source %q", source)
 	}
-	if speechDescription != "" {
-		branches = append(branches, branch{name: "speech", data: speechDescription})
+	if strings.TrimSpace(data) == "" {
+		return fmt.Errorf("video Memograph %s branch contains no data", source)
 	}
-	if len(branches) == 0 {
-		return fmt.Errorf("video episode contains no visual or speech data")
-	}
-
-	type branchResult struct {
-		name     string
-		response json.RawMessage
-		err      error
-	}
-	results := make(chan branchResult, len(branches))
-	for _, item := range branches {
-		go func(item branch) {
-			meta := make(map[string]any, len(baseMeta)+2)
-			for key, value := range baseMeta {
-				meta[key] = value
-			}
-			meta["source"] = item.name
-			meta["source_description"] = item.name + " from video recording"
-			response, err := s.memograph.InsertEpisode(
-				ctx,
-				job.MemoryID,
-				EpisodeInsertRequest{
-					Data: item.data, Meta: meta, CustomFields: custom,
-				},
-			)
-			results <- branchResult{name: item.name, response: response, err: err}
-		}(item)
-	}
-
-	responses := make(map[string]json.RawMessage, len(branches))
-	var failures []string
-	for range branches {
-		result := <-results
-		if result.err != nil {
-			failures = append(failures, result.name+": "+result.err.Error())
-			continue
-		}
-		responses[result.name] = result.response
-	}
-	if len(failures) > 0 {
-		sort.Strings(failures)
-		return fmt.Errorf("write video episode branches: %s", strings.Join(failures, "; "))
-	}
-	combined, err := json.Marshal(responses)
+	baseMeta["source"] = source
+	baseMeta["source_description"] = source + " from video recording"
+	idempotencyKey := memographIdempotencyKey(job.MemoryID, job.EpisodeID, source)
+	baseMeta["idempotency_key"] = idempotencyKey
+	response, err := s.memograph.InsertEpisode(ctx, job.MemoryID, EpisodeInsertRequest{
+		Data: data, Meta: baseMeta, CustomFields: custom,
+		IdempotencyKey: idempotencyKey,
+	})
 	if err != nil {
-		return fmt.Errorf("encode video Memograph responses: %w", err)
+		return fmt.Errorf("write video %s episode: %w", source, err)
 	}
-	return s.repository.CompleteVideoMemographEpisode(ctx, job, combined)
+	return s.repository.CompleteVideoMemographBranch(ctx, job, response)
 }
 
 func legacyVideoMemographData(description string) (string, string) {

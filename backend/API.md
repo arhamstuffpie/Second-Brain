@@ -392,6 +392,11 @@ semantic `speaker_role`. Speech episode text uses timestamped `Owner`,
 `Other speaker`, or `Unknown speaker` labels; only a provider label matching an
 enrollment reference is promoted to `owner`.
 
+Memograph writes use one durable job per non-empty video modality. Each request
+includes a deterministic idempotency key and canonical `owner_entity_id`;
+successful modality writes are checkpointed independently before another branch
+is attempted or retried.
+
 ## Health
 
 ### `GET /health`

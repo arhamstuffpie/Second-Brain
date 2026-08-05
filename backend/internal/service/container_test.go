@@ -117,7 +117,7 @@ func (stubVideoRepository) SaveVideoAnalysis(context.Context, VideoJob, VisualAn
 func (stubVideoRepository) SaveVideoEpisodes(context.Context, VideoJob, []VideoEpisodeDraft, int) error {
 	return nil
 }
-func (stubVideoRepository) CompleteVideoMemographEpisode(context.Context, VideoJob, json.RawMessage) error {
+func (stubVideoRepository) CompleteVideoMemographBranch(context.Context, VideoJob, json.RawMessage) error {
 	return nil
 }
 func (stubVideoRepository) RetryVideoJob(context.Context, VideoJob, string, time.Time, bool) error {

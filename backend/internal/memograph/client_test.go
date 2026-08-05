@@ -3,6 +3,7 @@ package memograph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -22,6 +23,9 @@ func TestInsertEpisodeUsesAPIKeyAndMergesCustomFields(t *testing.T) {
 		if got := request.Header.Get("X-Api-Key"); got != "mg_live_test" {
 			t.Fatalf("X-Api-Key = %q", got)
 		}
+		if got := request.Header.Get("Idempotency-Key"); got != "episode-key-1" {
+			t.Fatalf("Idempotency-Key = %q", got)
+		}
 		body, err := io.ReadAll(request.Body)
 		if err != nil {
 			t.Fatal(err)
@@ -33,6 +37,9 @@ func TestInsertEpisodeUsesAPIKeyAndMergesCustomFields(t *testing.T) {
 		if payload["confidence"] != 0.9 {
 			t.Fatalf("confidence = %#v", payload["confidence"])
 		}
+		if payload["idempotency_key"] != "episode-key-1" {
+			t.Fatalf("idempotency_key = %#v", payload["idempotency_key"])
+		}
 		meta := payload["meta"].(map[string]any)
 		if meta["group_id"] != "session-1" {
 			t.Fatalf("meta.group_id = %#v", meta["group_id"])
@@ -40,12 +47,88 @@ func TestInsertEpisodeUsesAPIKeyAndMergesCustomFields(t *testing.T) {
 		return `{"data":{"episode":{"uuid":"episode-1"}}}`
 	})
 	_, err := client.InsertEpisode(context.Background(), "memory-1", service.EpisodeInsertRequest{
-		Data:         "A said hello.",
-		Meta:         map[string]any{"group_id": "session-1"},
-		CustomFields: map[string]any{"confidence": 0.9},
+		Data:           "A said hello.",
+		Meta:           map[string]any{"group_id": "session-1"},
+		CustomFields:   map[string]any{"confidence": 0.9},
+		IdempotencyKey: "episode-key-1",
 	})
 	if err != nil {
 		t.Fatalf("InsertEpisode() error = %v", err)
+	}
+}
+
+func TestInsertEpisodeLimitsConcurrentWrites(t *testing.T) {
+	client := NewClient(config.MemographConfig{
+		BaseURL: "https://memograph.test", APIKey: "mg_live_test",
+		Timeout: time.Second, MaxConcurrentWrites: 1,
+	})
+	started := make(chan struct{}, 2)
+	release := make(chan struct{}, 2)
+	client.http = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		started <- struct{}{}
+		<-release
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: request,
+		}, nil
+	})}
+
+	errors := make(chan error, 2)
+	for index := 0; index < 2; index++ {
+		go func() {
+			_, err := client.InsertEpisode(context.Background(), "memory-1", service.EpisodeInsertRequest{
+				Data: "hello",
+			})
+			errors <- err
+		}()
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first Memograph write did not start")
+	}
+	select {
+	case <-started:
+		t.Fatal("second Memograph write started before the first released its slot")
+	case <-time.After(50 * time.Millisecond):
+	}
+	release <- struct{}{}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("second Memograph write did not start after the slot was released")
+	}
+	release <- struct{}{}
+	for index := 0; index < 2; index++ {
+		if err := <-errors; err != nil {
+			t.Fatalf("InsertEpisode() error = %v", err)
+		}
+	}
+}
+
+func TestInsertEpisodeHintsBackoffWhenPostgresConnectionsAreExhausted(t *testing.T) {
+	client := NewClient(config.MemographConfig{
+		BaseURL: "https://memograph.test", APIKey: "mg_live_test",
+		Timeout: time.Second, MaxConcurrentWrites: 1,
+	})
+	client.http = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":"FATAL: sorry, too many clients already (SQLSTATE 53300)"}`,
+			)),
+			Request: request,
+		}, nil
+	})}
+	_, err := client.InsertEpisode(context.Background(), "memory-1", service.EpisodeInsertRequest{
+		Data: "hello",
+	})
+	var responseErr *ResponseError
+	if !errors.As(err, &responseErr) {
+		t.Fatalf("InsertEpisode() error = %v, want ResponseError", err)
+	}
+	if responseErr.RetryDelay() != 30*time.Second {
+		t.Fatalf("RetryDelay() = %s, want 30s", responseErr.RetryDelay())
 	}
 }
 

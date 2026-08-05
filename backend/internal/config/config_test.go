@@ -86,6 +86,9 @@ func TestLoadUsesFallbackValues(t *testing.T) {
 	if cfg.Vision.Provider != "mock" || cfg.Vision.Model != "gpt-4.1-mini" {
 		t.Fatalf("Vision defaults = %+v", cfg.Vision)
 	}
+	if cfg.Memograph.MaxConcurrentWrites != 1 {
+		t.Fatalf("Memograph.MaxConcurrentWrites = %d, want 1", cfg.Memograph.MaxConcurrentWrites)
+	}
 }
 
 func TestLoadUsesJSONLoggingInProductionByDefault(t *testing.T) {
@@ -109,6 +112,7 @@ func TestLoadUsesConfiguredValues(t *testing.T) {
 	t.Setenv("APP_HTTP_PORT", "9090")
 	t.Setenv("APP_LOG_PRETTY", "true")
 	t.Setenv("APP_CORS_ALLOWED_ORIGINS", "https://one.example, https://two.example")
+	t.Setenv("APP_MEMOGRAPH_MAX_CONCURRENT_WRITES", "3")
 
 	cfg, err := Load()
 	if err != nil {
@@ -122,6 +126,9 @@ func TestLoadUsesConfiguredValues(t *testing.T) {
 	}
 	if len(cfg.CORS.AllowedOrigins) != 2 || cfg.CORS.AllowedOrigins[1] != "https://two.example" {
 		t.Fatalf("CORS.AllowedOrigins = %v", cfg.CORS.AllowedOrigins)
+	}
+	if cfg.Memograph.MaxConcurrentWrites != 3 {
+		t.Fatalf("Memograph.MaxConcurrentWrites = %d, want 3", cfg.Memograph.MaxConcurrentWrites)
 	}
 }
 

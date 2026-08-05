@@ -412,7 +412,7 @@ WITH candidate AS (
 	FROM target WHERE e.id = target.episode_id
 )
 SELECT target.id, target.kind, COALESCE(target.recording_id, ''),
-       COALESCE(target.episode_id, ''), r.owner_user_id,
+       COALESCE(target.episode_id, ''), target.source, r.owner_user_id,
        target.attempts, target.max_attempts,
        r.file_path, r.file_name, r.media_type, r.session_id, r.group_id, r.memory_id,
        r.device_id, COALESCE(NULLIF(e.location, ''), r.location),
@@ -430,7 +430,8 @@ LEFT JOIN video_episodes e ON e.id = target.episode_id`
 	var confidence sql.NullFloat64
 	err := r.db.QueryRowContext(ctx, query).Scan(
 		&job.ID, &job.Kind, &job.RecordingID, &job.EpisodeID,
-		&job.OwnerUserID, &job.Attempts, &job.MaxAttempts, &job.FilePath, &job.FileName,
+		&job.MemographSource, &job.OwnerUserID,
+		&job.Attempts, &job.MaxAttempts, &job.FilePath, &job.FileName,
 		&job.MediaType, &job.SessionID, &job.GroupID, &job.MemoryID,
 		&job.DeviceID, &job.Location, &job.ClientChunkID,
 		&job.StartOffset, &job.FrameInterval,
@@ -574,11 +575,25 @@ WITH episode_rows AS (
 	    speech_description = EXCLUDED.speech_description,
 	    confidence = EXCLUDED.confidence,
 	    visual_observations = EXCLUDED.visual_observations, updated_at = NOW()
-	RETURNING id
+	RETURNING id, description, visual_description, speech_description
+), memograph_branches AS (
+	SELECT inserted.id AS episode_id, branch.source
+	FROM inserted
+	CROSS JOIN LATERAL (VALUES
+		('visual', NULLIF(BTRIM(inserted.visual_description), '')),
+		('speech', NULLIF(BTRIM(inserted.speech_description), '')),
+		('legacy', CASE
+			WHEN BTRIM(inserted.visual_description) = ''
+			 AND BTRIM(inserted.speech_description) = ''
+			THEN NULLIF(BTRIM(inserted.description), '')
+			ELSE NULL
+		END)
+	) AS branch(source, data)
+	WHERE branch.data IS NOT NULL
 ), memograph_jobs AS (
-	INSERT INTO video_jobs (kind, episode_id, max_attempts)
-	SELECT 'memograph', id, $3 FROM inserted
-	ON CONFLICT (episode_id) WHERE kind = 'memograph' DO NOTHING
+	INSERT INTO video_jobs (kind, episode_id, source, max_attempts)
+	SELECT 'memograph', episode_id, source, $3 FROM memograph_branches
+	ON CONFLICT (episode_id, source) WHERE kind = 'memograph' DO NOTHING
 ), completed_job AS (
 	UPDATE video_jobs SET status = 'completed', locked_at = NULL, updated_at = NOW()
 	WHERE id = $4
@@ -593,31 +608,61 @@ WHERE id = $1`
 	return nil
 }
 
-func (r *videoRepository) CompleteVideoMemographEpisode(
+func (r *videoRepository) CompleteVideoMemographBranch(
 	ctx context.Context,
 	job service.VideoJob,
 	response json.RawMessage,
 ) error {
 	const query = `
-WITH completed_episode AS (
-	UPDATE video_episodes
-	SET status = 'completed', memograph_response = $2::jsonb,
-	    last_error = '', updated_at = NOW()
-	WHERE id = $1
-	RETURNING recording_id
-), completed_job AS (
+WITH completed_job AS (
 	UPDATE video_jobs SET status = 'completed', locked_at = NULL, updated_at = NOW()
-	WHERE id = $3
+	WHERE id = $1 AND episode_id = $2 AND source = $3
+	RETURNING episode_id
+), completed_episode AS (
+	UPDATE video_episodes e
+	SET memograph_response = COALESCE(e.memograph_response, '{}'::jsonb) ||
+	        jsonb_build_object($3, $4::jsonb),
+	    status = CASE
+	      WHEN EXISTS (
+		SELECT 1 FROM video_jobs failed
+		WHERE failed.episode_id = e.id AND failed.kind = 'memograph'
+		  AND failed.status = 'dead'
+	      ) THEN 'failed'
+	      WHEN NOT EXISTS (
+		SELECT 1 FROM video_jobs pending
+		WHERE pending.episode_id = e.id AND pending.kind = 'memograph'
+		  AND pending.id <> $1
+		  AND pending.status <> 'completed'
+	      ) THEN 'completed'
+	      ELSE 'queued'
+	    END,
+	    last_error = CASE WHEN EXISTS (
+		SELECT 1 FROM video_jobs failed
+		WHERE failed.episode_id = e.id AND failed.kind = 'memograph'
+		  AND failed.status = 'dead'
+	    ) THEN e.last_error ELSE '' END,
+	    updated_at = NOW()
+	FROM completed_job
+	WHERE e.id = completed_job.episode_id
+	RETURNING e.id, e.recording_id, e.status
 )
 UPDATE video_recordings r
-SET status = CASE WHEN NOT EXISTS (
+	SET status = CASE
+	  WHEN completed_episode.status = 'failed' THEN 'failed'
+	  WHEN completed_episode.status = 'completed' AND NOT EXISTS (
 		SELECT 1 FROM video_episodes e
-		WHERE e.recording_id = r.id AND e.id <> $1 AND e.status <> 'completed'
-	) THEN 'completed' ELSE 'memograph_pending' END,
-	last_error = '', updated_at = NOW()
-FROM completed_episode ce WHERE r.id = ce.recording_id`
-	if _, err := r.db.ExecContext(ctx, query, job.EpisodeID, []byte(response), job.ID); err != nil {
-		return fmt.Errorf("complete video Memograph episode: %w", err)
+		WHERE e.recording_id = r.id AND e.id <> completed_episode.id
+		  AND e.status <> 'completed'
+	  ) THEN 'completed'
+	  ELSE 'memograph_pending'
+	END,
+	last_error = CASE WHEN completed_episode.status = 'failed' THEN r.last_error ELSE '' END,
+	updated_at = NOW()
+FROM completed_episode WHERE r.id = completed_episode.recording_id`
+	if _, err := r.db.ExecContext(
+		ctx, query, job.ID, job.EpisodeID, job.MemographSource, []byte(response),
+	); err != nil {
+		return fmt.Errorf("complete video Memograph branch: %w", err)
 	}
 	return nil
 }
@@ -633,33 +678,43 @@ func (r *videoRepository) RetryVideoJob(
 	if dead {
 		jobStatus = "dead"
 	}
-	if _, err := r.db.ExecContext(ctx, `
-UPDATE video_jobs
-SET status = $2, run_at = $3, locked_at = NULL, last_error = $4, updated_at = NOW()
-WHERE id = $1`, job.ID, jobStatus, runAt, cause); err != nil {
-		return fmt.Errorf("retry video job: %w", err)
-	}
-
 	if job.Kind == "memograph" {
 		episodeStatus := "queued"
 		if dead {
 			episodeStatus = "failed"
 		}
-		if _, err := r.db.ExecContext(ctx, `
-UPDATE video_episodes SET status = $2, last_error = $3, updated_at = NOW()
-WHERE id = $1`, job.EpisodeID, episodeStatus, cause); err != nil {
-			return fmt.Errorf("update failed video episode: %w", err)
-		}
-		if dead {
-			if _, err := r.db.ExecContext(ctx, `
-UPDATE video_recordings r SET status = 'failed', last_error = $2, updated_at = NOW()
-FROM video_episodes e WHERE e.id = $1 AND r.id = e.recording_id`,
-				job.EpisodeID, cause,
-			); err != nil {
-				return fmt.Errorf("update failed video recording: %w", err)
-			}
+		const query = `
+WITH updated_job AS (
+	UPDATE video_jobs
+	SET status = $2, run_at = $3, locked_at = NULL,
+	    last_error = $4, updated_at = NOW()
+	WHERE id = $1 AND episode_id = $5
+	RETURNING episode_id
+), updated_episode AS (
+	UPDATE video_episodes e
+	SET status = $6, last_error = $4, updated_at = NOW()
+	FROM updated_job
+	WHERE e.id = updated_job.episode_id
+	RETURNING e.recording_id
+)
+UPDATE video_recordings r
+SET status = CASE WHEN $7 THEN 'failed' ELSE r.status END,
+	last_error = CASE WHEN $7 THEN $4 ELSE r.last_error END,
+	updated_at = NOW()
+FROM updated_episode WHERE r.id = updated_episode.recording_id`
+		if _, err := r.db.ExecContext(
+			ctx, query, job.ID, jobStatus, runAt, cause, job.EpisodeID,
+			episodeStatus, dead,
+		); err != nil {
+			return fmt.Errorf("retry video Memograph branch: %w", err)
 		}
 		return nil
+	}
+	if _, err := r.db.ExecContext(ctx, `
+UPDATE video_jobs
+SET status = $2, run_at = $3, locked_at = NULL, last_error = $4, updated_at = NOW()
+WHERE id = $1`, job.ID, jobStatus, runAt, cause); err != nil {
+		return fmt.Errorf("retry video job: %w", err)
 	}
 
 	componentColumn := map[string]string{

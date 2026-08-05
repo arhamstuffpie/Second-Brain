@@ -314,12 +314,16 @@ sent to the vision model. Videos without an audio track are valid and produce
 visual-only episodes.
 
 PostgreSQL queues `audio` and `visual` jobs together. A `merge` job is created
-exactly once after both branches complete, and every resulting episode receives
-its own `memograph` job. That job writes the visual summary and speech transcript
-to Memograph as separate concurrent API calls. The visual payload excludes
-objects and wrapper labels; the speech payload contains only speaker utterances.
-A visual-analysis retry therefore never reruns STT, and a Memograph retry never
-reruns either extraction branch.
+exactly once after both branches complete. Every resulting episode receives one
+durable Memograph job per non-empty visual or speech branch. Successful branches
+are checkpointed independently, so retrying a failed speech write never resends
+an already stored visual write. A shared, configurable write gate prevents the
+voice and video workers from exhausting a small Memograph PostgreSQL connection
+pool. Requests also carry deterministic idempotency keys. The visual payload
+excludes objects and wrapper labels; the speech payload includes a canonical
+account-owner identity and timestamped speaker utterances. A visual-analysis
+retry therefore never reruns STT, and a Memograph retry never reruns either
+extraction branch.
 
 ### Video API
 
@@ -444,6 +448,7 @@ APP_MEMOGRAPH_BASE_URL=https://your-memograph-host
 APP_MEMOGRAPH_API_KEY=mg_live_...
 APP_MEMOGRAPH_JWT=...
 APP_MEMOGRAPH_TIMEOUT=3m
+APP_MEMOGRAPH_MAX_CONCURRENT_WRITES=1
 ```
 
 See `backend/.env.example` for storage limits, frame interval, episode duration,

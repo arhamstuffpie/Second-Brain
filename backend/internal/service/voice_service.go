@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -467,7 +468,7 @@ func (s *voiceService) ProcessNextJob(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 	dead := job.Attempts >= job.MaxAttempts
-	delay := retryDelay(job.Attempts)
+	delay := retryDelayForError(err, job.Attempts)
 	retryCtx := ctx
 	var cancel context.CancelFunc
 	if ctx.Err() != nil {
@@ -539,6 +540,7 @@ func (s *voiceService) processMemograph(ctx context.Context, job VoiceJob) error
 		"other_utterance_count":   job.OtherUtteranceCount,
 		"unknown_utterance_count": job.UnknownUtteranceCount,
 	}
+	addOwnerIdentityMeta(meta, job.OwnerUserID)
 	if job.Location != "" {
 		meta["location"] = job.Location
 	}
@@ -549,8 +551,11 @@ func (s *voiceService) processMemograph(ctx context.Context, job VoiceJob) error
 	if job.Confidence != nil {
 		custom["confidence"] = *job.Confidence
 	}
+	idempotencyKey := memographIdempotencyKey(job.MemoryID, job.EpisodeID, "audio")
+	meta["idempotency_key"] = idempotencyKey
 	result, err := s.memograph.InsertEpisode(ctx, job.MemoryID, EpisodeInsertRequest{
-		Data: job.Description, Meta: meta, CustomFields: custom,
+		Data: ownerAwareMemographData(job.Description, job.OwnerUserID),
+		Meta: meta, CustomFields: custom, IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
 		return err
@@ -864,6 +869,17 @@ func retryDelay(attempt int) time.Duration {
 		seconds = 300
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func retryDelayForError(err error, attempt int) time.Duration {
+	delay := retryDelay(attempt)
+	var hinted interface{ RetryDelay() time.Duration }
+	if errors.As(err, &hinted) {
+		if hint := hinted.RetryDelay(); hint > delay {
+			return hint
+		}
+	}
+	return delay
 }
 
 func validateGraphConfig(config GraphConfig) error {

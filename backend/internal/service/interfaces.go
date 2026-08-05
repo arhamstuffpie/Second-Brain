@@ -82,7 +82,7 @@ type VideoRepository interface {
 	SaveVideoTranscript(ctx context.Context, job VideoJob, transcript Transcript, referenceIDs []string, provider, model string, maxAttempts int) error
 	SaveVideoAnalysis(ctx context.Context, job VideoJob, analysis VisualAnalysis, provider, model string, maxAttempts int) error
 	SaveVideoEpisodes(ctx context.Context, job VideoJob, episodes []VideoEpisodeDraft, maxAttempts int) error
-	CompleteVideoMemographEpisode(ctx context.Context, job VideoJob, response json.RawMessage) error
+	CompleteVideoMemographBranch(ctx context.Context, job VideoJob, response json.RawMessage) error
 	RetryVideoJob(ctx context.Context, job VideoJob, cause string, runAt time.Time, dead bool) error
 }
 
@@ -483,9 +483,10 @@ type MemoryCreateRequest struct {
 }
 
 type EpisodeInsertRequest struct {
-	Data         string         `json:"data"`
-	Meta         map[string]any `json:"meta"`
-	CustomFields map[string]any `json:"-"`
+	Data           string         `json:"data"`
+	Meta           map[string]any `json:"meta"`
+	CustomFields   map[string]any `json:"-"`
+	IdempotencyKey string         `json:"-"`
 }
 
 type MemorySearchRequest struct {

@@ -109,10 +109,11 @@ type VisionConfig struct {
 }
 
 type MemographConfig struct {
-	BaseURL string
-	APIKey  string
-	JWT     string
-	Timeout time.Duration
+	BaseURL             string
+	APIKey              string
+	JWT                 string
+	Timeout             time.Duration
+	MaxConcurrentWrites int
 }
 
 type WorkerConfig struct {
@@ -200,10 +201,11 @@ func Load() (Config, error) {
 			Timeout:  getEnvDuration("APP_VISION_TIMEOUT", 2*time.Minute),
 		},
 		Memograph: MemographConfig{
-			BaseURL: strings.TrimRight(GetEnv("APP_MEMOGRAPH_BASE_URL", GetEnv("MEMOGRAPH_BASE_URL", "")), "/"),
-			APIKey:  GetEnv("APP_MEMOGRAPH_API_KEY", GetEnv("MEMOGRAPH_API_KEY", "")),
-			JWT:     GetEnv("APP_MEMOGRAPH_JWT", GetEnv("MEMOGRAPH_JWT_TOKEN", "")),
-			Timeout: getEnvDuration("APP_MEMOGRAPH_TIMEOUT", 3*time.Minute),
+			BaseURL:             strings.TrimRight(GetEnv("APP_MEMOGRAPH_BASE_URL", GetEnv("MEMOGRAPH_BASE_URL", "")), "/"),
+			APIKey:              GetEnv("APP_MEMOGRAPH_API_KEY", GetEnv("MEMOGRAPH_API_KEY", "")),
+			JWT:                 GetEnv("APP_MEMOGRAPH_JWT", GetEnv("MEMOGRAPH_JWT_TOKEN", "")),
+			Timeout:             getEnvDuration("APP_MEMOGRAPH_TIMEOUT", 3*time.Minute),
+			MaxConcurrentWrites: GetEnvInt("APP_MEMOGRAPH_MAX_CONCURRENT_WRITES", 1),
 		},
 		Worker: WorkerConfig{
 			Enabled:      GetEnvBool("APP_VOICE_WORKER_ENABLED", true),
@@ -330,8 +332,8 @@ func (c Config) Validate() error {
 	if c.Memograph.BaseURL != "" && c.Memograph.APIKey == "" && c.Memograph.JWT == "" {
 		return fmt.Errorf("APP_MEMOGRAPH_API_KEY or APP_MEMOGRAPH_JWT is required when Memograph is configured")
 	}
-	if c.Memograph.Timeout <= 0 {
-		return fmt.Errorf("APP_MEMOGRAPH_TIMEOUT must be positive")
+	if c.Memograph.Timeout <= 0 || c.Memograph.MaxConcurrentWrites < 1 {
+		return fmt.Errorf("APP_MEMOGRAPH_TIMEOUT and APP_MEMOGRAPH_MAX_CONCURRENT_WRITES must be positive")
 	}
 	return nil
 }

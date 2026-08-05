@@ -371,51 +371,44 @@ func TestVideoAudioJobReportsAudioWithNoDetectedSpeech(t *testing.T) {
 
 type memographCompletionRepository struct {
 	stubVideoRepository
+	job      VideoJob
 	response json.RawMessage
+	calls    int
 }
 
-func (r *memographCompletionRepository) CompleteVideoMemographEpisode(
+func (r *memographCompletionRepository) CompleteVideoMemographBranch(
 	_ context.Context,
-	_ VideoJob,
+	job VideoJob,
 	response json.RawMessage,
 ) error {
+	r.job = job
 	r.response = response
+	r.calls++
 	return nil
 }
 
-type parallelMemographClient struct {
+type captureMemographClient struct {
 	stubMemographClient
-	started  chan struct{}
-	release  chan struct{}
-	requests chan EpisodeInsertRequest
+	requests []EpisodeInsertRequest
+	err      error
 }
 
-func (c *parallelMemographClient) InsertEpisode(
-	ctx context.Context,
+func (c *captureMemographClient) InsertEpisode(
+	_ context.Context,
 	_ string,
 	request EpisodeInsertRequest,
 ) (json.RawMessage, error) {
-	select {
-	case c.started <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	c.requests = append(c.requests, request)
+	if c.err != nil {
+		return nil, c.err
 	}
-	select {
-	case <-c.release:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	c.requests <- request
 	source, _ := request.Meta["source"].(string)
 	return json.RawMessage(`{"source":"` + source + `"}`), nil
 }
 
-func TestVideoMemographWritesVisualAndSpeechInParallel(t *testing.T) {
+func TestVideoMemographWritesOneDurableBranchWithCanonicalOwner(t *testing.T) {
 	repository := &memographCompletionRepository{}
-	client := &parallelMemographClient{
-		started: make(chan struct{}, 2), release: make(chan struct{}),
-		requests: make(chan EpisodeInsertRequest, 2),
-	}
+	client := &captureMemographClient{}
 	video := newVideoService(
 		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
 		stubAudioStore{}, stubAudioStore{}, stubMediaExtractor{},
@@ -426,56 +419,66 @@ func TestVideoMemographWritesVisualAndSpeechInParallel(t *testing.T) {
 		config.WorkerConfig{MaxAttempts: 5},
 	)
 
-	done := make(chan error, 1)
-	go func() {
-		done <- video.processVideoMemograph(context.Background(), VideoJob{
-			MemoryID: "memory-1", SessionID: "session-1", GroupID: "group-1",
-			VisualDescription: "View over a lake with a dock.",
-			SpeechDescription: "A Said : you",
-			EpisodeStart:      30, EpisodeEnd: 60,
-		})
-	}()
-
-	for index := 0; index < 2; index++ {
-		select {
-		case <-client.started:
-		case <-time.After(time.Second):
-			t.Fatal("visual and speech Memograph calls did not overlap")
-		}
+	job := VideoJob{
+		ID: 12, EpisodeID: "episode-1", MemographSource: "speech",
+		OwnerUserID: "user-1", MemoryID: "memory-1",
+		SessionID: "session-1", GroupID: "group-1",
+		VisualDescription: "View over a lake with a dock.",
+		SpeechDescription: "[30.00s-31.00s] Owner: I prefer tea.",
+		EpisodeStart:      30, EpisodeEnd: 60,
 	}
-	close(client.release)
-	if err := <-done; err != nil {
+	if err := video.processVideoMemograph(context.Background(), job); err != nil {
 		t.Fatalf("processVideoMemograph() error = %v", err)
 	}
+	if len(client.requests) != 1 {
+		t.Fatalf("Memograph requests = %d, want one branch", len(client.requests))
+	}
+	request := client.requests[0]
+	if request.Meta["source"] != "speech" ||
+		request.Meta["owner_entity_id"] != "account-owner:user-1" {
+		t.Fatalf("Memograph metadata = %+v", request.Meta)
+	}
+	if request.IdempotencyKey == "" || request.Meta["idempotency_key"] != request.IdempotencyKey {
+		t.Fatalf("idempotency key/meta = %q/%+v", request.IdempotencyKey, request.Meta)
+	}
+	var payload struct {
+		Schema         string `json:"schema"`
+		CanonicalOwner struct {
+			EntityID string `json:"entity_id"`
+		} `json:"canonical_owner"`
+		Episode string `json:"episode"`
+	}
+	if err := json.Unmarshal([]byte(request.Data), &payload); err != nil {
+		t.Fatalf("decode owner-aware data %q: %v", request.Data, err)
+	}
+	if payload.Schema != ownerAwareMemorySchema ||
+		payload.CanonicalOwner.EntityID != "account-owner:user-1" ||
+		!strings.Contains(payload.Episode, "Owner: I prefer tea") {
+		t.Fatalf("owner-aware payload = %+v", payload)
+	}
+	if repository.calls != 1 || repository.job.MemographSource != "speech" {
+		t.Fatalf("branch completion = %d/%+v", repository.calls, repository.job)
+	}
+}
 
-	dataBySource := make(map[string]string, 2)
-	for index := 0; index < 2; index++ {
-		request := <-client.requests
-		source, _ := request.Meta["source"].(string)
-		dataBySource[source] = request.Data
+func TestVideoMemographFailureDoesNotCompleteBranch(t *testing.T) {
+	repository := &memographCompletionRepository{}
+	client := &captureMemographClient{err: errors.New("database connections exhausted")}
+	video := newVideoService(
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, stubAudioStore{}, stubMediaExtractor{},
+		stubVisualAnalyzer{}, client,
+		config.VideoConfig{}, config.WorkerConfig{MaxAttempts: 5},
+	)
+	err := video.processVideoMemograph(context.Background(), VideoJob{
+		ID: 13, EpisodeID: "episode-1", MemographSource: "visual",
+		MemoryID: "memory-1", VisualDescription: "A lake is visible.",
+	})
+	if err == nil || !strings.Contains(err.Error(), "database connections exhausted") {
+		t.Fatalf("processVideoMemograph() error = %v", err)
 	}
-	if dataBySource["visual"] != "View over a lake with a dock." ||
-		dataBySource["speech"] != "A Said : you" {
-		t.Fatalf("Memograph branch data = %+v", dataBySource)
-	}
-	for _, data := range dataBySource {
-		for _, forbidden := range []string{
-			"Audio and video memory from session",
-			"Visible context:",
-			"Objects visible:",
-			"Speech:",
-		} {
-			if strings.Contains(data, forbidden) {
-				t.Fatalf("Memograph data %q contains %q", data, forbidden)
-			}
-		}
-	}
-	var responses map[string]json.RawMessage
-	if err := json.Unmarshal(repository.response, &responses); err != nil {
-		t.Fatalf("combined Memograph response = %s: %v", repository.response, err)
-	}
-	if len(responses) != 2 {
-		t.Fatalf("combined Memograph responses = %s", repository.response)
+	if len(client.requests) != 1 || repository.calls != 0 {
+		t.Fatalf("requests/completions = %d/%d", len(client.requests), repository.calls)
 	}
 }
 

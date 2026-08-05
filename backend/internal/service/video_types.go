@@ -204,6 +204,7 @@ type VideoJob struct {
 	RecordingID       string
 	OwnerUserID       string
 	EpisodeID         string
+	MemographSource   string
 	Attempts          int
 	MaxAttempts       int
 	FilePath          string
