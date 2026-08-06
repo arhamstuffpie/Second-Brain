@@ -13,6 +13,9 @@ import (
 )
 
 type VoiceHandler interface {
+	EnrollVoice(c *gin.Context)
+	ListVoiceEnrollments(c *gin.Context)
+	DeleteVoiceEnrollment(c *gin.Context)
 	Ingest(c *gin.Context)
 	IngestChunk(c *gin.Context)
 	GetRecording(c *gin.Context)
@@ -28,15 +31,92 @@ type VoiceHandler interface {
 }
 
 type voiceHandler struct {
-	service        service.VoiceService
-	maxUploadBytes int64
+	service                  service.VoiceService
+	maxUploadBytes           int64
+	maxEnrollmentUploadBytes int64
 }
 
-func newVoiceHandler(voiceService service.VoiceService, maxUploadBytes int64) *voiceHandler {
+func newVoiceHandler(
+	voiceService service.VoiceService,
+	maxUploadBytes, maxEnrollmentUploadBytes int64,
+) *voiceHandler {
 	if maxUploadBytes < 1 {
 		maxUploadBytes = 25 << 20
 	}
-	return &voiceHandler{service: voiceService, maxUploadBytes: maxUploadBytes}
+	if maxEnrollmentUploadBytes < 1 {
+		maxEnrollmentUploadBytes = 10 << 20
+	}
+	return &voiceHandler{
+		service: voiceService, maxUploadBytes: maxUploadBytes,
+		maxEnrollmentUploadBytes: maxEnrollmentUploadBytes,
+	}
+}
+
+func (h *voiceHandler) EnrollVoice(c *gin.Context) {
+	principal, ok := utils.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required")
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(
+		c.Writer, c.Request.Body, h.maxEnrollmentUploadBytes+(1<<20),
+	)
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "request body too large") {
+			response.Error(c, http.StatusRequestEntityTooLarge, "UPLOAD_TOO_LARGE", "voice sample exceeds the configured limit")
+			return
+		}
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "multipart field file is required")
+		return
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "voice sample could not be opened")
+		return
+	}
+	defer file.Close()
+	result, err := h.service.EnrollVoice(c.Request.Context(), service.VoiceEnrollmentInput{
+		OwnerUserID: principal.Subject, FileName: fileHeader.Filename,
+		MediaType: fileHeader.Header.Get("Content-Type"), Content: file,
+	})
+	if err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	response.Success(c, http.StatusCreated, result, "owner voice sample enrolled")
+}
+
+func (h *voiceHandler) ListVoiceEnrollments(c *gin.Context) {
+	principal, ok := utils.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required")
+		return
+	}
+	result, err := h.service.ListVoiceEnrollments(c.Request.Context(), principal.Subject)
+	if err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, result, "owner voice samples")
+}
+
+func (h *voiceHandler) DeleteVoiceEnrollment(c *gin.Context) {
+	principal, ok := utils.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required")
+		return
+	}
+	if err := h.service.DeleteVoiceEnrollment(
+		c.Request.Context(), c.Param("sample_id"), principal.Subject,
+	); err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, nil, "owner voice sample deleted")
 }
 
 func (h *voiceHandler) Ingest(c *gin.Context) {

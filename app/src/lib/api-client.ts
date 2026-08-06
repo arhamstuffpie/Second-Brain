@@ -9,6 +9,8 @@ import type {
   MemoryAnswerStreamUsage,
   MemoryCreateRequest,
   MemorySearchRequest,
+  ModelProfile,
+  ModelProfileInput,
   RealtimeVideoSession,
   RealtimeVideoSessionDetail,
   RealtimeVoiceSession,
@@ -21,6 +23,7 @@ import type {
   VideoRecording,
   VideoRecordingDetail,
   VoiceChunkUploadInput,
+  VoiceEnrollmentSample,
   VoiceRecording,
   VoiceRecordingDetail,
 } from '@/types/api';
@@ -30,7 +33,7 @@ import { randomUUID } from 'expo-crypto';
 import { ServerSentEventParser, type ServerSentEvent } from '@/lib/sse';
 
 type RequestOptions = {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   form?: FormData;
   authenticated?: boolean;
@@ -353,7 +356,41 @@ export class ApiClient {
     return this.request<{ user_id: string }>('/api/v1/secure');
   }
 
+  modelProfiles = {
+    transcription: () =>
+      this.request<ModelProfile>('/api/v1/model-profiles/transcription'),
+
+    saveTranscription: (input: ModelProfileInput) =>
+      this.request<ModelProfile>('/api/v1/model-profiles/transcription', {
+        method: 'PUT',
+        body: input,
+      }),
+
+    resetTranscription: () =>
+      this.request<ModelProfile>('/api/v1/model-profiles/transcription', {
+        method: 'DELETE',
+      }),
+  };
+
   voice = {
+    listEnrollmentSamples: () =>
+      this.request<VoiceEnrollmentSample[]>('/api/v1/voice/enrollments/samples'),
+
+    enrollSample: (file: UploadFile) => {
+      const form = new FormData();
+      appendFile(form, file);
+      return this.request<VoiceEnrollmentSample>('/api/v1/voice/enrollments/samples', {
+        method: 'POST',
+        form,
+      });
+    },
+
+    deleteEnrollmentSample: (sampleId: string) =>
+      this.request<null>(
+        `/api/v1/voice/enrollments/samples/${encodeURIComponent(sampleId)}`,
+        { method: 'DELETE' },
+      ),
+
     ingestRecording: (input: RecordingUploadInput) =>
       this.request<VoiceRecording>('/api/v1/voice/recordings', {
         method: 'POST',

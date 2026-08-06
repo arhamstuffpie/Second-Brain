@@ -42,11 +42,14 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 	}
 	repository := newVideoRepository(baseRepository)
 	session, err := repository.CreateVideoRealtimeSession(ctx, service.StartVideoRealtimeSessionInput{
-		OwnerUserID: ownerID, MemoryID: "memory-1", GroupID: "group-1",
+		OwnerUserID: ownerID, MemoryID: "memory-1",
 		ChunkDurationSeconds: 30, FrameIntervalSeconds: 5,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if session.GroupID != "account-owner:"+ownerID {
+		t.Fatalf("default graph group = %q", session.GroupID)
 	}
 	recording, err := repository.CreateRealtimeVideoChunk(
 		ctx,
@@ -81,7 +84,7 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 				service.Transcript{Segments: []service.TranscriptSegment{{
 					StartTime: 0, EndTime: 2, Speaker: "A", Text: "Hello",
 				}}},
-				"test", "test", 3,
+				[]string{"sample-1"}, "test", "test", 3,
 			)
 		case "visual":
 			err = repository.SaveVideoAnalysis(
@@ -117,18 +120,25 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 		t.Fatal(err)
 	}
 
-	memographJob, found, err := repository.ClaimVideoJob(ctx)
-	if err != nil || !found || memographJob.Kind != "memograph" {
-		t.Fatalf("memograph job = %+v, %t, %v", memographJob, found, err)
+	sources := make(map[string]bool, 2)
+	for index := 0; index < 2; index++ {
+		memographJob, found, claimErr := repository.ClaimVideoJob(ctx)
+		if claimErr != nil || !found || memographJob.Kind != "memograph" {
+			t.Fatalf("memograph job %d = %+v, %t, %v", index, memographJob, found, claimErr)
+		}
+		if memographJob.VisualDescription != "A person was visible." ||
+			memographJob.SpeechDescription != "A Said : Hello" {
+			t.Fatalf("Memograph branch descriptions = %+v", memographJob)
+		}
+		sources[memographJob.MemographSource] = true
+		if err := repository.CompleteVideoMemographBranch(
+			ctx, memographJob, json.RawMessage(`{"ok":true}`),
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if memographJob.VisualDescription != "A person was visible." ||
-		memographJob.SpeechDescription != "A Said : Hello" {
-		t.Fatalf("Memograph branch descriptions = %+v", memographJob)
-	}
-	if err := repository.CompleteVideoMemographEpisode(
-		ctx, memographJob, json.RawMessage(`{"ok":true}`),
-	); err != nil {
-		t.Fatal(err)
+	if !sources["visual"] || !sources["speech"] {
+		t.Fatalf("Memograph sources = %+v", sources)
 	}
 	detail, err := repository.GetVideoRecording(ctx, recording.ID, ownerID)
 	if err != nil {
@@ -137,6 +147,9 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 	if detail.Status != "completed" || len(detail.Episodes) != 1 ||
 		detail.Episodes[0].Status != "completed" {
 		t.Fatalf("recording detail = %+v", detail)
+	}
+	if len(detail.SpeakerReferenceIDs) != 1 || detail.SpeakerReferenceIDs[0] != "sample-1" {
+		t.Fatalf("speaker reference IDs = %+v", detail.SpeakerReferenceIDs)
 	}
 	if detail.STTProvider != "test" || detail.STTModel != "test" ||
 		detail.VisualProvider != "test" || detail.VisualModel != "test" {

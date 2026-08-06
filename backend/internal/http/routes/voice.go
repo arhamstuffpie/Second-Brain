@@ -8,6 +8,10 @@ import (
 func registerVoice(router *gin.RouterGroup, voice handler.VoiceHandler) {
 	voiceRoutes := router.Group("/voice")
 
+	voiceRoutes.POST("/enrollments/samples", voice.EnrollVoice)
+	voiceRoutes.GET("/enrollments/samples", voice.ListVoiceEnrollments)
+	voiceRoutes.DELETE("/enrollments/samples/:sample_id", voice.DeleteVoiceEnrollment)
+
 	// POST /api/v1/voice/recordings
 	// Authenticated multipart/form-data upload. Fields: file, session_id and
 	// memory_id are required; group_id, device_id, location, start_time and
@@ -16,8 +20,8 @@ func registerVoice(router *gin.RouterGroup, voice handler.VoiceHandler) {
 
 	// POST /api/v1/voice/chunks
 	// Uses the same multipart contract and processing path as /recordings. This
-	// non-realtime route currently changes only the success message; it does not
-	// accept chunk_index or provide chunk idempotency.
+	// legacy non-realtime route creates a closed standalone episode batch; it
+	// does not accept chunk_index, provide idempotency, or assemble across calls.
 	voiceRoutes.POST("/chunks", voice.IngestChunk)
 
 	// GET /api/v1/voice/recordings/:recording_id

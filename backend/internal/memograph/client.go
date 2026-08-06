@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/arham/ai-second-brain/internal/config"
 	"github.com/arham/ai-second-brain/internal/service"
@@ -17,18 +18,36 @@ import (
 
 // Client is the single thin wrapper around Memograph's HTTP API.
 type Client struct {
-	baseURL string
-	apiKey  string
-	jwt     string
-	http    *http.Client
+	baseURL   string
+	apiKey    string
+	jwt       string
+	http      *http.Client
+	writeGate chan struct{}
 }
 
+type ResponseError struct {
+	StatusCode int
+	Message    string
+	retryDelay time.Duration
+}
+
+func (e *ResponseError) Error() string {
+	return fmt.Sprintf("Memograph returned %d: %s", e.StatusCode, e.Message)
+}
+
+func (e *ResponseError) RetryDelay() time.Duration { return e.retryDelay }
+
 func NewClient(cfg config.MemographConfig) *Client {
+	maxConcurrentWrites := cfg.MaxConcurrentWrites
+	if maxConcurrentWrites < 1 {
+		maxConcurrentWrites = 1
+	}
 	return &Client{
-		baseURL: strings.TrimRight(cfg.BaseURL, "/"),
-		apiKey:  cfg.APIKey,
-		jwt:     cfg.JWT,
-		http:    &http.Client{Timeout: cfg.Timeout},
+		baseURL:   strings.TrimRight(cfg.BaseURL, "/"),
+		apiKey:    cfg.APIKey,
+		jwt:       cfg.JWT,
+		http:      &http.Client{Timeout: cfg.Timeout},
+		writeGate: make(chan struct{}, maxConcurrentWrites),
 	}
 }
 
@@ -40,16 +59,31 @@ func (c *Client) CreateMemory(ctx context.Context, projectID string, request ser
 }
 
 func (c *Client) InsertEpisode(ctx context.Context, memoryID string, request service.EpisodeInsertRequest) (json.RawMessage, error) {
+	select {
+	case c.writeGate <- struct{}{}:
+		defer func() { <-c.writeGate }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	payload := map[string]any{"data": request.Data, "meta": request.Meta}
+	if request.StructuredGraph != nil {
+		payload["structured_graph"] = request.StructuredGraph
+	}
+	if idempotencyKey := strings.TrimSpace(request.IdempotencyKey); idempotencyKey != "" {
+		payload["idempotency_key"] = idempotencyKey
+	}
 	for key, value := range request.CustomFields {
 		switch strings.ToLower(key) {
-		case "data", "meta", "graph_config", "image_url", "document_s3_urls":
+		case "data", "meta", "graph_config", "structured_graph", "image_url", "document_s3_urls", "idempotency_key":
 			continue
 		default:
 			payload[key] = value
 		}
 	}
-	return c.doJSON(ctx, http.MethodPost, memoryPath(memoryID)+"/create", payload)
+	return c.doJSONWithIdempotency(
+		ctx, http.MethodPost, memoryPath(memoryID)+"/create", payload,
+		request.IdempotencyKey,
+	)
 }
 
 func (c *Client) Search(ctx context.Context, memoryID string, request service.MemorySearchRequest) (json.RawMessage, error) {
@@ -128,6 +162,15 @@ func (c *Client) GetGraph(ctx context.Context, memoryID, groupID string) (json.R
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, payload any) (json.RawMessage, error) {
+	return c.doJSONWithIdempotency(ctx, method, path, payload, "")
+}
+
+func (c *Client) doJSONWithIdempotency(
+	ctx context.Context,
+	method, path string,
+	payload any,
+	idempotencyKey string,
+) (json.RawMessage, error) {
 	if c.baseURL == "" {
 		return nil, fmt.Errorf("Memograph is not configured")
 	}
@@ -146,6 +189,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any) (
 	if payload != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
+	if idempotencyKey = strings.TrimSpace(idempotencyKey); idempotencyKey != "" {
+		request.Header.Set("Idempotency-Key", idempotencyKey)
+	}
 	if err := c.authorize(request); err != nil {
 		return nil, err
 	}
@@ -163,7 +209,14 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any) (
 		if len(message) > 1000 {
 			message = message[:1000]
 		}
-		return nil, fmt.Errorf("Memograph returned %d: %s", response.StatusCode, message)
+		retryDelay := time.Duration(0)
+		if strings.Contains(strings.ToLower(message), "too many clients already") ||
+			strings.Contains(message, "SQLSTATE 53300") {
+			retryDelay = 30 * time.Second
+		}
+		return nil, &ResponseError{
+			StatusCode: response.StatusCode, Message: message, retryDelay: retryDelay,
+		}
 	}
 	if len(responseBody) == 0 {
 		return json.RawMessage(`{}`), nil

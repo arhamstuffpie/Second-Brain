@@ -40,6 +40,12 @@
         }
       ],
       [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Memory One to record a short voice sample so it can recognize your speech."
+        }
+      ],
+      [
         "expo-secure-store",
         {
           "configureAndroidBackup": true

@@ -14,11 +14,19 @@ import {
   StatusPill,
 } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/theme';
+import { VoiceSampleRecorder } from '@/features/voice-enrollment/voice-sample-recorder';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
 import type { AppSettings } from '@/types/app';
 import { useTheme } from '@/hooks/use-theme';
+
+type TranscriptionModelDraft = {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+};
 
 function ToggleRow({
   label,
@@ -39,6 +47,10 @@ function ToggleRow({
         <Body muted>{description}</Body>
       </View>
       <Switch
+        accessibilityLabel={label}
+        accessibilityHint={description}
+        accessibilityRole="switch"
+        accessibilityState={{ checked: value }}
         value={value}
         onValueChange={onChange}
         trackColor={{ false: theme.backgroundElement, true: theme.accentSoft }}
@@ -50,19 +62,57 @@ function ToggleRow({
 
 export function SettingsScreen() {
   const theme = useTheme();
-  const { settings, auth, network, power, updateSettings, checkHealth, logout, showError } = useApp();
+  const {
+    settings,
+    auth,
+    network,
+    power,
+    voiceEnrollment,
+    transcriptionModel,
+    updateSettings,
+    checkHealth,
+    enrollOwnerVoice,
+    replaceOwnerVoice,
+    deleteOwnerVoice,
+    refreshVoiceEnrollment,
+    refreshTranscriptionModel,
+    saveTranscriptionModel,
+    resetTranscriptionModel,
+    logout,
+    showError,
+  } = useApp();
   const [draft, setDraft] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [health, setHealth] = useState<'idle' | 'checking' | 'healthy' | 'failed'>('idle');
   const [healthError, setHealthError] = useState('');
+  const [editingVoice, setEditingVoice] = useState(false);
+  const [deletingVoice, setDeletingVoice] = useState<string | null>(null);
+  const [modelDraft, setModelDraft] = useState<TranscriptionModelDraft>({
+    provider: '',
+    baseUrl: '',
+    model: '',
+    apiKey: '',
+  });
+  const [modelSaving, setModelSaving] = useState(false);
+  const [modelError, setModelError] = useState('');
   const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('Your preferences have been saved.');
   const reducedMotion = useReducedMotion();
   const snackbarOpacity = useRef(new Animated.Value(0)).current;
   const snackbarOffset = useRef(new Animated.Value(12)).current;
   const snackbarTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => setDraft(settings), [settings]);
+  useEffect(() => {
+    if (!transcriptionModel.profile) return;
+    setModelDraft({
+      provider: transcriptionModel.profile.provider,
+      baseUrl: transcriptionModel.profile.base_url,
+      model: transcriptionModel.profile.model,
+      apiKey: '',
+    });
+  }, [transcriptionModel.profile]);
   useEffect(
     () => () => {
       if (snackbarTimer.current) clearTimeout(snackbarTimer.current);
@@ -74,9 +124,10 @@ export function SettingsScreen() {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
-  function showSavedSnackbar() {
+  function showSavedSnackbar(message = 'Your preferences have been saved.') {
     if (snackbarTimer.current) clearTimeout(snackbarTimer.current);
     setSnackbarVisible(true);
+    setSnackbarMessage(message);
     if (reducedMotion) {
       snackbarOpacity.setValue(1);
       snackbarOffset.setValue(0);
@@ -141,13 +192,104 @@ export function SettingsScreen() {
     }
   }
 
+  async function removeVoiceSample(sampleId: string) {
+    setDeletingVoice(sampleId);
+    try {
+      await deleteOwnerVoice(sampleId);
+    } catch (error) {
+      const message = getReadableError(error, 'backend');
+      showError(message);
+    } finally {
+      setDeletingVoice(null);
+    }
+  }
+
+  function patchModel(key: keyof TranscriptionModelDraft, value: string) {
+    setModelError('');
+    setModelDraft((current) => ({
+      ...current,
+      [key]: value,
+      ...(key === 'provider' && value.trim().toLowerCase() === 'mock' ? { apiKey: '' } : {}),
+    }));
+  }
+
+  async function saveModel() {
+    setModelError('');
+    const provider = modelDraft.provider.trim().toLowerCase();
+    const model = modelDraft.model.trim();
+    const baseUrl = modelDraft.baseUrl.trim().replace(/\/+$/, '');
+    if (!provider) {
+      setModelError('Enter a provider name.');
+      return;
+    }
+    if (!model) {
+      setModelError('Enter the exact transcription model name.');
+      return;
+    }
+    if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
+      setModelError('Enter a complete http:// or https:// provider base URL.');
+      return;
+    }
+    if (
+      provider !== 'mock' &&
+      !modelDraft.apiKey.trim() &&
+      !hasSavedModelKey
+    ) {
+      setModelError('Enter an API key for this provider.');
+      return;
+    }
+    setModelSaving(true);
+    try {
+      const profile = await saveTranscriptionModel({
+        provider,
+        base_url: baseUrl,
+        model,
+        api_key: modelDraft.apiKey.trim() || undefined,
+      });
+      setModelDraft({
+        provider: profile.provider,
+        baseUrl: profile.base_url,
+        model: profile.model,
+        apiKey: '',
+      });
+      showSavedSnackbar('Transcription model saved. Queued audio will use it when processed.');
+    } catch (error) {
+      const message = getReadableError(error, 'backend');
+      setModelError(message);
+      showError(message);
+    } finally {
+      setModelSaving(false);
+    }
+  }
+
+  async function resetModel() {
+    setModelSaving(true);
+    setModelError('');
+    try {
+      await resetTranscriptionModel();
+      showSavedSnackbar('Server transcription model restored.');
+    } catch (error) {
+      const message = getReadableError(error, 'backend');
+      setModelError(message);
+      showError(message);
+    } finally {
+      setModelSaving(false);
+    }
+  }
+
+  const modelProvider = modelDraft.provider.trim().toLowerCase();
+  const hasSavedModelKey =
+    transcriptionModel.profile?.source === 'account' &&
+    transcriptionModel.profile.provider === modelProvider &&
+    transcriptionModel.profile.api_key_configured;
+
   return (
     <View style={styles.root}>
       <Screen contentStyle={styles.screen}>
       <PageHeader
         eyebrow="PREFERENCES"
         title="Settings"
-        subtitle="Manage capture quality, network use, and your Memograph destination."
+        subtitle="Manage transcription, owner voice recognition, capture quality, and your memory destination."
         action={
           <StatusPill
             label={network.online ? network.type.toLowerCase() : 'offline'}
@@ -155,6 +297,244 @@ export function SettingsScreen() {
           />
         }
       />
+
+      <Card>
+        <View style={styles.voiceHeader}>
+          <View style={styles.voiceHeaderCopy}>
+            <SectionLabel>Owner voice</SectionLabel>
+            <Body muted>
+              Owner recognition keeps other people&apos;s statements as context without turning
+              them into facts about you.
+            </Body>
+          </View>
+          {voiceEnrollment.status === 'enrolled' ? (
+            <StatusPill label="active" tone="success" />
+          ) : voiceEnrollment.status === 'checking' || voiceEnrollment.status === 'idle' ? (
+            <StatusPill label="checking" tone="live" />
+          ) : (
+            <StatusPill label="setup needed" tone="warning" />
+          )}
+        </View>
+
+        {voiceEnrollment.status === 'checking' || voiceEnrollment.status === 'idle' ? (
+          <Body muted>Checking this account&apos;s enrolled voice samples…</Body>
+        ) : voiceEnrollment.status === 'error' ? (
+          <View style={styles.voiceActions}>
+            <ErrorNotice
+              title="Could not check owner voice"
+              message={voiceEnrollment.error ?? 'The backend could not be reached.'}
+            />
+            <Button
+              label="Try again"
+              variant="secondary"
+              onPress={() => void refreshVoiceEnrollment()}
+            />
+          </View>
+        ) : voiceEnrollment.status === 'required' ? (
+          <View style={styles.voiceActions}>
+            <ErrorNotice
+              title="Owner voice is not configured"
+              message="Record a short sample so future conversations can identify your speech. Until then, every speaker remains unknown."
+            />
+            {editingVoice ? (
+              <VoiceSampleRecorder
+                onSubmit={enrollOwnerVoice}
+                onComplete={() => setEditingVoice(false)}
+                onCancel={() => setEditingVoice(false)}
+              />
+            ) : (
+              <Button label="Add my voice" onPress={() => setEditingVoice(true)} />
+            )}
+          </View>
+        ) : (
+          <View style={styles.voiceActions}>
+            {voiceEnrollment.samples.map((sample, index) => (
+              <View
+                key={sample.id}
+                style={[styles.voiceSample, { borderTopColor: theme.border }]}>
+                <View style={styles.voiceSampleCopy}>
+                  <Text style={[styles.voiceSampleTitle, { color: theme.text }]}>
+                    Voice sample {index + 1}
+                  </Text>
+                  <Body muted>
+                    {sample.duration_seconds.toFixed(1)} sec · saved{' '}
+                    {new Date(sample.created_at).toLocaleDateString()}
+                  </Body>
+                </View>
+                <Button
+                  label={deletingVoice === sample.id ? 'Removing…' : 'Remove'}
+                  variant="danger"
+                  compact
+                  disabled={deletingVoice !== null || editingVoice}
+                  onPress={() =>
+                    Alert.alert(
+                      'Remove voice sample?',
+                      voiceEnrollment.samples.length === 1
+                        ? 'Owner recognition will be turned off until you add another sample.'
+                        : 'This reference will no longer be used for owner recognition.',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Remove',
+                          style: 'destructive',
+                          onPress: () => void removeVoiceSample(sample.id),
+                        },
+                      ],
+                    )
+                  }
+                />
+              </View>
+            ))}
+            {editingVoice ? (
+              <View style={[styles.replacement, { borderTopColor: theme.border }]}>
+                <Body muted>
+                  The current sample stays active until the replacement uploads successfully.
+                </Body>
+                <VoiceSampleRecorder
+                  onSubmit={replaceOwnerVoice}
+                  submitLabel="Use as replacement"
+                  onComplete={() => setEditingVoice(false)}
+                  onCancel={() => setEditingVoice(false)}
+                />
+              </View>
+            ) : (
+              <Button
+                label="Replace voice sample"
+                variant="secondary"
+                onPress={() => setEditingVoice(true)}
+              />
+            )}
+          </View>
+        )}
+      </Card>
+
+      <Card>
+        <View style={styles.voiceHeader}>
+          <View style={styles.voiceHeaderCopy}>
+            <SectionLabel>Transcription model</SectionLabel>
+            <Body muted>
+              Choose any provider that supports the OpenAI-compatible audio transcription API.
+              The same model handles microphone recordings and video audio.
+            </Body>
+          </View>
+          {transcriptionModel.status === 'ready' && transcriptionModel.profile ? (
+            <StatusPill
+              label={
+                transcriptionModel.profile.source === 'account'
+                  ? 'account model'
+                  : 'server default'
+              }
+              tone={transcriptionModel.profile.source === 'account' ? 'live' : 'neutral'}
+            />
+          ) : transcriptionModel.status === 'error' ? (
+            <StatusPill label="unavailable" tone="danger" />
+          ) : (
+            <StatusPill label="loading" tone="live" />
+          )}
+        </View>
+
+        {transcriptionModel.status === 'loading' || transcriptionModel.status === 'idle' ? (
+          <Body muted>Loading this account&apos;s transcription model…</Body>
+        ) : transcriptionModel.status === 'error' ? (
+          <View style={styles.voiceActions}>
+            <ErrorNotice
+              title="Could not load the transcription model"
+              message={transcriptionModel.error ?? 'The backend could not be reached.'}
+            />
+            <Button
+              label="Try again"
+              variant="secondary"
+              onPress={() => void refreshTranscriptionModel()}
+            />
+          </View>
+        ) : (
+          <>
+            <Field
+              label="Provider"
+              value={modelDraft.provider}
+              onChangeText={(value) => patchModel('provider', value)}
+              placeholder="openai, groq, local…"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={transcriptionModel.status === 'ready' && !modelSaving}
+              hint="OpenAI uses its standard endpoint. Other providers need a compatible base URL."
+            />
+            <Field
+              label="Model name"
+              value={modelDraft.model}
+              onChangeText={(value) => patchModel('model', value)}
+              placeholder="gpt-4o-transcribe-diarize"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={transcriptionModel.status === 'ready' && !modelSaving}
+              hint="Use the exact model identifier from your provider. Names containing “diarize” request speaker labels."
+            />
+            <Field
+              label="Provider base URL"
+              value={modelDraft.baseUrl}
+              onChangeText={(value) => patchModel('baseUrl', value)}
+              placeholder="https://api.openai.com/v1"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              editable={transcriptionModel.status === 'ready' && !modelSaving}
+              hint="Optional for OpenAI. Include the API version prefix, but not /audio/transcriptions."
+            />
+            <Field
+              label="API key"
+              value={modelDraft.apiKey}
+              onChangeText={(value) => patchModel('apiKey', value)}
+              placeholder={
+                modelProvider === 'mock'
+                  ? 'Not required for mock'
+                  : hasSavedModelKey
+                  ? 'Saved securely · leave blank to keep'
+                  : 'Enter provider API key'
+              }
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              secureTextEntry
+              editable={
+                transcriptionModel.status === 'ready' &&
+                !modelSaving &&
+                modelProvider !== 'mock'
+              }
+              hint="Sent once to your backend and stored encrypted. The app never downloads it again."
+            />
+            {modelError ? <ErrorNotice title="Model was not saved" message={modelError} /> : null}
+            <View style={styles.inline}>
+              <Button
+                label="Save transcription model"
+                onPress={() => void saveModel()}
+                loading={modelSaving}
+                disabled={transcriptionModel.status !== 'ready'}
+              />
+              {transcriptionModel.profile?.source === 'account' ? (
+                <Button
+                  label="Use server default"
+                  variant="ghost"
+                  disabled={modelSaving}
+                  onPress={() =>
+                    Alert.alert(
+                      'Use server transcription model?',
+                      'Your account model and its saved API key will be removed.',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Use server default',
+                          style: 'destructive',
+                          onPress: () => void resetModel(),
+                        },
+                      ],
+                    )
+                  }
+                />
+              ) : null}
+            </View>
+          </>
+        )}
+      </Card>
 
       <Card>
         <SectionLabel>Backend</SectionLabel>
@@ -214,7 +594,7 @@ export function SettingsScreen() {
           value={draft.groupId}
           onChangeText={(value) => patch('groupId', value)}
           placeholder="Optional shared web-app group"
-          hint="Leave blank to let each realtime session create its own group."
+          hint="Leave blank to use one private account group across all of your sessions."
         />
         <Field
           label="Location label"
@@ -317,7 +697,7 @@ export function SettingsScreen() {
             },
           ]}>
           <Text style={[styles.snackbarText, { color: theme.background }]}>
-            Your preferences have been saved.
+            {snackbarMessage}
           </Text>
         </Animated.View>
       )}
@@ -333,6 +713,28 @@ const styles = StyleSheet.create({
   toggleLabel: { fontSize: 15, fontWeight: '800' },
   inline: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: Spacing.md },
   powerRow: { borderRadius: Radius.md, padding: Spacing.md },
+  voiceHeader: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    gap: Spacing.lg,
+  },
+  voiceHeaderCopy: { flex: 1, minWidth: 220, gap: Spacing.sm },
+  voiceActions: { gap: Spacing.lg },
+  voiceSample: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: Spacing.md,
+  },
+  voiceSampleCopy: { flex: 1, gap: 2 },
+  voiceSampleTitle: { fontSize: 15, fontWeight: '800' },
+  replacement: {
+    gap: Spacing.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: Spacing.lg,
+  },
   snackbar: {
     position: 'absolute',
     left: Spacing.lg,

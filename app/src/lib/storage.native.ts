@@ -11,7 +11,9 @@ import type { AppSettings, AuthSession, QueuedVideoChunk } from '@/types/app';
 const AUTH_KEY = 'second-brain.auth.v1';
 const MEMOGRAPH_API_KEY = 'second-brain.memograph-api-key.v1';
 const SETTINGS_KEY = 'second-brain.settings.v1';
+const DEVICE_SETTINGS_KEY = 'second-brain.device-settings.v1';
 const QUEUE_KEY = 'second-brain.upload-queue.v1';
+const VOICE_ONBOARDING_KEY = 'second-brain.voice-onboarding.v1';
 const QUEUE_DIRECTORY = new Directory(Paths.document, 'second-brain-upload-queue');
 
 export const defaultSettings: AppSettings = {
@@ -68,41 +70,146 @@ export async function saveAuthSession(session: AuthSession | null) {
   }
 }
 
-export async function loadSettings() {
-  const stored = parseJSON<Partial<AppSettings>>(await AsyncStorage.getItem(SETTINGS_KEY), {});
+export async function loadVoiceOnboardingRequired(userId: string) {
+  return (await AsyncStorage.getItem(`${VOICE_ONBOARDING_KEY}:${userId}`)) === 'true';
+}
+
+export async function saveVoiceOnboardingRequired(userId: string, required: boolean) {
+  const key = `${VOICE_ONBOARDING_KEY}:${userId}`;
+  if (required) {
+    await AsyncStorage.setItem(key, 'true');
+  } else {
+    await AsyncStorage.removeItem(key);
+  }
+}
+
+function userSettingsKey(userId: string) {
+  return `${SETTINGS_KEY}:${userId}`;
+}
+
+function userMemographAPIKey(userId: string) {
+  return `${MEMOGRAPH_API_KEY}.${userId.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+}
+
+function deviceSettings(settings: Partial<AppSettings>) {
+  return {
+    apiBaseUrl: settings.apiBaseUrl ?? defaultSettings.apiBaseUrl,
+    deviceId: settings.deviceId ?? defaultSettings.deviceId,
+  };
+}
+
+export async function loadSettings(userId?: string, migrateLegacy = false) {
+  const device = parseJSON<Partial<AppSettings>>(
+    await AsyncStorage.getItem(DEVICE_SETTINGS_KEY),
+    {},
+  );
+  if (!userId) return { ...defaultSettings, ...deviceSettings(device) };
+
+  const scopedKey = userSettingsKey(userId);
+  let scopedValue = await AsyncStorage.getItem(scopedKey);
+  if (!scopedValue && migrateLegacy) {
+    const legacyValue = await AsyncStorage.getItem(SETTINGS_KEY);
+    if (legacyValue) {
+      const legacy = parseJSON<Partial<AppSettings>>(legacyValue, {});
+      const legacyApiKey = (await secureStoreAvailable())
+        ? await SecureStore.getItemAsync(MEMOGRAPH_API_KEY)
+        : undefined;
+      const migrated = {
+        ...defaultSettings,
+        ...deviceSettings(device),
+        ...legacy,
+        memographApiKey: legacyApiKey ?? '',
+      };
+      await saveSettings(userId, migrated);
+      await AsyncStorage.removeItem(SETTINGS_KEY);
+      if (await secureStoreAvailable()) await SecureStore.deleteItemAsync(MEMOGRAPH_API_KEY);
+      return migrated;
+    }
+  }
+
+  const stored = parseJSON<Partial<AppSettings>>(scopedValue, {});
   const securedApiKey = (await secureStoreAvailable())
-    ? await SecureStore.getItemAsync(MEMOGRAPH_API_KEY)
+    ? await SecureStore.getItemAsync(userMemographAPIKey(userId))
     : undefined;
   return {
     ...defaultSettings,
+    ...deviceSettings(device),
     ...stored,
     memographApiKey: securedApiKey ?? '',
   };
 }
 
-export async function saveSettings(settings: AppSettings) {
+export async function quarantineLegacySettings() {
+  const legacyValue = await AsyncStorage.getItem(SETTINGS_KEY);
+  if (!legacyValue) return;
+  const legacy = parseJSON<Partial<AppSettings>>(legacyValue, {});
+  const currentDevice = parseJSON<Partial<AppSettings>>(
+    await AsyncStorage.getItem(DEVICE_SETTINGS_KEY),
+    {},
+  );
+  await AsyncStorage.setItem(
+    DEVICE_SETTINGS_KEY,
+    JSON.stringify(deviceSettings({ ...legacy, ...currentDevice })),
+  );
+  await AsyncStorage.setItem(`${SETTINGS_KEY}:quarantined`, legacyValue);
+  await AsyncStorage.removeItem(SETTINGS_KEY);
+}
+
+export async function saveSettings(userId: string | null, settings: AppSettings) {
   const { memographApiKey, ...nonSensitiveSettings } = settings;
-  await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(nonSensitiveSettings));
+  await AsyncStorage.setItem(DEVICE_SETTINGS_KEY, JSON.stringify(deviceSettings(settings)));
+  if (!userId) return;
+
+  await AsyncStorage.setItem(userSettingsKey(userId), JSON.stringify(nonSensitiveSettings));
   if (await secureStoreAvailable()) {
     if (memographApiKey) {
-      await SecureStore.setItemAsync(MEMOGRAPH_API_KEY, memographApiKey, {
+      await SecureStore.setItemAsync(userMemographAPIKey(userId), memographApiKey, {
         keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
       });
     } else {
-      await SecureStore.deleteItemAsync(MEMOGRAPH_API_KEY);
+      await SecureStore.deleteItemAsync(userMemographAPIKey(userId));
     }
   }
 }
 
-export async function loadUploadQueue() {
-  const queue = parseJSON<QueuedVideoChunk[]>(await AsyncStorage.getItem(QUEUE_KEY), []);
+function userQueueKey(userId: string) {
+  return `${QUEUE_KEY}:${userId}`;
+}
+
+function validQueue(queue: QueuedVideoChunk[], userId: string) {
   return queue
-    .filter((item) => item.state === 'uploaded' || new File(item.fileUri).exists)
+    .filter(
+      (item) =>
+        (!item.ownerUserId || item.ownerUserId === userId) &&
+        (item.state === 'uploaded' || new File(item.fileUri).exists),
+    )
+    .map((item) => ({ ...item, ownerUserId: userId }))
     .map((item) => (item.state === 'uploading' ? { ...item, state: 'retrying' as const } : item));
 }
 
-export async function saveUploadQueue(queue: QueuedVideoChunk[]) {
-  await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+export async function loadUploadQueue(userId: string, migrateLegacy = false) {
+  const scopedKey = userQueueKey(userId);
+  const scoped = await AsyncStorage.getItem(scopedKey);
+  if (scoped) return validQueue(parseJSON<QueuedVideoChunk[]>(scoped, []), userId);
+
+  if (!migrateLegacy) return [];
+  const legacy = await AsyncStorage.getItem(QUEUE_KEY);
+  if (!legacy) return [];
+  const queue = validQueue(parseJSON<QueuedVideoChunk[]>(legacy, []), userId);
+  await AsyncStorage.setItem(scopedKey, JSON.stringify(queue));
+  await AsyncStorage.removeItem(QUEUE_KEY);
+  return queue;
+}
+
+export async function quarantineLegacyUploadQueue() {
+  const legacy = await AsyncStorage.getItem(QUEUE_KEY);
+  if (legacy) await AsyncStorage.setItem(`${QUEUE_KEY}:quarantined`, legacy);
+  await AsyncStorage.removeItem(QUEUE_KEY);
+}
+
+export async function saveUploadQueue(userId: string, queue: QueuedVideoChunk[]) {
+  const owned = queue.filter((item) => item.ownerUserId === userId);
+  await AsyncStorage.setItem(userQueueKey(userId), JSON.stringify(owned));
 }
 
 export function persistCapturedVideo(cacheUri: string, fileName: string) {

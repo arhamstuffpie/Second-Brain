@@ -65,7 +65,7 @@ export function MemoryScreen() {
           graph_config: {
             mode: 'instruction',
             instruction:
-              'Build a chronological personal context graph from observed activities, speech, places, objects, people, and decisions. Preserve timestamps and source modality.',
+              'Build a chronological personal context graph from observed activities, places, objects, people, and decisions. Preserve timestamps and source modality. Speech identity and utterances arrive as a grounded structured graph; do not infer a device owner from visual descriptions, and never label a visible person as Owner without explicit grounded identity.',
           },
         });
         const memoryId = findMemoryId(response);

@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -15,26 +17,164 @@ import (
 )
 
 type voiceService struct {
-	repository      VoiceRepository
-	transcriber     Transcriber
-	store           AudioStore
-	memograph       MemographClient
-	episodeDuration time.Duration
-	maxAttempts     int
+	repository            VoiceRepository
+	transcriber           Transcriber
+	attributor            SpeakerAttributor
+	store                 AudioStore
+	enrollmentStore       AudioStore
+	inspector             AudioInspector
+	memograph             MemographClient
+	episodeDuration       time.Duration
+	episodeSilenceGap     time.Duration
+	episodeMaxDuration    time.Duration
+	enrollmentMinDuration time.Duration
+	enrollmentMaxDuration time.Duration
+	maxAttempts           int
 }
 
 func newVoiceService(
 	repository VoiceRepository,
 	transcriber Transcriber,
+	attributor SpeakerAttributor,
 	store AudioStore,
+	enrollmentStore AudioStore,
+	inspector AudioInspector,
 	memograph MemographClient,
 	voiceConfig config.VoiceConfig,
 	workerConfig config.WorkerConfig,
 ) *voiceService {
-	return &voiceService{
-		repository: repository, transcriber: transcriber, store: store, memograph: memograph,
-		episodeDuration: voiceConfig.EpisodeDuration, maxAttempts: workerConfig.MaxAttempts,
+	if voiceConfig.EpisodeSilenceGap <= 0 {
+		voiceConfig.EpisodeSilenceGap = 8 * time.Second
 	}
+	if voiceConfig.EpisodeMaxDuration <= voiceConfig.EpisodeSilenceGap {
+		voiceConfig.EpisodeMaxDuration = 2 * time.Minute
+	}
+	if voiceConfig.EnrollmentMinDuration <= 0 {
+		voiceConfig.EnrollmentMinDuration = 2 * time.Second
+	}
+	if voiceConfig.EnrollmentMaxDuration < voiceConfig.EnrollmentMinDuration {
+		voiceConfig.EnrollmentMaxDuration = 10 * time.Second
+	}
+	return &voiceService{
+		repository: repository, transcriber: transcriber, attributor: attributor,
+		store: store, enrollmentStore: enrollmentStore, inspector: inspector, memograph: memograph,
+		episodeDuration:       voiceConfig.EpisodeDuration,
+		episodeSilenceGap:     voiceConfig.EpisodeSilenceGap,
+		episodeMaxDuration:    voiceConfig.EpisodeMaxDuration,
+		enrollmentMinDuration: voiceConfig.EnrollmentMinDuration,
+		enrollmentMaxDuration: voiceConfig.EnrollmentMaxDuration,
+		maxAttempts:           workerConfig.MaxAttempts,
+	}
+}
+
+func (s *voiceService) EnrollVoice(
+	ctx context.Context,
+	input VoiceEnrollmentInput,
+) (VoiceEnrollmentSample, error) {
+	input.OwnerUserID = strings.TrimSpace(input.OwnerUserID)
+	input.FileName = filepath.Base(strings.TrimSpace(input.FileName))
+	input.MediaType = strings.TrimSpace(input.MediaType)
+	if input.OwnerUserID == "" {
+		return VoiceEnrollmentSample{}, validation("owner_user_id", "is required")
+	}
+	if input.FileName == "" || input.FileName == "." || input.Content == nil {
+		return VoiceEnrollmentSample{}, validation("file", "is required")
+	}
+	if !supportedAudio(input.FileName, input.MediaType) {
+		return VoiceEnrollmentSample{}, validation("file", "must be a supported audio format")
+	}
+	input.MediaType = normalizedAudioMediaType(input.FileName, input.MediaType)
+	stored, err := s.enrollmentStore.Save(ctx, input.FileName, input.Content)
+	if err != nil {
+		return VoiceEnrollmentSample{}, validation("file", err.Error())
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = s.enrollmentStore.Delete(context.Background(), stored.Path)
+		}
+	}()
+	duration, err := s.inspector.Duration(ctx, stored.Path)
+	if err != nil {
+		return VoiceEnrollmentSample{}, validation("file", "audio duration could not be inspected")
+	}
+	minimum := s.enrollmentMinDuration.Seconds()
+	maximum := s.enrollmentMaxDuration.Seconds()
+	if duration < minimum || duration > maximum {
+		return VoiceEnrollmentSample{}, validation(
+			"file", fmt.Sprintf("duration must be between %.0f and %.0f seconds", minimum, maximum),
+		)
+	}
+	label, err := ownerProviderLabel()
+	if err != nil {
+		return VoiceEnrollmentSample{}, fmt.Errorf("create owner speaker label: %w", err)
+	}
+	record, err := s.repository.CreateEnrollmentSample(ctx, CreateEnrollmentSampleInput{
+		OwnerUserID: input.OwnerUserID, ProviderLabel: label,
+		FileName: input.FileName, FilePath: stored.Path, MediaType: input.MediaType,
+		SizeBytes: stored.SizeBytes, DurationSeconds: duration,
+	})
+	if err != nil {
+		if err == ErrConflict {
+			return VoiceEnrollmentSample{}, validation("file", "at most four owner voice samples may be active")
+		}
+		return VoiceEnrollmentSample{}, err
+	}
+	keep = true
+	return publicEnrollment(record), nil
+}
+
+func (s *voiceService) ListVoiceEnrollments(
+	ctx context.Context,
+	ownerUserID string,
+) ([]VoiceEnrollmentSample, error) {
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	if ownerUserID == "" {
+		return nil, validation("owner_user_id", "is required")
+	}
+	records, err := s.repository.ListEnrollmentSamples(ctx, ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]VoiceEnrollmentSample, 0, len(records))
+	for _, record := range records {
+		result = append(result, publicEnrollment(record))
+	}
+	return result, nil
+}
+
+func (s *voiceService) DeleteVoiceEnrollment(
+	ctx context.Context,
+	id, ownerUserID string,
+) error {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerUserID) == "" {
+		return validation("sample_id", "is required")
+	}
+	record, err := s.repository.GetEnrollmentSample(ctx, id, ownerUserID)
+	if err != nil {
+		return err
+	}
+	if err := s.enrollmentStore.Delete(ctx, record.FilePath); err != nil {
+		return fmt.Errorf("delete owner voice sample file: %w", err)
+	}
+	_, err = s.repository.DeleteEnrollmentSample(ctx, id, ownerUserID)
+	return err
+}
+
+func publicEnrollment(record VoiceEnrollmentRecord) VoiceEnrollmentSample {
+	return VoiceEnrollmentSample{
+		ID: record.ID, FileName: record.FileName, MediaType: record.MediaType,
+		SizeBytes: record.SizeBytes, DurationSeconds: record.DurationSeconds,
+		CreatedAt: record.CreatedAt,
+	}
+}
+
+func ownerProviderLabel() (string, error) {
+	value := make([]byte, 6)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("owner_%x", value), nil
 }
 
 func (s *voiceService) Ingest(ctx context.Context, input VoiceIngestInput) (VoiceRecording, error) {
@@ -51,7 +191,7 @@ func (s *voiceService) Ingest(ctx context.Context, input VoiceIngestInput) (Voic
 		return VoiceRecording{}, validation("session_id", "is required")
 	}
 	if input.GroupID == "" {
-		input.GroupID = input.SessionID
+		input.GroupID = defaultMemoryGroupID(input.OwnerUserID)
 	}
 	if input.MemoryID == "" {
 		return VoiceRecording{}, validation("memory_id", "is required")
@@ -96,7 +236,8 @@ func (s *voiceService) Ingest(ctx context.Context, input VoiceIngestInput) (Voic
 		Location: strings.TrimSpace(input.Location), FileName: input.FileName,
 		FilePath: stored.Path, MediaType: input.MediaType, SizeBytes: stored.SizeBytes,
 		StartOffset: input.StartOffset, ChunkIndex: input.ChunkIndex, IsFinal: input.IsFinal,
-		DefaultConfidence: input.DefaultConfidence,
+		DefaultConfidence: input.DefaultConfidence, BatchID: input.BatchID,
+		BatchClosed: input.BatchClosed || input.BatchID == "",
 	}, s.maxAttempts)
 	if err != nil {
 		if input.ChunkIndex != nil {
@@ -135,6 +276,9 @@ func (s *voiceService) StartRealtimeSession(
 	}
 	if input.MemoryID == "" {
 		return RealtimeVoiceSession{}, validation("memory_id", "is required")
+	}
+	if input.GroupID == "" {
+		input.GroupID = defaultMemoryGroupID(input.OwnerUserID)
 	}
 	if input.ChunkDurationSeconds == 0 {
 		input.ChunkDurationSeconds = 30
@@ -178,6 +322,8 @@ func (s *voiceService) IngestRealtimeChunk(
 		ChunkIndex:        &chunkIndex,
 		IsFinal:           input.IsFinal,
 		DefaultConfidence: input.DefaultConfidence,
+		BatchID:           session.BatchID,
+		BatchClosed:       false,
 		Content:           input.Content,
 	})
 	if err != nil {
@@ -314,6 +460,8 @@ func (s *voiceService) ProcessNextJob(ctx context.Context) (bool, error) {
 	switch job.Kind {
 	case "stt":
 		err = s.processSTT(ctx, job)
+	case "assemble":
+		err = s.processAssembly(ctx, job)
 	case "memograph":
 		err = s.processMemograph(ctx, job)
 	default:
@@ -323,7 +471,7 @@ func (s *voiceService) ProcessNextJob(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 	dead := job.Attempts >= job.MaxAttempts
-	delay := retryDelay(job.Attempts)
+	delay := retryDelayForError(err, job.Attempts)
 	retryCtx := ctx
 	var cancel context.CancelFunc
 	if ctx.Err() != nil {
@@ -337,26 +485,35 @@ func (s *voiceService) ProcessNextJob(ctx context.Context) (bool, error) {
 }
 
 func (s *voiceService) processSTT(ctx context.Context, job VoiceJob) error {
+	references, err := loadOwnerSpeakerReferences(
+		ctx, s.repository, s.enrollmentStore, job.OwnerUserID,
+	)
+	if err != nil {
+		return err
+	}
 	audio, err := s.store.Open(ctx, job.FilePath)
 	if err != nil {
 		return err
 	}
 	defer audio.Close()
 	transcript, err := s.transcriber.Transcribe(ctx, TranscriptionInput{
-		FileName: job.FileName, MediaType: job.MediaType, Audio: audio,
+		OwnerUserID: job.OwnerUserID,
+		FileName:    job.FileName, MediaType: job.MediaType, Audio: audio,
+		KnownSpeakers: references,
 	})
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(transcript.Text) == "" || len(transcript.Segments) == 0 {
-		return fmt.Errorf("transcription returned no speech")
+	transcript, err = s.attributor.Attribute(ctx, SpeakerAttributionInput{
+		Transcript: transcript, References: references,
+	})
+	if err != nil {
+		return fmt.Errorf("attribute transcript speakers: %w", err)
 	}
-	episodes := BuildAudioEpisodes(transcript, s.episodeDuration, job.StartOffset, job.SessionID, job.Location)
-	if len(episodes) == 0 {
-		return fmt.Errorf("transcription produced no episodes")
-	}
-	if err := s.repository.SaveTranscriptAndEpisodes(
-		ctx, job, transcript, episodes, s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
+	if err := s.repository.SaveTranscriptAndQueueAssembly(
+		ctx, job, transcript, speakerReferenceIDs(references),
+		transcriptionProvider(transcript, s.transcriber),
+		transcriptionModel(transcript, s.transcriber), s.maxAttempts,
 	); err != nil {
 		return err
 	}
@@ -364,12 +521,31 @@ func (s *voiceService) processSTT(ctx context.Context, job VoiceJob) error {
 	return nil
 }
 
+func (s *voiceService) processAssembly(ctx context.Context, job VoiceJob) error {
+	snapshot, err := s.repository.LoadAssembly(ctx, job)
+	if err != nil {
+		return err
+	}
+	episodes := BuildConversationEpisodes(
+		snapshot, s.episodeSilenceGap, s.episodeMaxDuration,
+	)
+	return s.repository.SaveAssembledEpisodes(
+		ctx, job, snapshot, episodes, s.maxAttempts,
+	)
+}
+
 func (s *voiceService) processMemograph(ctx context.Context, job VoiceJob) error {
 	meta := map[string]any{
 		"source": "audio", "source_description": "voice recording",
 		"session_id": job.SessionID, "group_id": job.GroupID,
+		"batch_id": job.BatchID, "episode_id": job.EpisodeID,
 		"start_time": job.EpisodeStart, "end_time": job.EpisodeEnd,
+		"recording_ids":           job.SourceRecordingIDs,
+		"owner_utterance_count":   job.OwnerUtteranceCount,
+		"other_utterance_count":   job.OtherUtteranceCount,
+		"unknown_utterance_count": job.UnknownUtteranceCount,
 	}
+	addOwnerIdentityMeta(meta, job.OwnerUserID)
 	if job.Location != "" {
 		meta["location"] = job.Location
 	}
@@ -380,13 +556,219 @@ func (s *voiceService) processMemograph(ctx context.Context, job VoiceJob) error
 	if job.Confidence != nil {
 		custom["confidence"] = *job.Confidence
 	}
+	idempotencyKey := memographIdempotencyKey(job.MemoryID, job.EpisodeID, "audio")
+	meta["idempotency_key"] = idempotencyKey
+	structuredGraph := structuredVoiceConversation(job)
+	if structuredGraph == nil {
+		return fmt.Errorf("voice episode %s has no grounded transcript segments", job.EpisodeID)
+	}
 	result, err := s.memograph.InsertEpisode(ctx, job.MemoryID, EpisodeInsertRequest{
-		Data: job.Description, Meta: meta, CustomFields: custom,
+		Data: job.Description, Meta: meta,
+		StructuredGraph: structuredGraph,
+		CustomFields:    custom, IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
 		return err
 	}
 	return s.repository.CompleteMemographEpisode(ctx, job, result)
+}
+
+// BuildConversationEpisodes assembles immutable, attribution-aware episodes
+// across recording boundaries. It withholds the active trailing conversation
+// until silence advances the watermark or the batch is closed and complete.
+func BuildConversationEpisodes(
+	snapshot VoiceAssemblySnapshot,
+	silenceGap, maxDuration time.Duration,
+) []EpisodeDraft {
+	gapSeconds := silenceGap.Seconds()
+	if gapSeconds <= 0 {
+		gapSeconds = 8
+	}
+	maxSeconds := maxDuration.Seconds()
+	if maxSeconds <= gapSeconds {
+		maxSeconds = 120
+	}
+	recordings := append([]AssemblyRecording(nil), snapshot.Recordings...)
+	sort.SliceStable(recordings, func(i, j int) bool {
+		if recordings[i].StartOffset == recordings[j].StartOffset {
+			return recordings[i].ID < recordings[j].ID
+		}
+		return recordings[i].StartOffset < recordings[j].StartOffset
+	})
+	selected := recordings
+	watermark := snapshot.Watermark
+	if !snapshot.Closed || !snapshot.AllSTTTerminal {
+		hasChunks := false
+		for _, recording := range recordings {
+			if recording.ChunkIndex != nil {
+				hasChunks = true
+				break
+			}
+		}
+		if hasChunks {
+			selected = make([]AssemblyRecording, 0, len(recordings))
+			expected := 0
+			watermark = 0
+			for _, recording := range recordings {
+				if recording.ChunkIndex == nil || *recording.ChunkIndex != expected {
+					break
+				}
+				selected = append(selected, recording)
+				expected++
+				end := recording.StartOffset + recording.Transcript.Duration
+				if end > watermark {
+					watermark = end
+				}
+			}
+		}
+	}
+	segments := make([]EpisodeSegment, 0)
+	for _, recording := range selected {
+		for _, segment := range recording.Transcript.Segments {
+			text := strings.TrimSpace(segment.Text)
+			if text == "" {
+				continue
+			}
+			role := segment.SpeakerRole
+			if role != "owner" && role != "other" && role != "unknown" {
+				role = "unknown"
+			}
+			segments = append(segments, EpisodeSegment{
+				ID: segment.ID, RecordingID: recording.ID,
+				StartTime: recording.StartOffset + math.Max(segment.StartTime, 0),
+				EndTime:   recording.StartOffset + math.Max(segment.EndTime, segment.StartTime),
+				Speaker:   segment.Speaker, SpeakerRole: role, Text: text,
+				Confidence: segment.Confidence,
+			})
+		}
+	}
+	sort.SliceStable(segments, func(i, j int) bool {
+		if segments[i].StartTime == segments[j].StartTime {
+			return segments[i].EndTime < segments[j].EndTime
+		}
+		return segments[i].StartTime < segments[j].StartTime
+	})
+	if len(segments) == 0 {
+		return nil
+	}
+
+	groups := make([][]EpisodeSegment, 0)
+	current := make([]EpisodeSegment, 0)
+	for _, segment := range segments {
+		if len(current) > 0 {
+			previous := current[len(current)-1]
+			if segment.StartTime-previous.EndTime > gapSeconds ||
+				segment.EndTime-current[0].StartTime > maxSeconds {
+				groups = append(groups, current)
+				current = make([]EpisodeSegment, 0)
+			}
+		}
+		current = append(current, segment)
+	}
+	if len(current) > 0 {
+		groups = append(groups, current)
+	}
+
+	flushTail := snapshot.Closed && snapshot.AllSTTTerminal
+	result := make([]EpisodeDraft, 0, len(groups))
+	for index, group := range groups {
+		last := group[len(group)-1]
+		isTail := index == len(groups)-1
+		if isTail && !flushTail && watermark-last.EndTime < gapSeconds {
+			break
+		}
+		result = append(result, episodeFromSegments(
+			len(result), snapshot.SessionID, snapshot.Location, group,
+		))
+	}
+	return result
+}
+
+func episodeFromSegments(
+	index int,
+	sessionID, location string,
+	segments []EpisodeSegment,
+) EpisodeDraft {
+	start := segments[0].StartTime
+	end := segments[len(segments)-1].EndTime
+	ownerLines := make([]string, 0)
+	contextLines := make([]string, 0)
+	recordingIDs := make([]string, 0)
+	seenRecordings := make(map[string]struct{})
+	confidenceTotal := 0.0
+	confidenceCount := 0
+	ownerCount, otherCount, unknownCount := 0, 0, 0
+	for _, segment := range segments {
+		if _, seen := seenRecordings[segment.RecordingID]; !seen {
+			seenRecordings[segment.RecordingID] = struct{}{}
+			recordingIDs = append(recordingIDs, segment.RecordingID)
+		}
+		line := fmt.Sprintf(
+			"- [%.2fs–%.2fs] %s: %s",
+			segment.StartTime, segment.EndTime,
+			displaySpeaker(segment), segment.Text,
+		)
+		switch segment.SpeakerRole {
+		case "owner":
+			ownerCount++
+			ownerLines = append(ownerLines, line)
+		case "other":
+			otherCount++
+			contextLines = append(contextLines, line)
+		default:
+			unknownCount++
+			contextLines = append(contextLines, line)
+		}
+		if segment.Confidence != nil {
+			confidenceTotal += *segment.Confidence
+			confidenceCount++
+		}
+	}
+	header := fmt.Sprintf(
+		"Conversation episode from session %s between %.2fs and %.2fs.",
+		sessionID, start, end,
+	)
+	if location != "" {
+		header += " Recorded at " + location + "."
+	}
+	ownerSection := "Owner-attributed utterances:\n"
+	if len(ownerLines) == 0 {
+		ownerSection += "- None."
+	} else {
+		ownerSection += strings.Join(ownerLines, "\n")
+	}
+	contextSection := "Non-owner conversational context (must not be treated as owner statements):\n"
+	if len(contextLines) == 0 {
+		contextSection += "- None."
+	} else {
+		contextSection += strings.Join(contextLines, "\n")
+	}
+	var confidence *float64
+	if confidenceCount > 0 {
+		value := confidenceTotal / float64(confidenceCount)
+		confidence = &value
+	}
+	return EpisodeDraft{
+		BucketIndex: index, EpisodeIndex: index, StartTime: start, EndTime: end,
+		Description: header + "\n" + ownerSection + "\n" + contextSection,
+		Confidence:  confidence, Segments: segments, SourceRecordingIDs: recordingIDs,
+		OwnerUtteranceCount: ownerCount, OtherUtteranceCount: otherCount,
+		UnknownUtteranceCount: unknownCount,
+	}
+}
+
+func displaySpeaker(segment EpisodeSegment) string {
+	if segment.SpeakerRole == "owner" {
+		return "Owner"
+	}
+	speaker := strings.TrimSpace(segment.Speaker)
+	if speaker == "" || speaker == "speaker" {
+		speaker = "unidentified speaker"
+	}
+	if segment.SpeakerRole == "other" {
+		return "Other speaker " + speaker
+	}
+	return "Unknown speaker " + speaker
 }
 
 // BuildAudioEpisodes merges timestamped speech into fixed-duration memory
@@ -472,6 +854,22 @@ func supportedAudio(filename, mediaType string) bool {
 	return strings.HasPrefix(strings.ToLower(mediaType), "audio/")
 }
 
+func normalizedAudioMediaType(filename, mediaType string) string {
+	mediaType = strings.TrimSpace(strings.Split(mediaType, ";")[0])
+	if strings.HasPrefix(strings.ToLower(mediaType), "audio/") {
+		return mediaType
+	}
+	byExtension := map[string]string{
+		".flac": "audio/flac", ".mp3": "audio/mpeg", ".mp4": "audio/mp4",
+		".mpeg": "audio/mpeg", ".mpga": "audio/mpeg", ".m4a": "audio/mp4",
+		".ogg": "audio/ogg", ".wav": "audio/wav", ".webm": "audio/webm",
+	}
+	if inferred := byExtension[strings.ToLower(filepath.Ext(filename))]; inferred != "" {
+		return inferred
+	}
+	return "application/octet-stream"
+}
+
 func retryDelay(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1
@@ -481,6 +879,17 @@ func retryDelay(attempt int) time.Duration {
 		seconds = 300
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func retryDelayForError(err error, attempt int) time.Duration {
+	delay := retryDelay(attempt)
+	var hinted interface{ RetryDelay() time.Duration }
+	if errors.As(err, &hinted) {
+		if hint := hinted.RetryDelay(); hint > delay {
+			return hint
+		}
+	}
+	return delay
 }
 
 func validateGraphConfig(config GraphConfig) error {

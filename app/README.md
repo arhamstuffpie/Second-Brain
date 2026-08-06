@@ -3,6 +3,27 @@
 Managed Expo SDK 54 application for foreground video + microphone capture,
 near-realtime backend delivery, offline buffering, and Memograph access.
 
+## Account and voice setup
+
+- A new account must enroll a clean 2–10 second owner voice sample before the
+  dashboard opens. Existing accounts without a sample can continue into the
+  app and receive a warning plus enrollment controls in Settings.
+- Settings lists enrolled samples and lets a user add, replace, or remove their
+  owner reference later.
+- The sample is uploaded to the authenticated backend enrollment endpoint. It
+  is used as a known-speaker reference during diarized transcription and is not
+  inserted into Memograph as a memory.
+- Without an enrolled sample the backend can still preserve audio, but all
+  transcript speakers remain `unknown`; new-account onboarding prevents that
+  degraded mode, while existing accounts receive a persistent Settings warning.
+- Upload activity and retry history are stored under the authenticated user ID.
+  Signing out clears the in-memory activity immediately, while that user's
+  pending uploads remain available when the same account signs in again.
+- Memograph IDs, credentials, capture preferences, and other Settings values
+  are stored per account. Switching accounts reloads that account's Settings
+  and Activity data and resets transient tab state such as open details,
+  in-progress chat responses, memory results, and unsaved form drafts.
+
 ## Run
 
 ```bash
@@ -36,6 +57,12 @@ the phone itself, not the development computer.
   are user-configurable.
 - Settings accepts an optional Memograph API-key override. Native builds keep it
   in SecureStore; web builds keep it only for the current browser session.
+- Settings also accepts an account-level transcription provider, exact model
+  name, OpenAI-compatible base URL, and API key. The API key is sent once over
+  HTTPS, encrypted by the backend, and never downloaded into app storage.
+- The selected transcription model applies to both standalone voice recordings
+  and audio extracted from video. Model names containing `diarize` request
+  speaker-aware output and include enrolled owner references when supported.
 - Saving preferences shows an in-app confirmation snackbar.
 - Scrollable forms add bottom space equal to the open keyboard height and
   remove it when the keyboard closes.

@@ -26,11 +26,41 @@ func (stubUserRepository) Create(context.Context, string, string) (StoredUser, b
 	return StoredUser{}, true, nil
 }
 
+type stubModelProfileRepository struct{}
+
+func (stubModelProfileRepository) Get(context.Context, string, string) (StoredModelProfile, bool, error) {
+	return StoredModelProfile{}, false, nil
+}
+func (stubModelProfileRepository) Upsert(_ context.Context, profile StoredModelProfile) (StoredModelProfile, error) {
+	return profile, nil
+}
+func (stubModelProfileRepository) Delete(context.Context, string, string) error { return nil }
+
+type stubCredentialCipher struct{}
+
+func (stubCredentialCipher) Seal(value string) (string, error) { return "sealed:" + value, nil }
+func (stubCredentialCipher) Open(value string) (string, error) {
+	return strings.TrimPrefix(value, "sealed:"), nil
+}
+
 func (stubUserRepository) FindByEmail(context.Context, string) (StoredUser, bool, error) {
 	return StoredUser{}, true, nil
 }
 
 type stubVoiceRepository struct{}
+
+func (stubVoiceRepository) CreateEnrollmentSample(context.Context, CreateEnrollmentSampleInput) (VoiceEnrollmentRecord, error) {
+	return VoiceEnrollmentRecord{}, nil
+}
+func (stubVoiceRepository) ListEnrollmentSamples(context.Context, string) ([]VoiceEnrollmentRecord, error) {
+	return nil, nil
+}
+func (stubVoiceRepository) GetEnrollmentSample(context.Context, string, string) (VoiceEnrollmentRecord, error) {
+	return VoiceEnrollmentRecord{}, nil
+}
+func (stubVoiceRepository) DeleteEnrollmentSample(context.Context, string, string) (VoiceEnrollmentRecord, error) {
+	return VoiceEnrollmentRecord{}, nil
+}
 
 func (stubVoiceRepository) CreateRecording(context.Context, CreateRecordingInput, int) (VoiceRecording, error) {
 	return VoiceRecording{}, nil
@@ -53,7 +83,13 @@ func (stubVoiceRepository) StopRealtimeSession(context.Context, string, string) 
 func (stubVoiceRepository) ClaimJob(context.Context) (VoiceJob, bool, error) {
 	return VoiceJob{}, false, nil
 }
-func (stubVoiceRepository) SaveTranscriptAndEpisodes(context.Context, VoiceJob, Transcript, []EpisodeDraft, string, string, int) error {
+func (stubVoiceRepository) SaveTranscriptAndQueueAssembly(context.Context, VoiceJob, Transcript, []string, string, string, int) error {
+	return nil
+}
+func (stubVoiceRepository) LoadAssembly(context.Context, VoiceJob) (VoiceAssemblySnapshot, error) {
+	return VoiceAssemblySnapshot{}, nil
+}
+func (stubVoiceRepository) SaveAssembledEpisodes(context.Context, VoiceJob, VoiceAssemblySnapshot, []EpisodeDraft, int) error {
 	return nil
 }
 func (stubVoiceRepository) CompleteMemographEpisode(context.Context, VoiceJob, json.RawMessage) error {
@@ -89,7 +125,7 @@ func (stubVideoRepository) StopVideoRealtimeSession(context.Context, string, str
 func (stubVideoRepository) ClaimVideoJob(context.Context) (VideoJob, bool, error) {
 	return VideoJob{}, false, nil
 }
-func (stubVideoRepository) SaveVideoTranscript(context.Context, VideoJob, Transcript, string, string, int) error {
+func (stubVideoRepository) SaveVideoTranscript(context.Context, VideoJob, Transcript, []string, string, string, int) error {
 	return nil
 }
 func (stubVideoRepository) SaveVideoAnalysis(context.Context, VideoJob, VisualAnalysis, string, string, int) error {
@@ -98,7 +134,7 @@ func (stubVideoRepository) SaveVideoAnalysis(context.Context, VideoJob, VisualAn
 func (stubVideoRepository) SaveVideoEpisodes(context.Context, VideoJob, []VideoEpisodeDraft, int) error {
 	return nil
 }
-func (stubVideoRepository) CompleteVideoMemographEpisode(context.Context, VideoJob, json.RawMessage) error {
+func (stubVideoRepository) CompleteVideoMemographBranch(context.Context, VideoJob, json.RawMessage) error {
 	return nil
 }
 func (stubVideoRepository) RetryVideoJob(context.Context, VideoJob, string, time.Time, bool) error {
@@ -112,6 +148,16 @@ func (stubTranscriber) Transcribe(context.Context, TranscriptionInput) (Transcri
 }
 func (stubTranscriber) Provider() string { return "stub" }
 func (stubTranscriber) Model() string    { return "stub" }
+
+type stubSpeakerAttributor struct{}
+
+func (stubSpeakerAttributor) Attribute(_ context.Context, input SpeakerAttributionInput) (Transcript, error) {
+	return input.Transcript, nil
+}
+
+type stubAudioInspector struct{}
+
+func (stubAudioInspector) Duration(context.Context, string) (float64, error) { return 5, nil }
 
 type stubAudioStore struct{}
 
@@ -177,17 +223,22 @@ func TestNewContainerRequiresRepositories(t *testing.T) {
 
 func TestNewContainerPopulatesDependencies(t *testing.T) {
 	container, err := NewContainer(Dependencies{
-		HealthRepository: stubHealthRepository{},
-		UserRepository:   stubUserRepository{},
-		VoiceRepository:  stubVoiceRepository{},
-		VideoRepository:  stubVideoRepository{},
-		Transcriber:      stubTranscriber{},
-		AudioStore:       stubAudioStore{},
-		VideoStore:       stubAudioStore{},
-		MediaExtractor:   stubMediaExtractor{},
-		VisualAnalyzer:   stubVisualAnalyzer{},
-		Memograph:        stubMemographClient{},
-		VoiceConfig:      config.VoiceConfig{EpisodeDuration: 30 * time.Second},
+		HealthRepository:  stubHealthRepository{},
+		UserRepository:    stubUserRepository{},
+		ModelProfiles:     stubModelProfileRepository{},
+		CredentialCipher:  stubCredentialCipher{},
+		VoiceRepository:   stubVoiceRepository{},
+		VideoRepository:   stubVideoRepository{},
+		Transcriber:       stubTranscriber{},
+		SpeakerAttributor: stubSpeakerAttributor{},
+		AudioStore:        stubAudioStore{},
+		EnrollmentStore:   stubAudioStore{},
+		AudioInspector:    stubAudioInspector{},
+		VideoStore:        stubAudioStore{},
+		MediaExtractor:    stubMediaExtractor{},
+		VisualAnalyzer:    stubVisualAnalyzer{},
+		Memograph:         stubMemographClient{},
+		VoiceConfig:       config.VoiceConfig{EpisodeDuration: 30 * time.Second},
 		VideoConfig: config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
 		},
@@ -198,7 +249,7 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
 	if container == nil || container.Health == nil || container.Auth == nil ||
-		container.Voice == nil || container.Video == nil {
+		container.Models == nil || container.Voice == nil || container.Video == nil {
 		t.Fatal("service container has nil required dependency")
 	}
 }

@@ -10,8 +10,12 @@ import (
 
 type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	CreateVoiceEnrollmentSample(ctx context.Context, arg CreateVoiceEnrollmentSampleParams) (VoiceEnrollmentSample, error)
+	DeleteVoiceEnrollmentSample(ctx context.Context, arg DeleteVoiceEnrollmentSampleParams) (VoiceEnrollmentSample, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
+	GetVoiceEnrollmentSample(ctx context.Context, arg GetVoiceEnrollmentSampleParams) (VoiceEnrollmentSample, error)
 	HealthCheck(ctx context.Context) (int64, error)
+	ListVoiceEnrollmentSamples(ctx context.Context, ownerUserID string) ([]VoiceEnrollmentSample, error)
 }
 
 var _ Querier = (*Queries)(nil)

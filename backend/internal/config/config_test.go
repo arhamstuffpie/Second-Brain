@@ -86,6 +86,9 @@ func TestLoadUsesFallbackValues(t *testing.T) {
 	if cfg.Vision.Provider != "mock" || cfg.Vision.Model != "gpt-4.1-mini" {
 		t.Fatalf("Vision defaults = %+v", cfg.Vision)
 	}
+	if cfg.Memograph.MaxConcurrentWrites != 1 {
+		t.Fatalf("Memograph.MaxConcurrentWrites = %d, want 1", cfg.Memograph.MaxConcurrentWrites)
+	}
 }
 
 func TestLoadUsesJSONLoggingInProductionByDefault(t *testing.T) {
@@ -109,6 +112,7 @@ func TestLoadUsesConfiguredValues(t *testing.T) {
 	t.Setenv("APP_HTTP_PORT", "9090")
 	t.Setenv("APP_LOG_PRETTY", "true")
 	t.Setenv("APP_CORS_ALLOWED_ORIGINS", "https://one.example, https://two.example")
+	t.Setenv("APP_MEMOGRAPH_MAX_CONCURRENT_WRITES", "3")
 
 	cfg, err := Load()
 	if err != nil {
@@ -122,6 +126,9 @@ func TestLoadUsesConfiguredValues(t *testing.T) {
 	}
 	if len(cfg.CORS.AllowedOrigins) != 2 || cfg.CORS.AllowedOrigins[1] != "https://two.example" {
 		t.Fatalf("CORS.AllowedOrigins = %v", cfg.CORS.AllowedOrigins)
+	}
+	if cfg.Memograph.MaxConcurrentWrites != 3 {
+		t.Fatalf("Memograph.MaxConcurrentWrites = %d, want 3", cfg.Memograph.MaxConcurrentWrites)
 	}
 }
 
@@ -161,5 +168,35 @@ func TestLoadUsesSTTKeyForVision(t *testing.T) {
 	}
 	if cfg.Vision.APIKey != "shared-openai-key" {
 		t.Fatalf("Vision.APIKey = %q, want STT key fallback", cfg.Vision.APIKey)
+	}
+}
+
+func TestLoadAcceptsCompatibleSTTProvider(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("APP_JWT_SECRET", "01234567890123456789012345678901")
+	t.Setenv("APP_STT_PROVIDER", "compatible")
+	t.Setenv("APP_STT_BASE_URL", "https://speech.example/v1")
+	t.Setenv("APP_STT_API_KEY", "provider-key")
+	t.Setenv("APP_STT_MODEL", "speaker-diarize")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.STT.Provider != "compatible" || cfg.STT.Model != "speaker-diarize" {
+		t.Fatalf("STT config = %+v", cfg.STT)
+	}
+	if cfg.Models.CredentialKey != "01234567890123456789012345678901" {
+		t.Fatalf("Models.CredentialKey did not fall back to JWT secret")
+	}
+}
+
+func TestLoadRejectsShortModelCredentialKey(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("APP_JWT_SECRET", "01234567890123456789012345678901")
+	t.Setenv("APP_MODEL_CREDENTIAL_KEY", "short")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want short model credential key error")
 	}
 }

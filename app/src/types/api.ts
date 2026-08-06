@@ -33,15 +33,44 @@ export type Health = {
   checked_at: string;
 };
 
+export type ModelProfile = {
+  task: 'transcription';
+  provider: string;
+  base_url: string;
+  model: string;
+  api_key_configured: boolean;
+  source: 'server' | 'account';
+  updated_at?: string;
+};
+
+export type ModelProfileInput = {
+  provider: string;
+  base_url: string;
+  model: string;
+  api_key?: string;
+  clear_api_key?: boolean;
+};
+
 export type Credentials = {
   email: string;
   password: string;
 };
 
+export type VoiceEnrollmentSample = {
+  id: string;
+  file_name: string;
+  media_type: string;
+  size_bytes: number;
+  duration_seconds: number;
+  created_at: string;
+};
+
 export type TranscriptSegment = {
+  id?: string;
   start_time: number;
   end_time: number;
   speaker: string;
+  speaker_role: 'owner' | 'other' | 'unknown';
   text: string;
   confidence?: number;
 };
@@ -58,6 +87,7 @@ export type Transcript = {
 export type VoiceRecordingStatus =
   | 'queued'
   | 'transcribing'
+  | 'assembling'
   | 'memograph_pending'
   | 'completed'
   | 'failed';
@@ -91,6 +121,9 @@ export type VoiceEpisode = {
 export type VoiceRecordingDetail = VoiceRecording & {
   device_id?: string;
   location?: string;
+  stt_provider?: string;
+  stt_model?: string;
+  speaker_reference_ids: string[];
   transcript?: Transcript;
   episodes: VoiceEpisode[];
   last_error?: string;
@@ -193,6 +226,7 @@ export type VideoRecordingDetail = VideoRecording & {
   location?: string;
   stt_provider?: string;
   stt_model?: string;
+  speaker_reference_ids: string[];
   visual_provider?: string;
   visual_model?: string;
   transcript?: Transcript;

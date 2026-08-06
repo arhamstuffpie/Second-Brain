@@ -12,8 +12,14 @@ except `/health` live below `/api/v1`.
 | `POST` | `/api/v1/auth/signup` | no | Create account and token |
 | `POST` | `/api/v1/auth/login` | no | Authenticate and create token |
 | `GET` | `/api/v1/secure` | yes | Verify token |
+| `GET` | `/api/v1/model-profiles/transcription` | yes | Read effective transcription model |
+| `PUT` | `/api/v1/model-profiles/transcription` | yes | Save account transcription model |
+| `DELETE` | `/api/v1/model-profiles/transcription` | yes | Restore server transcription model |
+| `POST` | `/api/v1/voice/enrollments/samples` | yes | Enroll an owner voice sample |
+| `GET` | `/api/v1/voice/enrollments/samples` | yes | List owner voice samples |
+| `DELETE` | `/api/v1/voice/enrollments/samples/:sample_id` | yes | Delete an owner voice sample |
 | `POST` | `/api/v1/voice/recordings` | yes | Queue audio recording |
-| `POST` | `/api/v1/voice/chunks` | yes | Queue audio through the non-realtime chunk alias |
+| `POST` | `/api/v1/voice/chunks` | yes | Queue a legacy standalone offset chunk |
 | `GET` | `/api/v1/voice/recordings/:recording_id` | yes | Read audio processing result |
 | `POST` | `/api/v1/voice/realtime/sessions` | yes | Start realtime audio capture |
 | `POST` | `/api/v1/voice/realtime/sessions/:session_id/chunks` | yes | Queue ordered realtime audio chunk |
@@ -56,6 +62,49 @@ It does not replace the application bearer token and cannot authenticate a
 user. For synchronous Memograph proxy endpoints, it overrides the backend's
 configured upstream credential for that request. Native clients should store
 this value in encrypted device storage and send it only over HTTPS.
+
+### Transcription model profile
+
+`GET /api/v1/model-profiles/transcription` returns the effective model for the
+authenticated account. `source` is `server` until the account saves an
+override; the API key itself is never returned.
+
+```json
+{
+  "task": "transcription",
+  "provider": "openai",
+  "base_url": "https://api.openai.com/v1",
+  "model": "gpt-4o-transcribe-diarize",
+  "api_key_configured": true,
+  "source": "account",
+  "updated_at": "2026-08-05T12:00:00Z"
+}
+```
+
+`PUT /api/v1/model-profiles/transcription` creates or replaces the account
+override:
+
+```json
+{
+  "provider": "openai",
+  "base_url": "https://api.openai.com/v1",
+  "model": "gpt-4o-transcribe-diarize",
+  "api_key": "provider-secret"
+}
+```
+
+The provider is a lowercase account-facing label. `base_url` may be omitted
+for `openai`; other non-mock providers must provide a complete `http://` or
+`https://` base URL and implement the OpenAI-compatible
+`POST /audio/transcriptions` contract. An empty `api_key` retains an existing
+account key. Set `clear_api_key: true` only when switching to `mock`.
+
+The backend encrypts saved keys with `APP_MODEL_CREDENTIAL_KEY`. Voice uploads
+and video audio jobs resolve the account profile when the durable worker starts
+transcription, so a backend restart does not lose the selection.
+
+`DELETE /api/v1/model-profiles/transcription` removes the account profile and
+its encrypted credential, then returns the server-default profile.
 
 ### Response envelope
 
@@ -142,6 +191,14 @@ insertion is finished. Save `data.id` and poll the corresponding
 `GET .../recordings/:recording_id` endpoint. For realtime capture, the session
 status endpoint provides chunk-level progress.
 
+### Owner voice enrollment
+
+`POST /api/v1/voice/enrollments/samples` accepts multipart field `file`. A user
+may retain up to four supported 2–10 second clips. `GET` lists metadata and
+`DELETE .../:sample_id` permanently removes an owned reference. Recording
+ingestion remains available without enrollment, but every speaker is then
+classified as `unknown` and no owner-attributed utterance is generated.
+
 ## Shared response types
 
 ### `AuthResult`
@@ -171,6 +228,7 @@ type VoiceRecording = {
   status:
     | "queued"
     | "transcribing"
+    | "assembling"
     | "memograph_pending"
     | "completed"
     | "failed";
@@ -182,10 +240,21 @@ type VoiceRecording = {
   created_at: string;
 };
 
+type VoiceEnrollmentSample = {
+  id: string;
+  file_name: string;
+  media_type: string;
+  size_bytes: number;
+  duration_seconds: number;
+  created_at: string;
+};
+
 type TranscriptSegment = {
+  id?: string;
   start_time: number;
   end_time: number;
   speaker: string;
+  speaker_role: "owner" | "other" | "unknown";
   text: string;
   confidence?: number;
 };
@@ -209,11 +278,21 @@ type VoiceEpisode = {
   status: "queued" | "writing" | "completed" | "failed";
   memograph_response?: unknown;
   last_error?: string;
+  episode_index: number;
+  segments: Array<TranscriptSegment & {recording_id: string}>;
+  source_recording_ids: string[];
+  owner_utterance_count: number;
+  other_utterance_count: number;
+  unknown_utterance_count: number;
 };
 
 type VoiceRecordingDetail = VoiceRecording & {
   device_id?: string;
   location?: string;
+  batch_id: string;
+  stt_provider?: string;
+  stt_model?: string;
+  speaker_reference_ids: string[];
   transcript?: Transcript;
   episodes: VoiceEpisode[];
   last_error?: string;
@@ -245,6 +324,7 @@ type RealtimeVoiceSession = {
 type RealtimeVoiceSessionDetail = RealtimeVoiceSession & {
   progress: RealtimeProgress;
   chunks: VoiceRecording[];
+  episodes: VoiceEpisode[];
 };
 ```
 
@@ -321,6 +401,7 @@ type VideoRecordingDetail = VideoRecording & {
   location?: string;
   stt_provider?: string;
   stt_model?: string;
+  speaker_reference_ids: string[];
   visual_provider?: string;
   visual_model?: string;
   transcript?: Transcript;
@@ -350,6 +431,24 @@ type RealtimeVideoSessionDetail = RealtimeVideoSession & {
   chunks: VideoRecording[];
 };
 ```
+
+Video audio uses the authenticated owner's current enrolled voice samples.
+Each transcript segment retains timestamps, the provider speaker label, and a
+semantic `speaker_role`. Speech episode text uses timestamped `Owner`,
+`Other speaker`, or `Unknown speaker` labels; only a provider label matching an
+enrollment reference is promoted to `owner`.
+
+Memograph writes use one durable job per non-empty video modality. Each request
+includes a deterministic idempotency key and canonical `owner_entity_id`;
+successful modality writes are checkpointed independently before another branch
+is attempted or retried. Speech branches also use Memograph's grounded
+`structured_graph` payload. The Owner is always a `Person` with canonical ID
+`account-owner:<authenticated-user-id>`; exact utterances, speaker attribution,
+and timestamps are retained without an LLM creating another Owner entity.
+Every spoken statement/question is a `ConversationUtterance` node connected
+directly to Owner with `SAID`, `ASKED`, or attribution-safe `HAS_CONTEXT`.
+`FOLLOWED_BY` relations preserve conversational order; no synthetic
+`ConversationEpisode` entity is created.
 
 ## Health
 
@@ -431,7 +530,7 @@ Authorization: Bearer <access_token>
 | `file` | yes | file | FLAC, MP3, MP4, MPEG/MPGA, M4A, OGG, WAV, or WebM. An `audio/*` media type is also accepted. Default maximum is 25 MiB and is configurable. |
 | `session_id` | yes | string | Client-defined recording/capture session identifier. |
 | `memory_id` | yes | string | Memograph memory that receives generated episodes. |
-| `group_id` | no | string | Defaults to `session_id`. |
+| `group_id` | no | string | Defaults to the stable account scope `account-owner:<authenticated-user-id>`. An explicit value intentionally isolates the graph. |
 | `device_id` | no | string | Client/device metadata. |
 | `location` | no | string | Location metadata. |
 | `start_time` | no | number string | Offset in seconds, default `0`, must be non-negative. |
@@ -482,7 +581,7 @@ Request:
 ```ts
 {
   memory_id: string;              // Required.
-  group_id?: string;              // Defaults to the generated session id.
+  group_id?: string;              // Defaults to account-owner:<authenticated-user-id>.
   device_id?: string;
   location?: string;
   chunk_duration_seconds?: number; // Default 30; allowed 5..300.
@@ -706,7 +805,7 @@ merging, and Memograph processing.
 | `file` | yes | file | MP4, WebM, MOV, M4V, or MKV. A `video/*` media type is also accepted. Default maximum is 250 MiB and is configurable. |
 | `session_id` | yes | string | Client-defined capture session identifier. |
 | `memory_id` | yes | string | Memograph memory that receives generated episodes. |
-| `group_id` | no | string | Defaults to `session_id`. |
+| `group_id` | no | string | Defaults to the stable account scope `account-owner:<authenticated-user-id>`. An explicit value intentionally isolates the graph. |
 | `device_id` | no | string | Client/device metadata. |
 | `location` | no | string | Location metadata. |
 | `start_time` | no | number string | Offset in seconds, default `0`, must be non-negative. |
@@ -741,7 +840,7 @@ Creates an active realtime video session.
 ```ts
 {
   memory_id: string;               // Required.
-  group_id?: string;               // Defaults to generated session id.
+  group_id?: string;               // Defaults to account-owner:<authenticated-user-id>.
   device_id?: string;
   location?: string;
   chunk_duration_seconds?: number; // Default 30; allowed 5..300.

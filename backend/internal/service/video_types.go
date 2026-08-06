@@ -72,17 +72,18 @@ type VideoRecording struct {
 
 type VideoRecordingDetail struct {
 	VideoRecording
-	DeviceID       string          `json:"device_id,omitempty"`
-	Location       string          `json:"location,omitempty"`
-	STTProvider    string          `json:"stt_provider,omitempty"`
-	STTModel       string          `json:"stt_model,omitempty"`
-	VisualProvider string          `json:"visual_provider,omitempty"`
-	VisualModel    string          `json:"visual_model,omitempty"`
-	Transcript     *Transcript     `json:"transcript,omitempty"`
-	VisualAnalysis *VisualAnalysis `json:"visual_analysis,omitempty"`
-	Episodes       []VideoEpisode  `json:"episodes"`
-	LastError      string          `json:"last_error,omitempty"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	DeviceID            string          `json:"device_id,omitempty"`
+	Location            string          `json:"location,omitempty"`
+	STTProvider         string          `json:"stt_provider,omitempty"`
+	STTModel            string          `json:"stt_model,omitempty"`
+	SpeakerReferenceIDs []string        `json:"speaker_reference_ids"`
+	VisualProvider      string          `json:"visual_provider,omitempty"`
+	VisualModel         string          `json:"visual_model,omitempty"`
+	Transcript          *Transcript     `json:"transcript,omitempty"`
+	VisualAnalysis      *VisualAnalysis `json:"visual_analysis,omitempty"`
+	Episodes            []VideoEpisode  `json:"episodes"`
+	LastError           string          `json:"last_error,omitempty"`
+	UpdatedAt           time.Time       `json:"updated_at"`
 }
 
 type StartVideoRealtimeSessionInput struct {
@@ -201,7 +202,9 @@ type VideoJob struct {
 	ID                int64
 	Kind              string
 	RecordingID       string
+	OwnerUserID       string
 	EpisodeID         string
+	MemographSource   string
 	Attempts          int
 	MaxAttempts       int
 	FilePath          string

@@ -18,6 +18,7 @@ type Config struct {
 	Video       VideoConfig
 	STT         STTConfig
 	Vision      VisionConfig
+	Models      ModelConfig
 	Memograph   MemographConfig
 	Worker      WorkerConfig
 }
@@ -66,9 +67,17 @@ type LogConfig struct {
 }
 
 type VoiceConfig struct {
-	StorageDir      string
-	MaxUploadBytes  int64
-	EpisodeDuration time.Duration
+	StorageDir               string
+	EnrollmentStorageDir     string
+	MaxUploadBytes           int64
+	EnrollmentMaxUploadBytes int64
+	EnrollmentMinDuration    time.Duration
+	EnrollmentMaxDuration    time.Duration
+	FFprobePath              string
+	InspectionTimeout        time.Duration
+	EpisodeDuration          time.Duration
+	EpisodeSilenceGap        time.Duration
+	EpisodeMaxDuration       time.Duration
 }
 
 type VideoConfig struct {
@@ -100,11 +109,19 @@ type VisionConfig struct {
 	Timeout  time.Duration
 }
 
+// ModelConfig protects account-level model credentials stored for durable
+// background jobs. Keep this value stable across deploys so saved credentials
+// remain decryptable.
+type ModelConfig struct {
+	CredentialKey string
+}
+
 type MemographConfig struct {
-	BaseURL string
-	APIKey  string
-	JWT     string
-	Timeout time.Duration
+	BaseURL             string
+	APIKey              string
+	JWT                 string
+	Timeout             time.Duration
+	MaxConcurrentWrites int
 }
 
 type WorkerConfig struct {
@@ -153,9 +170,17 @@ func Load() (Config, error) {
 			Pretty: GetEnvBool("APP_LOG_PRETTY", environment != "production"),
 		},
 		Voice: VoiceConfig{
-			StorageDir:      GetEnv("APP_VOICE_STORAGE_DIR", "./data/audio"),
-			MaxUploadBytes:  int64(GetEnvInt("APP_VOICE_MAX_UPLOAD_MB", 25)) << 20,
-			EpisodeDuration: getEnvDuration("APP_VOICE_EPISODE_DURATION", 30*time.Second),
+			StorageDir:               GetEnv("APP_VOICE_STORAGE_DIR", "./data/audio"),
+			EnrollmentStorageDir:     GetEnv("APP_VOICE_ENROLLMENT_STORAGE_DIR", "./data/voice-enrollment"),
+			MaxUploadBytes:           int64(GetEnvInt("APP_VOICE_MAX_UPLOAD_MB", 25)) << 20,
+			EnrollmentMaxUploadBytes: int64(GetEnvInt("APP_VOICE_ENROLLMENT_MAX_UPLOAD_MB", 10)) << 20,
+			EnrollmentMinDuration:    getEnvDuration("APP_VOICE_ENROLLMENT_MIN_DURATION", 2*time.Second),
+			EnrollmentMaxDuration:    getEnvDuration("APP_VOICE_ENROLLMENT_MAX_DURATION", 10*time.Second),
+			FFprobePath:              GetEnv("APP_VOICE_FFPROBE_PATH", "ffprobe"),
+			InspectionTimeout:        getEnvDuration("APP_VOICE_INSPECTION_TIMEOUT", 15*time.Second),
+			EpisodeDuration:          getEnvDuration("APP_VOICE_EPISODE_DURATION", 30*time.Second),
+			EpisodeSilenceGap:        getEnvDuration("APP_VOICE_EPISODE_SILENCE_GAP", 8*time.Second),
+			EpisodeMaxDuration:       getEnvDuration("APP_VOICE_EPISODE_MAX_DURATION", 2*time.Minute),
 		},
 		Video: VideoConfig{
 			StorageDir:        GetEnv("APP_VIDEO_STORAGE_DIR", "./data/video"),
@@ -167,7 +192,7 @@ func Load() (Config, error) {
 			ExtractionTimeout: getEnvDuration("APP_VIDEO_EXTRACTION_TIMEOUT", 2*time.Minute),
 		},
 		STT: STTConfig{
-			Provider: GetEnv("APP_STT_PROVIDER", "mock"),
+			Provider: strings.ToLower(strings.TrimSpace(GetEnv("APP_STT_PROVIDER", "mock"))),
 			BaseURL:  strings.TrimRight(GetEnv("APP_STT_BASE_URL", "https://api.openai.com/v1"), "/"),
 			APIKey:   GetEnv("APP_STT_API_KEY", GetEnv("OPENAI_API_KEY", "")),
 			Model:    GetEnv("APP_STT_MODEL", "gpt-4o-transcribe-diarize"),
@@ -183,11 +208,15 @@ func Load() (Config, error) {
 			Detail:   GetEnv("APP_VISION_DETAIL", "low"),
 			Timeout:  getEnvDuration("APP_VISION_TIMEOUT", 2*time.Minute),
 		},
+		Models: ModelConfig{
+			CredentialKey: GetEnv("APP_MODEL_CREDENTIAL_KEY", GetEnv("APP_JWT_SECRET", "K9mP2xL7vQ4wR8tY1uI3oA5sD6fG0hJ2")),
+		},
 		Memograph: MemographConfig{
-			BaseURL: strings.TrimRight(GetEnv("APP_MEMOGRAPH_BASE_URL", GetEnv("MEMOGRAPH_BASE_URL", "")), "/"),
-			APIKey:  GetEnv("APP_MEMOGRAPH_API_KEY", GetEnv("MEMOGRAPH_API_KEY", "")),
-			JWT:     GetEnv("APP_MEMOGRAPH_JWT", GetEnv("MEMOGRAPH_JWT_TOKEN", "")),
-			Timeout: getEnvDuration("APP_MEMOGRAPH_TIMEOUT", 3*time.Minute),
+			BaseURL:             strings.TrimRight(GetEnv("APP_MEMOGRAPH_BASE_URL", GetEnv("MEMOGRAPH_BASE_URL", "")), "/"),
+			APIKey:              GetEnv("APP_MEMOGRAPH_API_KEY", GetEnv("MEMOGRAPH_API_KEY", "")),
+			JWT:                 GetEnv("APP_MEMOGRAPH_JWT", GetEnv("MEMOGRAPH_JWT_TOKEN", "")),
+			Timeout:             getEnvDuration("APP_MEMOGRAPH_TIMEOUT", 3*time.Minute),
+			MaxConcurrentWrites: GetEnvInt("APP_MEMOGRAPH_MAX_CONCURRENT_WRITES", 1),
 		},
 		Worker: WorkerConfig{
 			Enabled:      GetEnvBool("APP_VOICE_WORKER_ENABLED", true),
@@ -264,6 +293,17 @@ func (c Config) Validate() error {
 	if c.Voice.EpisodeDuration <= 0 {
 		return fmt.Errorf("APP_VOICE_EPISODE_DURATION must be positive")
 	}
+	if strings.TrimSpace(c.Voice.EnrollmentStorageDir) == "" ||
+		c.Voice.EnrollmentMaxUploadBytes < 1 ||
+		c.Voice.EnrollmentMinDuration < 2*time.Second ||
+		c.Voice.EnrollmentMaxDuration < c.Voice.EnrollmentMinDuration ||
+		c.Voice.EnrollmentMaxDuration > 10*time.Second ||
+		strings.TrimSpace(c.Voice.FFprobePath) == "" || c.Voice.InspectionTimeout <= 0 {
+		return fmt.Errorf("valid voice enrollment configuration is required")
+	}
+	if c.Voice.EpisodeSilenceGap <= 0 || c.Voice.EpisodeMaxDuration <= c.Voice.EpisodeSilenceGap {
+		return fmt.Errorf("valid voice episode assembly configuration is required")
+	}
 	if strings.TrimSpace(c.Video.StorageDir) == "" {
 		return fmt.Errorf("APP_VIDEO_STORAGE_DIR must not be empty")
 	}
@@ -272,11 +312,11 @@ func (c Config) Validate() error {
 		strings.TrimSpace(c.Video.FFmpegPath) == "" || c.Video.ExtractionTimeout <= 0 {
 		return fmt.Errorf("valid video processing configuration is required")
 	}
-	if c.STT.Provider != "openai" && c.STT.Provider != "mock" {
-		return fmt.Errorf("APP_STT_PROVIDER must be openai or mock")
+	if strings.TrimSpace(c.STT.Provider) == "" {
+		return fmt.Errorf("APP_STT_PROVIDER must not be empty")
 	}
-	if c.STT.Provider == "openai" && strings.TrimSpace(c.STT.APIKey) == "" {
-		return fmt.Errorf("APP_STT_API_KEY is required when APP_STT_PROVIDER=openai")
+	if c.STT.Provider != "mock" && strings.TrimSpace(c.STT.APIKey) == "" {
+		return fmt.Errorf("APP_STT_API_KEY is required when APP_STT_PROVIDER is not mock")
 	}
 	if strings.TrimSpace(c.STT.BaseURL) == "" || strings.TrimSpace(c.STT.Model) == "" || c.STT.Timeout <= 0 {
 		return fmt.Errorf("valid STT configuration is required")
@@ -297,14 +337,17 @@ func (c Config) Validate() error {
 		c.Vision.Detail != "original" {
 		return fmt.Errorf("APP_VISION_DETAIL must be low, high, auto, or original")
 	}
+	if len(c.Models.CredentialKey) < 32 {
+		return fmt.Errorf("APP_MODEL_CREDENTIAL_KEY must be at least 32 characters")
+	}
 	if c.Worker.Concurrency < 1 || c.Worker.MaxAttempts < 1 || c.Worker.PollInterval <= 0 {
 		return fmt.Errorf("valid voice worker configuration is required")
 	}
 	if c.Memograph.BaseURL != "" && c.Memograph.APIKey == "" && c.Memograph.JWT == "" {
 		return fmt.Errorf("APP_MEMOGRAPH_API_KEY or APP_MEMOGRAPH_JWT is required when Memograph is configured")
 	}
-	if c.Memograph.Timeout <= 0 {
-		return fmt.Errorf("APP_MEMOGRAPH_TIMEOUT must be positive")
+	if c.Memograph.Timeout <= 0 || c.Memograph.MaxConcurrentWrites < 1 {
+		return fmt.Errorf("APP_MEMOGRAPH_TIMEOUT and APP_MEMOGRAPH_MAX_CONCURRENT_WRITES must be positive")
 	}
 	return nil
 }

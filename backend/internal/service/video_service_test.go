@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestBuildVideoEpisodesMergesSpeechAndVisualContext(t *testing.T) {
 		"Two people are reviewing a document.",
 		"Objects visible: printed contract.",
 		"Readable text: Employment Agreement.",
-		"A Said : Update the contract before Friday.",
+		"[62.00s-67.00s] Unknown speaker A: Update the contract before Friday.",
 	} {
 		if !strings.Contains(episode.Description, expected) {
 			t.Fatalf("description %q does not contain %q", episode.Description, expected)
@@ -55,7 +56,7 @@ func TestBuildVideoEpisodesMergesSpeechAndVisualContext(t *testing.T) {
 		strings.Contains(episode.VisualDescription, "Visible context:") {
 		t.Fatalf("visual Memograph data contains a wrapper label: %q", episode.VisualDescription)
 	}
-	if episode.SpeechDescription != "A Said : Update the contract before Friday." {
+	if episode.SpeechDescription != "[62.00s-67.00s] Unknown speaker A: Update the contract before Friday." {
 		t.Fatalf("speech description = %q", episode.SpeechDescription)
 	}
 	if strings.Contains(episode.SpeechDescription, "Speech:") ||
@@ -98,6 +99,39 @@ type videoRealtimeRepository struct {
 	createCalls   int
 }
 
+type videoIngestRepository struct {
+	stubVideoRepository
+	input CreateVideoRecordingInput
+}
+
+func (r *videoIngestRepository) CreateVideoRecording(
+	_ context.Context, input CreateVideoRecordingInput, _ int,
+) (VideoRecording, error) {
+	r.input = input
+	return VideoRecording{ID: "video-1", GroupID: input.GroupID}, nil
+}
+
+func TestVideoIngestDefaultsToStableAccountGraphGroup(t *testing.T) {
+	repository := &videoIngestRepository{}
+	store := &realtimeTestStore{}
+	video := newVideoService(
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, store, stubMediaExtractor{}, stubVisualAnalyzer{},
+		stubMemographClient{}, config.VideoConfig{}, config.WorkerConfig{MaxAttempts: 5},
+	)
+	_, err := video.IngestVideo(context.Background(), VideoIngestInput{
+		OwnerUserID: "owner-1", SessionID: "session-1", MemoryID: "memory-1",
+		FileName: "capture.mp4", MediaType: "video/mp4",
+		Content: strings.NewReader("video"),
+	})
+	if err != nil {
+		t.Fatalf("IngestVideo() error = %v", err)
+	}
+	if repository.input.GroupID != "account-owner:owner-1" {
+		t.Fatalf("default group = %q", repository.input.GroupID)
+	}
+}
+
 func (r *videoRealtimeRepository) FindVideoRecordingByClientChunk(
 	context.Context, string, string, string,
 ) (VideoRecording, bool, error) {
@@ -132,7 +166,8 @@ func TestVideoRealtimeChunkUsesClientIDAndBackendAssignedIndex(t *testing.T) {
 	}}
 	store := &realtimeTestStore{}
 	video := newVideoService(
-		repository, stubTranscriber{}, store, noAudioExtractor{},
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, store, noAudioExtractor{},
 		stubVisualAnalyzer{}, stubMemographClient{},
 		config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
@@ -164,7 +199,8 @@ func TestVideoRealtimeChunkRetryReturnsExistingRecording(t *testing.T) {
 	repository := &videoRealtimeRepository{existing: existing, existingFound: true}
 	store := &realtimeTestStore{}
 	video := newVideoService(
-		repository, stubTranscriber{}, store, noAudioExtractor{},
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, store, noAudioExtractor{},
 		stubVisualAnalyzer{}, stubMemographClient{},
 		config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
@@ -194,26 +230,135 @@ func (noAudioExtractor) ExtractFrames(context.Context, string, time.Duration, in
 
 type transcriptCaptureRepository struct {
 	stubVideoRepository
-	saved      bool
-	transcript Transcript
+	saved        bool
+	transcript   Transcript
+	referenceIDs []string
 }
 
 func (r *transcriptCaptureRepository) SaveVideoTranscript(
 	_ context.Context,
 	_ VideoJob,
 	transcript Transcript,
+	referenceIDs []string,
 	_, _ string,
 	_ int,
 ) error {
 	r.saved = true
 	r.transcript = transcript
+	r.referenceIDs = referenceIDs
 	return nil
+}
+
+type videoEnrollmentRepository struct {
+	stubVoiceRepository
+	samples []VoiceEnrollmentRecord
+}
+
+func (r videoEnrollmentRepository) ListEnrollmentSamples(
+	context.Context, string,
+) ([]VoiceEnrollmentRecord, error) {
+	return r.samples, nil
+}
+
+type videoEnrollmentStore struct{ stubAudioStore }
+
+func (videoEnrollmentStore) Open(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("voice")), nil
+}
+
+type videoOwnerTranscriber struct{ input TranscriptionInput }
+
+func (t *videoOwnerTranscriber) Transcribe(
+	_ context.Context, input TranscriptionInput,
+) (Transcript, error) {
+	t.input = input
+	return Transcript{Segments: []TranscriptSegment{
+		{StartTime: 0, EndTime: 2, Speaker: "owner_ref", Text: "What time is the meeting?"},
+		{StartTime: 2, EndTime: 4, Speaker: "A", Text: "It starts at three."},
+	}}, nil
+}
+func (*videoOwnerTranscriber) Provider() string { return "test" }
+func (*videoOwnerTranscriber) Model() string    { return "test-diarize" }
+
+type videoOwnerAttributor struct{ called bool }
+
+func (a *videoOwnerAttributor) Attribute(
+	_ context.Context, input SpeakerAttributionInput,
+) (Transcript, error) {
+	a.called = true
+	for index := range input.Transcript.Segments {
+		if input.Transcript.Segments[index].Speaker == input.References[0].ProviderLabel {
+			input.Transcript.Segments[index].SpeakerRole = "owner"
+		} else {
+			input.Transcript.Segments[index].SpeakerRole = "other"
+		}
+	}
+	return input.Transcript, nil
+}
+
+func TestVideoAudioJobUsesOwnerEnrollmentAndPersistsAttribution(t *testing.T) {
+	repository := &transcriptCaptureRepository{}
+	enrollments := videoEnrollmentRepository{samples: []VoiceEnrollmentRecord{{
+		ID: "sample-1", ProviderLabel: "owner_ref", FilePath: "owner.m4a",
+		MediaType: "audio/mp4", SizeBytes: 5,
+	}}}
+	transcriber := &videoOwnerTranscriber{}
+	attributor := &videoOwnerAttributor{}
+	video := newVideoService(
+		repository, enrollments, transcriber, attributor,
+		videoEnrollmentStore{}, stubAudioStore{}, stubMediaExtractor{},
+		stubVisualAnalyzer{}, stubMemographClient{},
+		config.VideoConfig{
+			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
+		},
+		config.WorkerConfig{MaxAttempts: 5},
+	)
+
+	err := video.processVideoAudio(context.Background(), VideoJob{
+		RecordingID: "video-1", OwnerUserID: "owner-1",
+	})
+	if err != nil {
+		t.Fatalf("processVideoAudio() error = %v", err)
+	}
+	if len(transcriber.input.KnownSpeakers) != 1 ||
+		transcriber.input.KnownSpeakers[0].ProviderLabel != "owner_ref" {
+		t.Fatalf("known speakers = %+v", transcriber.input.KnownSpeakers)
+	}
+	if !attributor.called {
+		t.Fatal("speaker attributor was not called")
+	}
+	if len(repository.referenceIDs) != 1 || repository.referenceIDs[0] != "sample-1" {
+		t.Fatalf("saved reference IDs = %+v", repository.referenceIDs)
+	}
+	if got := repository.transcript.Segments; len(got) != 2 ||
+		got[0].SpeakerRole != "owner" || got[1].SpeakerRole != "other" {
+		t.Fatalf("attributed transcript = %+v", got)
+	}
+}
+
+func TestBuildVideoEpisodesLabelsOwnerAndOtherSpeech(t *testing.T) {
+	episodes := BuildVideoEpisodes(Transcript{Segments: []TranscriptSegment{
+		{StartTime: 1, EndTime: 2, Speaker: "owner_ref", SpeakerRole: "owner", Text: "Can you send the notes?"},
+		{StartTime: 2, EndTime: 3, Speaker: "A", SpeakerRole: "other", Text: "Yes, I will."},
+	}}, VisualAnalysis{}, 30*time.Second, 10, "session-1", "")
+	if len(episodes) != 1 {
+		t.Fatalf("len(episodes) = %d, want 1", len(episodes))
+	}
+	for _, expected := range []string{
+		"[11.00s-12.00s] Owner: Can you send the notes?",
+		"[12.00s-13.00s] Other speaker A: Yes, I will.",
+	} {
+		if !strings.Contains(episodes[0].SpeechDescription, expected) {
+			t.Fatalf("speech description %q does not contain %q", episodes[0].SpeechDescription, expected)
+		}
+	}
 }
 
 func TestVideoAudioJobAllowsVideoWithoutAudioTrack(t *testing.T) {
 	repository := &transcriptCaptureRepository{}
 	video := newVideoService(
-		repository, stubTranscriber{}, stubAudioStore{}, noAudioExtractor{},
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, stubAudioStore{}, noAudioExtractor{},
 		stubVisualAnalyzer{}, stubMemographClient{},
 		config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
@@ -238,7 +383,8 @@ func TestVideoAudioJobAllowsVideoWithoutAudioTrack(t *testing.T) {
 func TestVideoAudioJobReportsAudioWithNoDetectedSpeech(t *testing.T) {
 	repository := &transcriptCaptureRepository{}
 	video := newVideoService(
-		repository, stubTranscriber{}, stubAudioStore{}, stubMediaExtractor{},
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, stubAudioStore{}, stubMediaExtractor{},
 		stubVisualAnalyzer{}, stubMemographClient{},
 		config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
@@ -258,53 +404,47 @@ func TestVideoAudioJobReportsAudioWithNoDetectedSpeech(t *testing.T) {
 
 type memographCompletionRepository struct {
 	stubVideoRepository
+	job      VideoJob
 	response json.RawMessage
+	calls    int
 }
 
-func (r *memographCompletionRepository) CompleteVideoMemographEpisode(
+func (r *memographCompletionRepository) CompleteVideoMemographBranch(
 	_ context.Context,
-	_ VideoJob,
+	job VideoJob,
 	response json.RawMessage,
 ) error {
+	r.job = job
 	r.response = response
+	r.calls++
 	return nil
 }
 
-type parallelMemographClient struct {
+type captureMemographClient struct {
 	stubMemographClient
-	started  chan struct{}
-	release  chan struct{}
-	requests chan EpisodeInsertRequest
+	requests []EpisodeInsertRequest
+	err      error
 }
 
-func (c *parallelMemographClient) InsertEpisode(
-	ctx context.Context,
+func (c *captureMemographClient) InsertEpisode(
+	_ context.Context,
 	_ string,
 	request EpisodeInsertRequest,
 ) (json.RawMessage, error) {
-	select {
-	case c.started <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	c.requests = append(c.requests, request)
+	if c.err != nil {
+		return nil, c.err
 	}
-	select {
-	case <-c.release:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	c.requests <- request
 	source, _ := request.Meta["source"].(string)
 	return json.RawMessage(`{"source":"` + source + `"}`), nil
 }
 
-func TestVideoMemographWritesVisualAndSpeechInParallel(t *testing.T) {
+func TestVideoMemographWritesOneDurableBranchWithCanonicalOwner(t *testing.T) {
 	repository := &memographCompletionRepository{}
-	client := &parallelMemographClient{
-		started: make(chan struct{}, 2), release: make(chan struct{}),
-		requests: make(chan EpisodeInsertRequest, 2),
-	}
+	client := &captureMemographClient{}
 	video := newVideoService(
-		repository, stubTranscriber{}, stubAudioStore{}, stubMediaExtractor{},
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, stubAudioStore{}, stubMediaExtractor{},
 		stubVisualAnalyzer{}, client,
 		config.VideoConfig{
 			EpisodeDuration: 30 * time.Second, FrameInterval: 5 * time.Second, MaxFrames: 6,
@@ -312,56 +452,73 @@ func TestVideoMemographWritesVisualAndSpeechInParallel(t *testing.T) {
 		config.WorkerConfig{MaxAttempts: 5},
 	)
 
-	done := make(chan error, 1)
-	go func() {
-		done <- video.processVideoMemograph(context.Background(), VideoJob{
-			MemoryID: "memory-1", SessionID: "session-1", GroupID: "group-1",
-			VisualDescription: "View over a lake with a dock.",
-			SpeechDescription: "A Said : you",
-			EpisodeStart:      30, EpisodeEnd: 60,
-		})
-	}()
-
-	for index := 0; index < 2; index++ {
-		select {
-		case <-client.started:
-		case <-time.After(time.Second):
-			t.Fatal("visual and speech Memograph calls did not overlap")
-		}
+	job := VideoJob{
+		ID: 12, EpisodeID: "episode-1", MemographSource: "speech",
+		OwnerUserID: "user-1", MemoryID: "memory-1",
+		SessionID: "session-1", GroupID: "group-1",
+		VisualDescription: "View over a lake with a dock.",
+		SpeechDescription: "[30.00s-31.00s] Owner: I prefer tea.",
+		EpisodeStart:      30, EpisodeEnd: 60,
+		Transcript: Transcript{Segments: []TranscriptSegment{{
+			StartTime: 30, EndTime: 31, Speaker: "owner_ref",
+			SpeakerRole: "owner", Text: "I prefer tea.",
+		}}},
 	}
-	close(client.release)
-	if err := <-done; err != nil {
+	if err := video.processVideoMemograph(context.Background(), job); err != nil {
 		t.Fatalf("processVideoMemograph() error = %v", err)
 	}
+	if len(client.requests) != 1 {
+		t.Fatalf("Memograph requests = %d, want one branch", len(client.requests))
+	}
+	request := client.requests[0]
+	if request.Meta["source"] != "speech" ||
+		request.Meta["owner_entity_id"] != "account-owner:user-1" {
+		t.Fatalf("Memograph metadata = %+v", request.Meta)
+	}
+	if request.IdempotencyKey == "" || request.Meta["idempotency_key"] != request.IdempotencyKey {
+		t.Fatalf("idempotency key/meta = %q/%+v", request.IdempotencyKey, request.Meta)
+	}
+	if request.StructuredGraph == nil {
+		t.Fatal("structured graph is nil")
+	}
+	owner := findStructuredEntity(request.StructuredGraph.Entities, "account-owner:user-1")
+	utterance := findStructuredEntityByText(request.StructuredGraph.Entities, "I prefer tea.")
+	if request.StructuredGraph.EpisodeID != "second-brain:video-speech:episode-1" ||
+		len(request.StructuredGraph.Entities) != 2 ||
+		owner == nil || owner.Type != "Person" ||
+		utterance == nil || utterance.Type != "ConversationUtterance" ||
+		len(request.StructuredGraph.Utterances) != 1 ||
+		request.StructuredGraph.Utterances[0].Text != "I prefer tea." ||
+		len(request.StructuredGraph.Relations) != 1 ||
+		!hasStructuredRelation(
+			request.StructuredGraph.Relations,
+			owner.CanonicalID, "SAID", utterance.CanonicalID,
+		) {
+		t.Fatalf("structured graph = %+v", request.StructuredGraph)
+	}
+	if repository.calls != 1 || repository.job.MemographSource != "speech" {
+		t.Fatalf("branch completion = %d/%+v", repository.calls, repository.job)
+	}
+}
 
-	dataBySource := make(map[string]string, 2)
-	for index := 0; index < 2; index++ {
-		request := <-client.requests
-		source, _ := request.Meta["source"].(string)
-		dataBySource[source] = request.Data
+func TestVideoMemographFailureDoesNotCompleteBranch(t *testing.T) {
+	repository := &memographCompletionRepository{}
+	client := &captureMemographClient{err: errors.New("database connections exhausted")}
+	video := newVideoService(
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, stubAudioStore{}, stubMediaExtractor{},
+		stubVisualAnalyzer{}, client,
+		config.VideoConfig{}, config.WorkerConfig{MaxAttempts: 5},
+	)
+	err := video.processVideoMemograph(context.Background(), VideoJob{
+		ID: 13, EpisodeID: "episode-1", MemographSource: "visual",
+		MemoryID: "memory-1", VisualDescription: "A lake is visible.",
+	})
+	if err == nil || !strings.Contains(err.Error(), "database connections exhausted") {
+		t.Fatalf("processVideoMemograph() error = %v", err)
 	}
-	if dataBySource["visual"] != "View over a lake with a dock." ||
-		dataBySource["speech"] != "A Said : you" {
-		t.Fatalf("Memograph branch data = %+v", dataBySource)
-	}
-	for _, data := range dataBySource {
-		for _, forbidden := range []string{
-			"Audio and video memory from session",
-			"Visible context:",
-			"Objects visible:",
-			"Speech:",
-		} {
-			if strings.Contains(data, forbidden) {
-				t.Fatalf("Memograph data %q contains %q", data, forbidden)
-			}
-		}
-	}
-	var responses map[string]json.RawMessage
-	if err := json.Unmarshal(repository.response, &responses); err != nil {
-		t.Fatalf("combined Memograph response = %s: %v", repository.response, err)
-	}
-	if len(responses) != 2 {
-		t.Fatalf("combined Memograph responses = %s", repository.response)
+	if len(client.requests) != 1 || repository.calls != 0 {
+		t.Fatalf("requests/completions = %d/%d", len(client.requests), repository.calls)
 	}
 }
 

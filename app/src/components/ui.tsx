@@ -265,6 +265,8 @@ export function Field({
     <View style={styles.field}>
       <Text style={[styles.fieldLabel, { color: theme.text }]}>{label}</Text>
       <TextInput
+        accessibilityLabel={props.accessibilityLabel ?? label}
+        accessibilityHint={props.accessibilityHint ?? error ?? hint}
         accessibilityState={{ disabled: editable === false }}
         editable={editable}
         placeholderTextColor={theme.textSecondary}

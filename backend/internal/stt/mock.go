@@ -26,7 +26,7 @@ func (*MockTranscriber) Transcribe(ctx context.Context, input service.Transcript
 	}
 	text := string(content)
 	return service.Transcript{
-		Text: text, Duration: 1,
+		Text: text, Duration: 1, Provider: "mock", Model: "mock-text-audio",
 		Segments: []service.TranscriptSegment{{
 			StartTime: 0, EndTime: 1, Speaker: "speaker", Text: text,
 		}},

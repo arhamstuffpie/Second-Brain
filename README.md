@@ -32,22 +32,41 @@ transcribes them asynchronously, turns timestamped speech into natural-language
 episodes, and writes each episode into a Memograph graph memory.
 
 ```text
-upload/chunk -> local audio store -> PostgreSQL STT job
-             -> timestamped transcript -> 30s episode buckets
+upload/chunk -> local audio store -> PostgreSQL STT job + owner references
+             -> attributed timestamped transcript -> session episode assembler
              -> independent PostgreSQL Memograph jobs -> graph memory
 ```
 
-The speech-to-text boundary is an interface, so another provider can replace the
-included OpenAI-compatible adapter. PostgreSQL is the durable queue: workers
-claim rows with `FOR UPDATE SKIP LOCKED`, and STT and Memograph jobs have
-separate retry lifecycles. A failed graph write therefore does not transcribe
-the audio again.
+Owners may enroll up to four clean 2–10 second reference clips. The OpenAI
+adapter sends those clips to `gpt-4o-transcribe-diarize`; returned labels are
+normalized to `owner`, `other`, or `unknown` by a separate attribution boundary.
+Without enrollment, transcription continues and every speaker remains unknown.
+The speech-to-text and attribution boundaries are interfaces, so a dedicated
+voiceprint implementation can replace provider-assisted matching later.
+PostgreSQL is the durable queue: workers claim rows with
+`FOR UPDATE SKIP LOCKED`, and STT, episode-assembly, and Memograph jobs have
+separate retry lifecycles. A failed graph
+write therefore does not transcribe or reassemble the audio again.
+
+Realtime transcripts are assembled across chunk boundaries. An episode closes
+after 8 seconds of silence or at a 2-minute maximum span; the newest tail stays
+buffered until it becomes coherent or the stopped session has finished STT.
+Memograph payloads place owner utterances in a distinct section and preserve
+all other speech as context explicitly marked as non-owner.
 
 The production adapter calls `POST /v1/audio/transcriptions`. With
 `gpt-4o-transcribe-diarize`, it requests `diarized_json` and automatic chunking;
 `whisper-1` requests `verbose_json` segment timestamps, and other compatible
 models use JSON output. Use `APP_STT_PROVIDER=mock` without external STT
 credentials (the mock treats uploaded UTF-8 file contents as the transcript).
+
+Authenticated users can replace that server default from the mobile Settings
+screen by entering a provider label, exact model ID, compatible API base URL,
+and API key. The backend encrypts the key in `model_profiles`, never returns it
+to the client, and resolves the account profile when a queued voice or video
+audio job runs. Custom providers must implement the same OpenAI-compatible
+`/audio/transcriptions` request and response contract; provider-specific APIs
+with different authentication or payloads need their own adapter.
 
 ### Voice API
 
@@ -56,8 +75,11 @@ All routes require this application's JWT in
 
 | Method | Route | Purpose |
 | --- | --- | --- |
+| `POST` | `/api/v1/voice/enrollments/samples` | Enroll one owner voice reference |
+| `GET` | `/api/v1/voice/enrollments/samples` | List enrolled reference metadata |
+| `DELETE` | `/api/v1/voice/enrollments/samples/:sample_id` | Delete an owner reference |
 | `POST` | `/api/v1/voice/recordings` | Upload a complete audio file |
-| `POST` | `/api/v1/voice/chunks` | Upload one live-stream chunk |
+| `POST` | `/api/v1/voice/chunks` | Upload one legacy standalone chunk |
 | `GET` | `/api/v1/voice/recordings/:recording_id` | Poll transcript, episodes, and write status |
 | `POST` | `/api/v1/voice/realtime/sessions` | Start a persistent microphone session |
 | `POST` | `/api/v1/voice/realtime/sessions/:session_id/chunks` | Upload an ordered realtime chunk |
@@ -81,10 +103,25 @@ curl -X POST http://localhost:8080/api/v1/voice/recordings \
   -F "location=home-office"
 ```
 
-`group_id` defaults to `session_id`. For a stream chunk, use `/chunks` with the
-same fields and add `start_time` as the chunk offset in seconds. Both routes
-return `202 Accepted` with a recording ID. Poll it until `status` is `completed`
-or `failed`.
+Enroll a clean owner reference before capture (optional but required for owner
+recognition):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/voice/enrollments/samples \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F "file=@owner-reference.wav"
+```
+
+Reference clips are retained in `APP_VOICE_ENROLLMENT_STORAGE_DIR` until the
+authenticated owner deletes them. The API never returns their storage paths.
+
+`group_id` defaults to the stable account scope
+`account-owner:<authenticated-user-id>`. Supplying a group explicitly creates an
+intentional graph partition. The legacy `/chunks` alias accepts the same fields
+plus `start_time`, but treats each request as a closed standalone batch.
+Use the realtime session routes below when episodes must span chunk boundaries.
+Both upload routes return `202 Accepted` with a recording ID. Poll it until
+`status` is `completed` or `failed`.
 
 ### Realtime 30-second microphone sessions
 
@@ -193,16 +230,28 @@ Production UI should retry failed uploads with the same `chunk_index`, display
 a persistent microphone indicator, require explicit user consent, and use
 HTTPS because browsers restrict microphone access on insecure origins.
 
-Each Memograph episode contains a description similar to:
+Each Memograph episode contains an attribution-safe description similar to:
 
 ```text
-Audio memory from session session-123 between 0.00s and 18.40s.
-Recorded at home-office. A said: "Let's ship on Friday."
+Conversation episode from session session-123 between 0.00s and 18.40s.
+Recorded at home-office.
+Owner-attributed utterances:
+- [2.10s–4.20s] Owner: Let's ship on Friday.
+Non-owner conversational context (must not be treated as owner statements):
+- [4.50s–5.10s] Other speaker A: Agreed.
 ```
 
 Metadata includes `source`, `session_id`, `group_id`, `start_time`, `end_time`,
 `location`, and `device_id`. Confidence is sent as a top-level custom field
-when available.
+when available. Speech is sent through Memograph's `structured_graph` contract:
+the Owner is a `Person` with canonical ID
+`account-owner:<authenticated-user-id>`, every utterance retains its speaker and
+timestamps, and each statement or question becomes a real
+`ConversationUtterance` node. Owner speech connects directly with `SAID` or
+`ASKED`; non-owner speech connects to its actual speaker and to Owner only with
+`HAS_CONTEXT`, so it cannot become an Owner fact. `FOLLOWED_BY` edges retain
+conversation order. This bypasses probabilistic LLM identity deduplication
+while leaving visual episode extraction independent.
 
 ### Create and query graph memory
 
@@ -271,20 +320,28 @@ video upload -> audio extraction -> speech-to-text ----\
 ```
 
 FFmpeg extracts a mono WAV track and timestamped JPEG frames. The audio branch
-uses the same swappable transcriber as voice ingestion. The visual branch uses
-a `VisualAnalyzer` interface; the included OpenAI adapter sends image frames to
-the Responses API with a strict JSON schema for objects, readable text,
-activity, location, summary, and confidence. Raw video is never sent to the
-vision model. Videos without an audio track are valid and produce visual-only
-episodes.
+uses the same enrolled owner references, swappable transcriber, and speaker
+attribution boundary as voice ingestion. Video transcripts therefore retain
+timestamped `owner`, `other`, and `unknown` roles, and recording details expose
+the enrollment sample IDs used for attribution. Episode speech labels every
+owner utterance explicitly while retaining other speakers as marked context.
+The visual branch uses a `VisualAnalyzer` interface; the included OpenAI adapter
+sends image frames to the Responses API with a strict JSON schema for objects,
+readable text, activity, location, summary, and confidence. Raw video is never
+sent to the vision model. Videos without an audio track are valid and produce
+visual-only episodes.
 
 PostgreSQL queues `audio` and `visual` jobs together. A `merge` job is created
-exactly once after both branches complete, and every resulting episode receives
-its own `memograph` job. That job writes the visual summary and speech transcript
-to Memograph as separate concurrent API calls. The visual payload excludes
-objects and wrapper labels; the speech payload contains only speaker utterances.
-A visual-analysis retry therefore never reruns STT, and a Memograph retry never
-reruns either extraction branch.
+exactly once after both branches complete. Every resulting episode receives one
+durable Memograph job per non-empty visual or speech branch. Successful branches
+are checkpointed independently, so retrying a failed speech write never resends
+an already stored visual write. A shared, configurable write gate prevents the
+voice and video workers from exhausting a small Memograph PostgreSQL connection
+pool. Requests also carry deterministic idempotency keys. The visual payload
+excludes objects and wrapper labels; the speech payload includes a canonical
+account-owner identity and timestamped speaker utterances. A visual-analysis
+retry therefore never reruns STT, and a Memograph retry never reruns either
+extraction branch.
 
 ### Video API
 
@@ -400,6 +457,7 @@ Voice, video, and Memograph essentials:
 APP_STT_PROVIDER=openai
 APP_STT_API_KEY=...
 APP_STT_MODEL=gpt-4o-transcribe-diarize
+APP_MODEL_CREDENTIAL_KEY=replace-with-a-stable-32-character-secret
 
 APP_VISION_PROVIDER=openai
 APP_VISION_API_KEY=...
@@ -409,6 +467,7 @@ APP_MEMOGRAPH_BASE_URL=https://your-memograph-host
 APP_MEMOGRAPH_API_KEY=mg_live_...
 APP_MEMOGRAPH_JWT=...
 APP_MEMOGRAPH_TIMEOUT=3m
+APP_MEMOGRAPH_MAX_CONCURRENT_WRITES=1
 ```
 
 See `backend/.env.example` for storage limits, frame interval, episode duration,
@@ -416,6 +475,10 @@ worker concurrency, retry count, provider URLs, and timeouts. `OPENAI_API_KEY`
 is accepted as an alias for both `APP_STT_API_KEY` and `APP_VISION_API_KEY`.
 When both features use OpenAI, `APP_VISION_API_KEY` may also be omitted and the
 backend will reuse `APP_STT_API_KEY`.
+`APP_MODEL_CREDENTIAL_KEY` encrypts account-level model API keys. It falls back
+to `APP_JWT_SECRET` for compatibility, but production deployments should set a
+separate stable secret before users save model profiles. Changing it makes
+previously saved provider keys unreadable until users enter them again.
 Container deployments should mount persistent storage at `/data`. Local
 non-container development requires `ffmpeg` on `PATH`; the production image
 installs it. The server validates `APP_VIDEO_FFMPEG_PATH` during startup so a
@@ -469,6 +532,6 @@ make build
 ```
 
 The test suite covers container dependency contracts, configuration fallbacks,
-authentication, episode bucketing and offsets, graph-configuration validation,
+authentication, owner attribution, cross-chunk episode assembly, graph-configuration validation,
 OpenAI diarized and visual structured-output parsing, backend-assigned video
 chunk ordering, Memograph auth selection, custom fields, and answer scoping.

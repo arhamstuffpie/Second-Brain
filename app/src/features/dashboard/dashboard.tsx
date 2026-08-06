@@ -34,7 +34,17 @@ function withAlpha(hex: string, alpha: number) {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
-function TabIcon({ tab, color, surface }: { tab: Tab; color: string; surface: string }) {
+function TabIcon({
+  tab,
+  color,
+  surface,
+  attentionColor,
+}: {
+  tab: Tab;
+  color: string;
+  surface: string;
+  attentionColor?: string;
+}) {
   if (tab === 'capture') {
     return (
       <View style={[styles.captureIcon, { borderColor: color }]}>
@@ -67,6 +77,9 @@ function TabIcon({ tab, color, surface }: { tab: Tab; color: string; surface: st
   }
   return (
     <View style={styles.settingsIcon}>
+      {attentionColor ? (
+        <View style={[styles.attentionDot, { backgroundColor: attentionColor }]} />
+      ) : null}
       <View style={[styles.settingLine, { backgroundColor: color }]}>
         <View style={[styles.settingKnob, styles.settingKnobLeft, { backgroundColor: color }]} />
       </View>
@@ -85,7 +98,7 @@ export function Dashboard() {
   const insets = useSafeAreaInsets();
   const keyboardHeight = useKeyboardHeight();
   const reducedMotion = useReducedMotion();
-  const { capture } = useApp();
+  const { capture, voiceEnrollment } = useApp();
   const [tab, setTab] = useState<Tab>('capture');
   const [navWidth, setNavWidth] = useState(0);
   const pillX = useRef(new Animated.Value(0)).current;
@@ -96,6 +109,8 @@ export function Dashboard() {
   const captureLocked =
     capture.phase === 'starting' || capture.phase === 'capturing' || capture.phase === 'stopping';
   const hideNavigation = tab === 'chat' && keyboardHeight > 0;
+  const voiceNeedsAttention =
+    voiceEnrollment.status === 'required' || voiceEnrollment.status === 'error';
   const activeIndex = tabs.findIndex((item) => item.key === tab);
   const slotWidth = navWidth > 0 ? (navWidth - NAV_INSET * 2) / tabs.length : 0;
   const navGlass = withAlpha(theme.surfaceRaised, 0.88);
@@ -288,7 +303,11 @@ export function Dashboard() {
                   <Pressable
                     key={item.key}
                     accessibilityRole="tab"
-                    accessibilityLabel={item.label}
+                    accessibilityLabel={
+                      item.key === 'settings' && voiceNeedsAttention
+                        ? 'Settings, owner voice setup needed'
+                        : item.label
+                    }
                     accessibilityHint="Double tap to open, or swipe across the tab bar to change tabs."
                     accessibilityState={{ selected: active, disabled }}
                     disabled={disabled}
@@ -302,6 +321,9 @@ export function Dashboard() {
                       tab={item.key}
                       color={active ? theme.accent : theme.textSecondary}
                       surface={active ? pillGlass : navGlass}
+                      attentionColor={
+                        item.key === 'settings' && voiceNeedsAttention ? theme.warning : undefined
+                      }
                     />
                     <Text
                       numberOfLines={1}
@@ -410,6 +432,14 @@ const styles = StyleSheet.create({
   },
   memoryIconCore: { width: 5, height: 5, borderRadius: 3 },
   settingsIcon: { width: 22, height: 20, justifyContent: 'space-between', paddingVertical: 2 },
+  attentionDot: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
   settingLine: { width: 22, height: 1.5, borderRadius: 1 },
   settingKnob: { position: 'absolute', top: -2.2, width: 6, height: 6, borderRadius: 3 },
   settingKnobLeft: { left: 3 },

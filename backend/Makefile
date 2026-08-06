@@ -1,4 +1,4 @@
-.PHONY: build run test vet generate migrate-up migrate-down
+.PHONY: build run test vet generate migrate-validate migrate-up migrate-down
 
 DATABASE_URL ?=postgresql://postgres:mysecretpassword@localhost:5433/mysecondbrain
 
@@ -17,6 +17,9 @@ vet:
 
 generate:
 	sqlc generate
+
+migrate-validate:
+	goose -dir db/migrations validate
 
 migrate-up:
 	@test -n "$(DATABASE_URL)" || (echo "DATABASE_URL is required"; exit 1)

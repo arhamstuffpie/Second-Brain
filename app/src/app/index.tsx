@@ -5,12 +5,13 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { BrandMark } from '@/components/ui';
 import { AuthScreen } from '@/features/auth/auth-screen';
 import { Dashboard } from '@/features/dashboard/dashboard';
+import { VoiceEnrollmentScreen } from '@/features/voice-enrollment/voice-enrollment-screen';
 import { useApp } from '@/state/app-provider';
 import { useTheme } from '@/hooks/use-theme';
 
 export default function IndexScreen() {
   const theme = useTheme();
-  const { ready, auth } = useApp();
+  const { ready, auth, voiceEnrollment } = useApp();
 
   useEffect(() => {
     if (ready) {
@@ -27,7 +28,11 @@ export default function IndexScreen() {
     );
   }
 
-  return auth ? <Dashboard /> : <AuthScreen />;
+  if (!auth) return <AuthScreen />;
+  if (voiceEnrollment.onboardingRequired && voiceEnrollment.status !== 'enrolled') {
+    return <VoiceEnrollmentScreen />;
+  }
+  return <Dashboard key={auth.user.id} />;
 }
 
 const styles = StyleSheet.create({

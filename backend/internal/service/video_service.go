@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -17,7 +16,10 @@ import (
 
 type videoService struct {
 	repository      VideoRepository
+	enrollments     VoiceRepository
 	transcriber     Transcriber
+	attributor      SpeakerAttributor
+	enrollmentStore AudioStore
 	store           VideoStore
 	extractor       MediaExtractor
 	analyzer        VisualAnalyzer
@@ -30,7 +32,10 @@ type videoService struct {
 
 func newVideoService(
 	repository VideoRepository,
+	enrollments VoiceRepository,
 	transcriber Transcriber,
+	attributor SpeakerAttributor,
+	enrollmentStore AudioStore,
 	store VideoStore,
 	extractor MediaExtractor,
 	analyzer VisualAnalyzer,
@@ -39,7 +44,8 @@ func newVideoService(
 	workerConfig config.WorkerConfig,
 ) *videoService {
 	return &videoService{
-		repository: repository, transcriber: transcriber, store: store,
+		repository: repository, enrollments: enrollments, transcriber: transcriber,
+		attributor: attributor, enrollmentStore: enrollmentStore, store: store,
 		extractor: extractor, analyzer: analyzer, memograph: memograph,
 		episodeDuration: videoConfig.EpisodeDuration,
 		frameInterval:   videoConfig.FrameInterval,
@@ -67,7 +73,7 @@ func (s *videoService) IngestVideo(
 		return VideoRecording{}, validation("session_id", "is required")
 	}
 	if input.GroupID == "" {
-		input.GroupID = input.SessionID
+		input.GroupID = defaultMemoryGroupID(input.OwnerUserID)
 	}
 	if input.MemoryID == "" {
 		return VideoRecording{}, validation("memory_id", "is required")
@@ -131,6 +137,9 @@ func (s *videoService) StartVideoRealtimeSession(
 	}
 	if input.MemoryID == "" {
 		return RealtimeVideoSession{}, validation("memory_id", "is required")
+	}
+	if input.GroupID == "" {
+		input.GroupID = defaultMemoryGroupID(input.OwnerUserID)
 	}
 	if input.ChunkDurationSeconds == 0 {
 		input.ChunkDurationSeconds = 30
@@ -289,7 +298,8 @@ func (s *videoService) ProcessNextVideoJob(ctx context.Context) (bool, error) {
 		defer cancel()
 	}
 	if retryErr := s.repository.RetryVideoJob(
-		retryCtx, job, err.Error(), time.Now().UTC().Add(retryDelay(job.Attempts)), dead,
+		retryCtx, job, err.Error(),
+		time.Now().UTC().Add(retryDelayForError(err, job.Attempts)), dead,
 	); retryErr != nil {
 		return true, fmt.Errorf("%v; persist video retry: %w", err, retryErr)
 	}
@@ -306,18 +316,32 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 				AudioTrackPresent: &audioTrackPresent,
 				Warning:           "video contains no audio track",
 			},
-			s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
+			[]string{}, s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
 		)
 	}
 	if err != nil {
 		return err
 	}
 	defer extracted.Audio.Close()
+	references, err := loadOwnerSpeakerReferences(
+		ctx, s.enrollments, s.enrollmentStore, job.OwnerUserID,
+	)
+	if err != nil {
+		return err
+	}
 	transcript, err := s.transcriber.Transcribe(ctx, TranscriptionInput{
-		FileName: extracted.FileName, MediaType: extracted.MediaType, Audio: extracted.Audio,
+		OwnerUserID: job.OwnerUserID,
+		FileName:    extracted.FileName, MediaType: extracted.MediaType, Audio: extracted.Audio,
+		KnownSpeakers: references,
 	})
 	if err != nil {
 		return err
+	}
+	transcript, err = s.attributor.Attribute(ctx, SpeakerAttributionInput{
+		Transcript: transcript, References: references,
+	})
+	if err != nil {
+		return fmt.Errorf("attribute video transcript speakers: %w", err)
 	}
 	if transcript.Segments == nil {
 		transcript.Segments = []TranscriptSegment{}
@@ -328,7 +352,9 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 		transcript.Warning = "audio track was present, but no speech was detected"
 	}
 	return s.repository.SaveVideoTranscript(
-		ctx, job, transcript, s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
+		ctx, job, transcript, speakerReferenceIDs(references),
+		transcriptionProvider(transcript, s.transcriber),
+		transcriptionModel(transcript, s.transcriber), s.maxAttempts,
 	)
 }
 
@@ -370,8 +396,10 @@ func (s *videoService) processVideoMerge(ctx context.Context, job VideoJob) erro
 func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) error {
 	baseMeta := map[string]any{
 		"session_id": job.SessionID, "group_id": job.GroupID,
+		"episode_id": job.EpisodeID,
 		"start_time": job.EpisodeStart, "end_time": job.EpisodeEnd,
 	}
+	addOwnerIdentityMeta(baseMeta, job.OwnerUserID)
 	if job.ClientChunkID != "" {
 		baseMeta["chunk_id"] = job.ClientChunkID
 	}
@@ -386,70 +414,48 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 		custom["confidence"] = *job.Confidence
 	}
 
-	type branch struct {
-		name string
-		data string
-	}
 	visualDescription := strings.TrimSpace(job.VisualDescription)
 	speechDescription := strings.TrimSpace(job.SpeechDescription)
 	if visualDescription == "" && speechDescription == "" {
 		visualDescription, speechDescription = legacyVideoMemographData(job.Description)
 	}
-	branches := make([]branch, 0, 2)
-	if visualDescription != "" {
-		branches = append(branches, branch{name: "visual", data: visualDescription})
-	}
-	if speechDescription != "" {
-		branches = append(branches, branch{name: "speech", data: speechDescription})
-	}
-	if len(branches) == 0 {
-		return fmt.Errorf("video episode contains no visual or speech data")
-	}
-
-	type branchResult struct {
-		name     string
-		response json.RawMessage
-		err      error
-	}
-	results := make(chan branchResult, len(branches))
-	for _, item := range branches {
-		go func(item branch) {
-			meta := make(map[string]any, len(baseMeta)+2)
-			for key, value := range baseMeta {
-				meta[key] = value
-			}
-			meta["source"] = item.name
-			meta["source_description"] = item.name + " from video recording"
-			response, err := s.memograph.InsertEpisode(
-				ctx,
-				job.MemoryID,
-				EpisodeInsertRequest{
-					Data: item.data, Meta: meta, CustomFields: custom,
-				},
+	source := strings.TrimSpace(job.MemographSource)
+	data := ""
+	var structuredGraph *StructuredGraph
+	switch source {
+	case "visual":
+		data = visualDescription
+	case "speech":
+		data = speechDescription
+		structuredGraph = structuredVideoConversation(job)
+		if structuredGraph == nil {
+			return fmt.Errorf(
+				"video speech episode %s has no grounded transcript segments",
+				job.EpisodeID,
 			)
-			results <- branchResult{name: item.name, response: response, err: err}
-		}(item)
-	}
-
-	responses := make(map[string]json.RawMessage, len(branches))
-	var failures []string
-	for range branches {
-		result := <-results
-		if result.err != nil {
-			failures = append(failures, result.name+": "+result.err.Error())
-			continue
 		}
-		responses[result.name] = result.response
+	case "legacy":
+		data = strings.TrimSpace(job.Description)
+		structuredGraph = structuredVideoConversation(job)
+	default:
+		return fmt.Errorf("unsupported video Memograph source %q", source)
 	}
-	if len(failures) > 0 {
-		sort.Strings(failures)
-		return fmt.Errorf("write video episode branches: %s", strings.Join(failures, "; "))
+	if strings.TrimSpace(data) == "" {
+		return fmt.Errorf("video Memograph %s branch contains no data", source)
 	}
-	combined, err := json.Marshal(responses)
+	baseMeta["source"] = source
+	baseMeta["source_description"] = source + " from video recording"
+	idempotencyKey := memographIdempotencyKey(job.MemoryID, job.EpisodeID, source)
+	baseMeta["idempotency_key"] = idempotencyKey
+	response, err := s.memograph.InsertEpisode(ctx, job.MemoryID, EpisodeInsertRequest{
+		Data: data, Meta: baseMeta, StructuredGraph: structuredGraph,
+		CustomFields:   custom,
+		IdempotencyKey: idempotencyKey,
+	})
 	if err != nil {
-		return fmt.Errorf("encode video Memograph responses: %w", err)
+		return fmt.Errorf("write video %s episode: %w", source, err)
 	}
-	return s.repository.CompleteVideoMemographEpisode(ctx, job, combined)
+	return s.repository.CompleteVideoMemographBranch(ctx, job, response)
 }
 
 func legacyVideoMemographData(description string) (string, string) {
@@ -534,13 +540,14 @@ func BuildVideoEpisodes(
 		absoluteObservations := make([]VideoObservation, 0, len(bucket.observations))
 
 		for _, segment := range bucket.segments {
-			speaker := strings.TrimSpace(segment.Speaker)
-			if speaker == "" {
-				speaker = "speaker"
-			}
+			speaker := videoEpisodeSpeaker(segment)
 			speech = append(
 				speech,
-				fmt.Sprintf("%s Said : %s", speaker, strings.TrimSpace(segment.Text)),
+				fmt.Sprintf(
+					"[%.2fs-%.2fs] %s: %s",
+					offset+segment.StartTime, offset+segment.EndTime,
+					speaker, strings.TrimSpace(segment.Text),
+				),
 			)
 			if segmentEnd := offset + segment.EndTime; segmentEnd > end {
 				end = segmentEnd
@@ -615,6 +622,23 @@ func BuildVideoEpisodes(
 		})
 	}
 	return result
+}
+
+func videoEpisodeSpeaker(segment TranscriptSegment) string {
+	switch segment.SpeakerRole {
+	case "owner":
+		return "Owner"
+	case "other":
+		if label := strings.TrimSpace(segment.Speaker); label != "" {
+			return "Other speaker " + label
+		}
+		return "Other speaker"
+	default:
+		if label := strings.TrimSpace(segment.Speaker); label != "" && label != "speaker" {
+			return "Unknown speaker " + label
+		}
+		return "Unknown speaker"
+	}
 }
 
 func supportedVideo(filename, mediaType string) bool {
