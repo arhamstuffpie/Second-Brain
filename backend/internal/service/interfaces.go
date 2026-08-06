@@ -20,9 +20,26 @@ type UserRepository interface {
 	FindByEmail(ctx context.Context, email string) (StoredUser, bool, error)
 }
 
+type ModelProfileRepository interface {
+	Get(ctx context.Context, ownerUserID, task string) (StoredModelProfile, bool, error)
+	Upsert(ctx context.Context, profile StoredModelProfile) (StoredModelProfile, error)
+	Delete(ctx context.Context, ownerUserID, task string) error
+}
+
+type CredentialCipher interface {
+	Seal(plaintext string) (string, error)
+	Open(ciphertext string) (string, error)
+}
+
 type AuthService interface {
 	Signup(ctx context.Context, email, password string) (AuthResult, error)
 	Login(ctx context.Context, email, password string) (AuthResult, error)
+}
+
+type ModelProfileService interface {
+	GetTranscription(ctx context.Context, ownerUserID string) (ModelProfile, error)
+	SaveTranscription(ctx context.Context, ownerUserID string, input ModelProfileInput) (ModelProfile, error)
+	ResetTranscription(ctx context.Context, ownerUserID string) (ModelProfile, error)
 }
 
 type VoiceRepository interface {
@@ -307,13 +324,46 @@ type Transcript struct {
 	Segments          []TranscriptSegment `json:"segments"`
 	AudioTrackPresent *bool               `json:"audio_track_present,omitempty"`
 	Warning           string              `json:"warning,omitempty"`
+	Provider          string              `json:"-"`
+	Model             string              `json:"-"`
 }
 
 type TranscriptionInput struct {
+	OwnerUserID   string
 	FileName      string
 	MediaType     string
 	Audio         io.Reader
 	KnownSpeakers []KnownSpeakerReference
+}
+
+type StoredModelProfile struct {
+	ID               string
+	OwnerUserID      string
+	Task             string
+	Provider         string
+	BaseURL          string
+	Model            string
+	APIKeyCiphertext string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+type ModelProfileInput struct {
+	Provider    string `json:"provider"`
+	BaseURL     string `json:"base_url"`
+	Model       string `json:"model"`
+	APIKey      string `json:"api_key"`
+	ClearAPIKey bool   `json:"clear_api_key,omitempty"`
+}
+
+type ModelProfile struct {
+	Task             string     `json:"task"`
+	Provider         string     `json:"provider"`
+	BaseURL          string     `json:"base_url"`
+	Model            string     `json:"model"`
+	APIKeyConfigured bool       `json:"api_key_configured"`
+	Source           string     `json:"source"`
+	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
 }
 
 type KnownSpeakerReference struct {

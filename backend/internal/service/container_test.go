@@ -26,6 +26,23 @@ func (stubUserRepository) Create(context.Context, string, string) (StoredUser, b
 	return StoredUser{}, true, nil
 }
 
+type stubModelProfileRepository struct{}
+
+func (stubModelProfileRepository) Get(context.Context, string, string) (StoredModelProfile, bool, error) {
+	return StoredModelProfile{}, false, nil
+}
+func (stubModelProfileRepository) Upsert(_ context.Context, profile StoredModelProfile) (StoredModelProfile, error) {
+	return profile, nil
+}
+func (stubModelProfileRepository) Delete(context.Context, string, string) error { return nil }
+
+type stubCredentialCipher struct{}
+
+func (stubCredentialCipher) Seal(value string) (string, error) { return "sealed:" + value, nil }
+func (stubCredentialCipher) Open(value string) (string, error) {
+	return strings.TrimPrefix(value, "sealed:"), nil
+}
+
 func (stubUserRepository) FindByEmail(context.Context, string) (StoredUser, bool, error) {
 	return StoredUser{}, true, nil
 }
@@ -208,6 +225,8 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 	container, err := NewContainer(Dependencies{
 		HealthRepository:  stubHealthRepository{},
 		UserRepository:    stubUserRepository{},
+		ModelProfiles:     stubModelProfileRepository{},
+		CredentialCipher:  stubCredentialCipher{},
 		VoiceRepository:   stubVoiceRepository{},
 		VideoRepository:   stubVideoRepository{},
 		Transcriber:       stubTranscriber{},
@@ -230,7 +249,7 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
 	if container == nil || container.Health == nil || container.Auth == nil ||
-		container.Voice == nil || container.Video == nil {
+		container.Models == nil || container.Voice == nil || container.Video == nil {
 		t.Fatal("service container has nil required dependency")
 	}
 }

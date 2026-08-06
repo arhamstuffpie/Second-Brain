@@ -60,6 +60,14 @@ The production adapter calls `POST /v1/audio/transcriptions`. With
 models use JSON output. Use `APP_STT_PROVIDER=mock` without external STT
 credentials (the mock treats uploaded UTF-8 file contents as the transcript).
 
+Authenticated users can replace that server default from the mobile Settings
+screen by entering a provider label, exact model ID, compatible API base URL,
+and API key. The backend encrypts the key in `model_profiles`, never returns it
+to the client, and resolves the account profile when a queued voice or video
+audio job runs. Custom providers must implement the same OpenAI-compatible
+`/audio/transcriptions` request and response contract; provider-specific APIs
+with different authentication or payloads need their own adapter.
+
 ### Voice API
 
 All routes require this application's JWT in
@@ -449,6 +457,7 @@ Voice, video, and Memograph essentials:
 APP_STT_PROVIDER=openai
 APP_STT_API_KEY=...
 APP_STT_MODEL=gpt-4o-transcribe-diarize
+APP_MODEL_CREDENTIAL_KEY=replace-with-a-stable-32-character-secret
 
 APP_VISION_PROVIDER=openai
 APP_VISION_API_KEY=...
@@ -466,6 +475,10 @@ worker concurrency, retry count, provider URLs, and timeouts. `OPENAI_API_KEY`
 is accepted as an alias for both `APP_STT_API_KEY` and `APP_VISION_API_KEY`.
 When both features use OpenAI, `APP_VISION_API_KEY` may also be omitted and the
 backend will reuse `APP_STT_API_KEY`.
+`APP_MODEL_CREDENTIAL_KEY` encrypts account-level model API keys. It falls back
+to `APP_JWT_SECRET` for compatibility, but production deployments should set a
+separate stable secret before users save model profiles. Changing it makes
+previously saved provider keys unreadable until users enter them again.
 Container deployments should mount persistent storage at `/data`. Local
 non-container development requires `ffmpeg` on `PATH`; the production image
 installs it. The server validates `APP_VIDEO_FFMPEG_PATH` during startup so a

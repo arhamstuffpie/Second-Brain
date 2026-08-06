@@ -24,6 +24,18 @@ func (stubAuthService) Login(context.Context, string, string) (service.AuthResul
 	return service.AuthResult{}, nil
 }
 
+type stubModelProfileService struct{}
+
+func (stubModelProfileService) GetTranscription(context.Context, string) (service.ModelProfile, error) {
+	return service.ModelProfile{}, nil
+}
+func (stubModelProfileService) SaveTranscription(context.Context, string, service.ModelProfileInput) (service.ModelProfile, error) {
+	return service.ModelProfile{}, nil
+}
+func (stubModelProfileService) ResetTranscription(context.Context, string) (service.ModelProfile, error) {
+	return service.ModelProfile{}, nil
+}
+
 type stubVoiceService struct{}
 
 func (stubVoiceService) EnrollVoice(context.Context, service.VoiceEnrollmentInput) (service.VoiceEnrollmentSample, error) {
@@ -101,6 +113,7 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 	container, err := NewContainer(Dependencies{
 		HealthService: stubHealthService{},
 		AuthService:   stubAuthService{},
+		ModelService:  stubModelProfileService{},
 		VoiceService:  stubVoiceService{},
 		VideoService:  stubVideoService{},
 	})
@@ -108,7 +121,7 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
 	if container == nil || container.Health == nil || container.Auth == nil ||
-		container.Voice == nil || container.Video == nil {
+		container.Models == nil || container.Voice == nil || container.Video == nil {
 		t.Fatal("handler container has nil required dependency")
 	}
 }

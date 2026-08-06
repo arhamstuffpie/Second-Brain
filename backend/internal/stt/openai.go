@@ -19,6 +19,7 @@ import (
 )
 
 type OpenAITranscriber struct {
+	provider string
 	baseURL  string
 	apiKey   string
 	model    string
@@ -28,17 +29,29 @@ type OpenAITranscriber struct {
 }
 
 func NewOpenAI(cfg config.STTConfig) (*OpenAITranscriber, error) {
+	return NewCompatible("openai", cfg)
+}
+
+// NewCompatible creates a transcriber for APIs that implement OpenAI's
+// /audio/transcriptions multipart contract. provider is retained as an
+// account-facing label and persisted with each transcript.
+func NewCompatible(provider string, cfg config.STTConfig) (*OpenAITranscriber, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
 	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
-		return nil, fmt.Errorf("OpenAI STT base URL, API key, and model are required")
+		return nil, fmt.Errorf("compatible STT base URL, API key, and model are required")
+	}
+	if provider == "" {
+		return nil, fmt.Errorf("compatible STT provider is required")
 	}
 	return &OpenAITranscriber{
-		baseURL: cfg.BaseURL, apiKey: cfg.APIKey, model: cfg.Model,
+		provider: provider, baseURL: strings.TrimRight(cfg.BaseURL, "/"),
+		apiKey: cfg.APIKey, model: cfg.Model,
 		language: cfg.Language, prompt: cfg.Prompt,
 		client: &http.Client{Timeout: cfg.Timeout},
 	}, nil
 }
 
-func (t *OpenAITranscriber) Provider() string { return "openai" }
+func (t *OpenAITranscriber) Provider() string { return t.provider }
 func (t *OpenAITranscriber) Model() string    { return t.model }
 
 func (t *OpenAITranscriber) Transcribe(ctx context.Context, input service.TranscriptionInput) (service.Transcript, error) {
@@ -59,7 +72,7 @@ func (t *OpenAITranscriber) Transcribe(ctx context.Context, input service.Transc
 	if err := writer.WriteField("model", t.model); err != nil {
 		return service.Transcript{}, err
 	}
-	if strings.Contains(t.model, "diarize") {
+	if strings.Contains(strings.ToLower(t.model), "diarize") {
 		_ = writer.WriteField("response_format", "diarized_json")
 		_ = writer.WriteField("chunking_strategy", "auto")
 		for _, reference := range input.KnownSpeakers {
@@ -153,7 +166,7 @@ func (t *OpenAITranscriber) Transcribe(ctx context.Context, input service.Transc
 	}
 	return service.Transcript{
 		Text: strings.TrimSpace(payload.Text), Language: payload.Language,
-		Duration: payload.Duration, Segments: segments,
+		Duration: payload.Duration, Segments: segments, Provider: t.provider, Model: t.model,
 	}, nil
 }
 

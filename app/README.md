@@ -57,6 +57,12 @@ the phone itself, not the development computer.
   are user-configurable.
 - Settings accepts an optional Memograph API-key override. Native builds keep it
   in SecureStore; web builds keep it only for the current browser session.
+- Settings also accepts an account-level transcription provider, exact model
+  name, OpenAI-compatible base URL, and API key. The API key is sent once over
+  HTTPS, encrypted by the backend, and never downloaded into app storage.
+- The selected transcription model applies to both standalone voice recordings
+  and audio extracted from video. Model names containing `diarize` request
+  speaker-aware output and include enrolled owner references when supported.
 - Saving preferences shows an in-app confirmation snackbar.
 - Scrollable forms add bottom space equal to the open keyboard height and
   remove it when the keyboard closes.

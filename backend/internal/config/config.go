@@ -18,6 +18,7 @@ type Config struct {
 	Video       VideoConfig
 	STT         STTConfig
 	Vision      VisionConfig
+	Models      ModelConfig
 	Memograph   MemographConfig
 	Worker      WorkerConfig
 }
@@ -108,6 +109,13 @@ type VisionConfig struct {
 	Timeout  time.Duration
 }
 
+// ModelConfig protects account-level model credentials stored for durable
+// background jobs. Keep this value stable across deploys so saved credentials
+// remain decryptable.
+type ModelConfig struct {
+	CredentialKey string
+}
+
 type MemographConfig struct {
 	BaseURL             string
 	APIKey              string
@@ -184,7 +192,7 @@ func Load() (Config, error) {
 			ExtractionTimeout: getEnvDuration("APP_VIDEO_EXTRACTION_TIMEOUT", 2*time.Minute),
 		},
 		STT: STTConfig{
-			Provider: GetEnv("APP_STT_PROVIDER", "mock"),
+			Provider: strings.ToLower(strings.TrimSpace(GetEnv("APP_STT_PROVIDER", "mock"))),
 			BaseURL:  strings.TrimRight(GetEnv("APP_STT_BASE_URL", "https://api.openai.com/v1"), "/"),
 			APIKey:   GetEnv("APP_STT_API_KEY", GetEnv("OPENAI_API_KEY", "")),
 			Model:    GetEnv("APP_STT_MODEL", "gpt-4o-transcribe-diarize"),
@@ -199,6 +207,9 @@ func Load() (Config, error) {
 			Model:    GetEnv("APP_VISION_MODEL", "gpt-4.1-mini"),
 			Detail:   GetEnv("APP_VISION_DETAIL", "low"),
 			Timeout:  getEnvDuration("APP_VISION_TIMEOUT", 2*time.Minute),
+		},
+		Models: ModelConfig{
+			CredentialKey: GetEnv("APP_MODEL_CREDENTIAL_KEY", GetEnv("APP_JWT_SECRET", "K9mP2xL7vQ4wR8tY1uI3oA5sD6fG0hJ2")),
 		},
 		Memograph: MemographConfig{
 			BaseURL:             strings.TrimRight(GetEnv("APP_MEMOGRAPH_BASE_URL", GetEnv("MEMOGRAPH_BASE_URL", "")), "/"),
@@ -301,11 +312,11 @@ func (c Config) Validate() error {
 		strings.TrimSpace(c.Video.FFmpegPath) == "" || c.Video.ExtractionTimeout <= 0 {
 		return fmt.Errorf("valid video processing configuration is required")
 	}
-	if c.STT.Provider != "openai" && c.STT.Provider != "mock" {
-		return fmt.Errorf("APP_STT_PROVIDER must be openai or mock")
+	if strings.TrimSpace(c.STT.Provider) == "" {
+		return fmt.Errorf("APP_STT_PROVIDER must not be empty")
 	}
-	if c.STT.Provider == "openai" && strings.TrimSpace(c.STT.APIKey) == "" {
-		return fmt.Errorf("APP_STT_API_KEY is required when APP_STT_PROVIDER=openai")
+	if c.STT.Provider != "mock" && strings.TrimSpace(c.STT.APIKey) == "" {
+		return fmt.Errorf("APP_STT_API_KEY is required when APP_STT_PROVIDER is not mock")
 	}
 	if strings.TrimSpace(c.STT.BaseURL) == "" || strings.TrimSpace(c.STT.Model) == "" || c.STT.Timeout <= 0 {
 		return fmt.Errorf("valid STT configuration is required")
@@ -325,6 +336,9 @@ func (c Config) Validate() error {
 	if c.Vision.Detail != "low" && c.Vision.Detail != "high" && c.Vision.Detail != "auto" &&
 		c.Vision.Detail != "original" {
 		return fmt.Errorf("APP_VISION_DETAIL must be low, high, auto, or original")
+	}
+	if len(c.Models.CredentialKey) < 32 {
+		return fmt.Errorf("APP_MODEL_CREDENTIAL_KEY must be at least 32 characters")
 	}
 	if c.Worker.Concurrency < 1 || c.Worker.MaxAttempts < 1 || c.Worker.PollInterval <= 0 {
 		return fmt.Errorf("valid voice worker configuration is required")

@@ -330,7 +330,8 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 		return err
 	}
 	transcript, err := s.transcriber.Transcribe(ctx, TranscriptionInput{
-		FileName: extracted.FileName, MediaType: extracted.MediaType, Audio: extracted.Audio,
+		OwnerUserID: job.OwnerUserID,
+		FileName:    extracted.FileName, MediaType: extracted.MediaType, Audio: extracted.Audio,
 		KnownSpeakers: references,
 	})
 	if err != nil {
@@ -352,7 +353,8 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 	}
 	return s.repository.SaveVideoTranscript(
 		ctx, job, transcript, speakerReferenceIDs(references),
-		s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
+		transcriptionProvider(transcript, s.transcriber),
+		transcriptionModel(transcript, s.transcriber), s.maxAttempts,
 	)
 }
 

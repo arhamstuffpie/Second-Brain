@@ -33,6 +33,24 @@ export type Health = {
   checked_at: string;
 };
 
+export type ModelProfile = {
+  task: 'transcription';
+  provider: string;
+  base_url: string;
+  model: string;
+  api_key_configured: boolean;
+  source: 'server' | 'account';
+  updated_at?: string;
+};
+
+export type ModelProfileInput = {
+  provider: string;
+  base_url: string;
+  model: string;
+  api_key?: string;
+  clear_api_key?: boolean;
+};
+
 export type Credentials = {
   email: string;
   password: string;
@@ -103,6 +121,8 @@ export type VoiceEpisode = {
 export type VoiceRecordingDetail = VoiceRecording & {
   device_id?: string;
   location?: string;
+  stt_provider?: string;
+  stt_model?: string;
   speaker_reference_ids: string[];
   transcript?: Transcript;
   episodes: VoiceEpisode[];

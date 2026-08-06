@@ -497,7 +497,8 @@ func (s *voiceService) processSTT(ctx context.Context, job VoiceJob) error {
 	}
 	defer audio.Close()
 	transcript, err := s.transcriber.Transcribe(ctx, TranscriptionInput{
-		FileName: job.FileName, MediaType: job.MediaType, Audio: audio,
+		OwnerUserID: job.OwnerUserID,
+		FileName:    job.FileName, MediaType: job.MediaType, Audio: audio,
 		KnownSpeakers: references,
 	})
 	if err != nil {
@@ -511,7 +512,8 @@ func (s *voiceService) processSTT(ctx context.Context, job VoiceJob) error {
 	}
 	if err := s.repository.SaveTranscriptAndQueueAssembly(
 		ctx, job, transcript, speakerReferenceIDs(references),
-		s.transcriber.Provider(), s.transcriber.Model(), s.maxAttempts,
+		transcriptionProvider(transcript, s.transcriber),
+		transcriptionModel(transcript, s.transcriber), s.maxAttempts,
 	); err != nil {
 		return err
 	}

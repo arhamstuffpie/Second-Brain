@@ -9,7 +9,10 @@ import (
 type Dependencies struct {
 	HealthRepository  HealthRepository
 	UserRepository    UserRepository
+	ModelProfiles     ModelProfileRepository
+	CredentialCipher  CredentialCipher
 	JWT               config.JWTConfig
+	STTConfig         config.STTConfig
 	VoiceRepository   VoiceRepository
 	VideoRepository   VideoRepository
 	Transcriber       Transcriber
@@ -29,6 +32,7 @@ type Dependencies struct {
 type Container struct {
 	Health HealthService
 	Auth   AuthService
+	Models ModelProfileService
 	Voice  VoiceService
 	Video  VideoService
 }
@@ -39,6 +43,9 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	}
 	if deps.UserRepository == nil {
 		return nil, fmt.Errorf("user repository is required")
+	}
+	if deps.ModelProfiles == nil || deps.CredentialCipher == nil {
+		return nil, fmt.Errorf("model profile dependencies are required")
 	}
 	if deps.VoiceRepository == nil || deps.Transcriber == nil || deps.SpeakerAttributor == nil ||
 		deps.AudioStore == nil || deps.EnrollmentStore == nil || deps.AudioInspector == nil ||
@@ -56,6 +63,7 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	container := &Container{
 		Health: newHealthService(deps.HealthRepository),
 		Auth:   newAuthService(deps.UserRepository, deps.JWT),
+		Models: newModelProfileService(deps.ModelProfiles, deps.CredentialCipher, deps.STTConfig),
 		Voice: newVoiceService(
 			deps.VoiceRepository, deps.Transcriber, deps.SpeakerAttributor,
 			deps.AudioStore, deps.EnrollmentStore, deps.AudioInspector, deps.Memograph,
@@ -83,6 +91,9 @@ func (c *Container) Validate() error {
 	}
 	if c.Auth == nil {
 		return fmt.Errorf("auth service is required")
+	}
+	if c.Models == nil {
+		return fmt.Errorf("model profile service is required")
 	}
 	if c.Voice == nil {
 		return fmt.Errorf("voice service is required")

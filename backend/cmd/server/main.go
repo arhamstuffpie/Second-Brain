@@ -22,6 +22,7 @@ import (
 	"github.com/arham/ai-second-brain/internal/media"
 	"github.com/arham/ai-second-brain/internal/memograph"
 	"github.com/arham/ai-second-brain/internal/repository"
+	"github.com/arham/ai-second-brain/internal/secrets"
 	"github.com/arham/ai-second-brain/internal/service"
 	"github.com/arham/ai-second-brain/internal/stt"
 	"github.com/arham/ai-second-brain/internal/vision"
@@ -95,15 +96,25 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct media extractor: %w", err)
 	}
-	var transcriber service.Transcriber
+	credentialCipher, err := secrets.NewCipher(cfg.Models.CredentialKey)
+	if err != nil {
+		return fmt.Errorf("construct model credential cipher: %w", err)
+	}
+	var defaultTranscriber service.Transcriber
 	switch cfg.STT.Provider {
-	case "openai":
-		transcriber, err = stt.NewOpenAI(cfg.STT)
-		if err != nil {
-			return fmt.Errorf("construct OpenAI transcriber: %w", err)
-		}
+	case "mock":
+		defaultTranscriber = stt.NewMock()
 	default:
-		transcriber = stt.NewMock()
+		defaultTranscriber, err = stt.NewCompatible(cfg.STT.Provider, cfg.STT)
+		if err != nil {
+			return fmt.Errorf("construct %s transcriber: %w", cfg.STT.Provider, err)
+		}
+	}
+	transcriber, err := stt.NewProfileAware(
+		defaultTranscriber, repositories.Models, credentialCipher, cfg.STT,
+	)
+	if err != nil {
+		return fmt.Errorf("construct profile-aware transcriber: %w", err)
 	}
 	var visualAnalyzer service.VisualAnalyzer
 	switch cfg.Vision.Provider {
@@ -125,6 +136,9 @@ func run() error {
 	services, err := service.NewContainer(service.Dependencies{
 		HealthRepository:  repositories.Health,
 		UserRepository:    repositories.User,
+		ModelProfiles:     repositories.Models,
+		CredentialCipher:  credentialCipher,
+		STTConfig:         cfg.STT,
 		VoiceRepository:   repositories.Voice,
 		VideoRepository:   repositories.Video,
 		Transcriber:       transcriber,
@@ -147,6 +161,7 @@ func run() error {
 	handlers, err := handler.NewContainer(handler.Dependencies{
 		HealthService: services.Health,
 		AuthService:   services.Auth,
+		ModelService:  services.Models,
 		VoiceService:  services.Voice,
 		VoiceConfig:   cfg.Voice,
 		VideoService:  services.Video,

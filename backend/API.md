@@ -12,6 +12,9 @@ except `/health` live below `/api/v1`.
 | `POST` | `/api/v1/auth/signup` | no | Create account and token |
 | `POST` | `/api/v1/auth/login` | no | Authenticate and create token |
 | `GET` | `/api/v1/secure` | yes | Verify token |
+| `GET` | `/api/v1/model-profiles/transcription` | yes | Read effective transcription model |
+| `PUT` | `/api/v1/model-profiles/transcription` | yes | Save account transcription model |
+| `DELETE` | `/api/v1/model-profiles/transcription` | yes | Restore server transcription model |
 | `POST` | `/api/v1/voice/enrollments/samples` | yes | Enroll an owner voice sample |
 | `GET` | `/api/v1/voice/enrollments/samples` | yes | List owner voice samples |
 | `DELETE` | `/api/v1/voice/enrollments/samples/:sample_id` | yes | Delete an owner voice sample |
@@ -59,6 +62,49 @@ It does not replace the application bearer token and cannot authenticate a
 user. For synchronous Memograph proxy endpoints, it overrides the backend's
 configured upstream credential for that request. Native clients should store
 this value in encrypted device storage and send it only over HTTPS.
+
+### Transcription model profile
+
+`GET /api/v1/model-profiles/transcription` returns the effective model for the
+authenticated account. `source` is `server` until the account saves an
+override; the API key itself is never returned.
+
+```json
+{
+  "task": "transcription",
+  "provider": "openai",
+  "base_url": "https://api.openai.com/v1",
+  "model": "gpt-4o-transcribe-diarize",
+  "api_key_configured": true,
+  "source": "account",
+  "updated_at": "2026-08-05T12:00:00Z"
+}
+```
+
+`PUT /api/v1/model-profiles/transcription` creates or replaces the account
+override:
+
+```json
+{
+  "provider": "openai",
+  "base_url": "https://api.openai.com/v1",
+  "model": "gpt-4o-transcribe-diarize",
+  "api_key": "provider-secret"
+}
+```
+
+The provider is a lowercase account-facing label. `base_url` may be omitted
+for `openai`; other non-mock providers must provide a complete `http://` or
+`https://` base URL and implement the OpenAI-compatible
+`POST /audio/transcriptions` contract. An empty `api_key` retains an existing
+account key. Set `clear_api_key: true` only when switching to `mock`.
+
+The backend encrypts saved keys with `APP_MODEL_CREDENTIAL_KEY`. Voice uploads
+and video audio jobs resolve the account profile when the durable worker starts
+transcription, so a backend restart does not lose the selection.
+
+`DELETE /api/v1/model-profiles/transcription` removes the account profile and
+its encrypted credential, then returns the server-default profile.
 
 ### Response envelope
 

@@ -37,6 +37,18 @@ type fakeAuthService struct {
 	loginErr     error
 }
 
+type fakeModelProfileService struct{}
+
+func (fakeModelProfileService) GetTranscription(context.Context, string) (service.ModelProfile, error) {
+	return service.ModelProfile{}, nil
+}
+func (fakeModelProfileService) SaveTranscription(context.Context, string, service.ModelProfileInput) (service.ModelProfile, error) {
+	return service.ModelProfile{}, nil
+}
+func (fakeModelProfileService) ResetTranscription(context.Context, string) (service.ModelProfile, error) {
+	return service.ModelProfile{}, nil
+}
+
 type fakeVoiceService struct{}
 
 func (fakeVoiceService) EnrollVoice(context.Context, service.VoiceEnrollmentInput) (service.VoiceEnrollmentSample, error) {
@@ -191,6 +203,18 @@ func TestVoiceEnrollmentRoutesRequireJWT(t *testing.T) {
 	}
 }
 
+func TestModelProfileRoutesRequireJWT(t *testing.T) {
+	engine := testRouterWithAuth(t, fakeHealthService{}, fakeAuthService{})
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(method, "/api/v1/model-profiles/transcription", nil)
+		engine.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("%s model profile status = %d, want 401", method, recorder.Code)
+		}
+	}
+}
+
 func TestSecureRouteAcceptsJWT(t *testing.T) {
 	engine := testRouterWithAuth(t, fakeHealthService{}, fakeAuthService{})
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
@@ -274,6 +298,7 @@ func testRouterWithAuth(t *testing.T, healthService service.HealthService, authS
 	handlers, err := handler.NewContainer(handler.Dependencies{
 		HealthService: healthService,
 		AuthService:   authService,
+		ModelService:  fakeModelProfileService{},
 		VoiceService:  fakeVoiceService{},
 		VideoService:  fakeVideoService{},
 	})

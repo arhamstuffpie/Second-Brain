@@ -9,6 +9,8 @@ import type {
   MemoryAnswerStreamUsage,
   MemoryCreateRequest,
   MemorySearchRequest,
+  ModelProfile,
+  ModelProfileInput,
   RealtimeVideoSession,
   RealtimeVideoSessionDetail,
   RealtimeVoiceSession,
@@ -31,7 +33,7 @@ import { randomUUID } from 'expo-crypto';
 import { ServerSentEventParser, type ServerSentEvent } from '@/lib/sse';
 
 type RequestOptions = {
-  method?: 'GET' | 'POST' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   form?: FormData;
   authenticated?: boolean;
@@ -353,6 +355,22 @@ export class ApiClient {
   secure() {
     return this.request<{ user_id: string }>('/api/v1/secure');
   }
+
+  modelProfiles = {
+    transcription: () =>
+      this.request<ModelProfile>('/api/v1/model-profiles/transcription'),
+
+    saveTranscription: (input: ModelProfileInput) =>
+      this.request<ModelProfile>('/api/v1/model-profiles/transcription', {
+        method: 'PUT',
+        body: input,
+      }),
+
+    resetTranscription: () =>
+      this.request<ModelProfile>('/api/v1/model-profiles/transcription', {
+        method: 'DELETE',
+      }),
+  };
 
   voice = {
     listEnrollmentSamples: () =>

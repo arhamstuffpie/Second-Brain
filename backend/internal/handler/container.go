@@ -10,6 +10,7 @@ import (
 type Dependencies struct {
 	HealthService service.HealthService
 	AuthService   service.AuthService
+	ModelService  service.ModelProfileService
 	VoiceService  service.VoiceService
 	VoiceConfig   config.VoiceConfig
 	VideoService  service.VideoService
@@ -19,6 +20,7 @@ type Dependencies struct {
 type Container struct {
 	Health HealthHandler
 	Auth   AuthHandler
+	Models ModelProfileHandler
 	Voice  VoiceHandler
 	Video  VideoHandler
 }
@@ -30,6 +32,9 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	if deps.AuthService == nil {
 		return nil, fmt.Errorf("auth service is required")
 	}
+	if deps.ModelService == nil {
+		return nil, fmt.Errorf("model profile service is required")
+	}
 	if deps.VoiceService == nil {
 		return nil, fmt.Errorf("voice service is required")
 	}
@@ -40,6 +45,7 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	container := &Container{
 		Health: newHealthHandler(deps.HealthService),
 		Auth:   newAuthHandler(deps.AuthService),
+		Models: newModelProfileHandler(deps.ModelService),
 		Voice: newVoiceHandler(
 			deps.VoiceService, deps.VoiceConfig.MaxUploadBytes,
 			deps.VoiceConfig.EnrollmentMaxUploadBytes,
@@ -61,6 +67,9 @@ func (c *Container) Validate() error {
 	}
 	if c.Auth == nil {
 		return fmt.Errorf("auth handler is required")
+	}
+	if c.Models == nil {
+		return fmt.Errorf("model profile handler is required")
 	}
 	if c.Voice == nil {
 		return fmt.Errorf("voice handler is required")

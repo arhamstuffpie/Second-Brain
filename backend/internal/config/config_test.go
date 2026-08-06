@@ -170,3 +170,33 @@ func TestLoadUsesSTTKeyForVision(t *testing.T) {
 		t.Fatalf("Vision.APIKey = %q, want STT key fallback", cfg.Vision.APIKey)
 	}
 }
+
+func TestLoadAcceptsCompatibleSTTProvider(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("APP_JWT_SECRET", "01234567890123456789012345678901")
+	t.Setenv("APP_STT_PROVIDER", "compatible")
+	t.Setenv("APP_STT_BASE_URL", "https://speech.example/v1")
+	t.Setenv("APP_STT_API_KEY", "provider-key")
+	t.Setenv("APP_STT_MODEL", "speaker-diarize")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.STT.Provider != "compatible" || cfg.STT.Model != "speaker-diarize" {
+		t.Fatalf("STT config = %+v", cfg.STT)
+	}
+	if cfg.Models.CredentialKey != "01234567890123456789012345678901" {
+		t.Fatalf("Models.CredentialKey did not fall back to JWT secret")
+	}
+}
+
+func TestLoadRejectsShortModelCredentialKey(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("APP_JWT_SECRET", "01234567890123456789012345678901")
+	t.Setenv("APP_MODEL_CREDENTIAL_KEY", "short")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want short model credential key error")
+	}
+}

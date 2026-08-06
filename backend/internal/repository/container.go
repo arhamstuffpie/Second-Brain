@@ -5,6 +5,7 @@ import "fmt"
 type Container struct {
 	Health HealthRepository
 	User   UserRepository
+	Models ModelProfileRepository
 	Voice  VoiceRepository
 	Video  VideoRepository
 }
@@ -18,6 +19,7 @@ func NewContainer(db DBTX) (*Container, error) {
 	container := &Container{
 		Health: newHealthRepository(baseRepository),
 		User:   newUserRepository(baseRepository),
+		Models: newModelProfileRepository(baseRepository),
 		Voice:  newVoiceRepository(baseRepository),
 		Video:  newVideoRepository(baseRepository),
 	}
@@ -36,6 +38,9 @@ func (c *Container) Validate() error {
 	}
 	if c.User == nil {
 		return fmt.Errorf("user repository is required")
+	}
+	if c.Models == nil {
+		return fmt.Errorf("model profile repository is required")
 	}
 	if c.Voice == nil {
 		return fmt.Errorf("voice repository is required")

@@ -35,6 +35,8 @@ import type { AppSettings, AuthSession, CaptureSnapshot, QueuedVideoChunk } from
 import type {
   Credentials,
   Health,
+  ModelProfile,
+  ModelProfileInput,
   RealtimeVideoSessionDetail,
   UploadFile,
   VoiceEnrollmentSample,
@@ -60,6 +62,11 @@ type AppContextValue = {
     onboardingRequired: boolean;
     error?: string;
   };
+  transcriptionModel: {
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    profile?: ModelProfile;
+    error?: string;
+  };
   network: {
     online: boolean;
     type: NetworkStateType;
@@ -80,6 +87,9 @@ type AppContextValue = {
   replaceOwnerVoice: (file: UploadFile) => Promise<void>;
   deleteOwnerVoice: (sampleId: string) => Promise<void>;
   refreshVoiceEnrollment: () => Promise<void>;
+  refreshTranscriptionModel: () => Promise<void>;
+  saveTranscriptionModel: (input: ModelProfileInput) => Promise<ModelProfile>;
+  resetTranscriptionModel: () => Promise<ModelProfile>;
   updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
   enqueueVideoChunk: (chunk: QueuedVideoChunk) => Promise<void>;
   retryUpload: (id: string) => void;
@@ -102,6 +112,9 @@ export function AppProvider({ children }: PropsWithChildren) {
     samples: [],
     onboardingRequired: false,
   });
+  const [transcriptionModel, setTranscriptionModel] = useState<
+    AppContextValue['transcriptionModel']
+  >({ status: 'idle' });
   const [capture, setCapture] = useState<CaptureSnapshot>({ phase: 'idle' });
   const [errorSnackbar, setErrorSnackbar] = useState<{ id: number; message: string } | null>(null);
   const queueRef = useRef(queue);
@@ -186,6 +199,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       deviceId: current?.deviceId ?? defaultSettings.deviceId,
     }));
     setVoiceEnrollment({ status: 'idle', samples: [], onboardingRequired: false });
+    setTranscriptionModel({ status: 'idle' });
     setCapture({ phase: 'idle' });
     setErrorSnackbar(null);
     validatedToken.current = undefined;
@@ -303,6 +317,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       setSettings(nextSettings);
       setCapture({ phase: 'idle' });
       setVoiceEnrollment({ status: 'checking', samples: [], onboardingRequired });
+      setTranscriptionModel({ status: 'loading' });
       setErrorSnackbar(null);
       setAuth(result);
     },
@@ -347,6 +362,51 @@ export function AppProvider({ children }: PropsWithChildren) {
     if (!auth) return;
     void refreshVoiceEnrollment();
   }, [auth?.user.id, refreshVoiceEnrollment]);
+
+  const refreshTranscriptionModel = useCallback(async () => {
+    if (!auth) return;
+    const ownerUserId = auth.user.id;
+    setTranscriptionModel((current) => ({ ...current, status: 'loading', error: undefined }));
+    try {
+      const profile = await api.modelProfiles.transcription();
+      if (queueOwner.current !== ownerUserId) return;
+      setTranscriptionModel({ status: 'ready', profile });
+    } catch (error) {
+      if (queueOwner.current !== ownerUserId) return;
+      setTranscriptionModel({
+        status: 'error',
+        error: getReadableError(error, 'backend'),
+      });
+    }
+  }, [api, auth]);
+
+  useEffect(() => {
+    if (!auth) return;
+    void refreshTranscriptionModel();
+  }, [auth?.user.id, refreshTranscriptionModel]);
+
+  const saveTranscriptionModel = useCallback(
+    async (input: ModelProfileInput) => {
+      const ownerUserId = auth?.user.id;
+      if (!ownerUserId) throw new Error('Please sign in again.');
+      const profile = await api.modelProfiles.saveTranscription(input);
+      if (queueOwner.current === ownerUserId) {
+        setTranscriptionModel({ status: 'ready', profile });
+      }
+      return profile;
+    },
+    [api, auth?.user.id],
+  );
+
+  const resetTranscriptionModel = useCallback(async () => {
+    const ownerUserId = auth?.user.id;
+    if (!ownerUserId) throw new Error('Please sign in again.');
+    const profile = await api.modelProfiles.resetTranscription();
+    if (queueOwner.current === ownerUserId) {
+      setTranscriptionModel({ status: 'ready', profile });
+    }
+    return profile;
+  }, [api, auth?.user.id]);
 
   const enrollOwnerVoice = useCallback(
     async (file: UploadFile) => {
@@ -602,6 +662,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       settings: activeSettings,
       queue,
       voiceEnrollment,
+      transcriptionModel,
       network: {
         online,
         type: networkState.type ?? NetworkStateType.UNKNOWN,
@@ -622,6 +683,9 @@ export function AppProvider({ children }: PropsWithChildren) {
       replaceOwnerVoice,
       deleteOwnerVoice,
       refreshVoiceEnrollment,
+      refreshTranscriptionModel,
+      saveTranscriptionModel,
+      resetTranscriptionModel,
       updateSettings,
       enqueueVideoChunk,
       retryUpload,
@@ -651,13 +715,17 @@ export function AppProvider({ children }: PropsWithChildren) {
       queue,
       ready,
       refreshRealtimeSession,
+      refreshTranscriptionModel,
       refreshVoiceEnrollment,
       replaceOwnerVoice,
+      resetTranscriptionModel,
       retryUpload,
       signup,
       setAccountCapture,
+      saveTranscriptionModel,
       showAccountError,
       updateSettings,
+      transcriptionModel,
       voiceEnrollment,
       uploadAllowed,
     ],
