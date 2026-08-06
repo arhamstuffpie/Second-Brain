@@ -483,10 +483,49 @@ type MemoryCreateRequest struct {
 }
 
 type EpisodeInsertRequest struct {
-	Data           string         `json:"data"`
-	Meta           map[string]any `json:"meta"`
-	CustomFields   map[string]any `json:"-"`
-	IdempotencyKey string         `json:"-"`
+	Data            string           `json:"data"`
+	Meta            map[string]any   `json:"meta"`
+	StructuredGraph *StructuredGraph `json:"structured_graph,omitempty"`
+	CustomFields    map[string]any   `json:"-"`
+	IdempotencyKey  string           `json:"-"`
+}
+
+// StructuredGraph is Memograph's grounded episode contract. Canonical entity
+// IDs make identity deterministic and bypass probabilistic entity extraction.
+type StructuredGraph struct {
+	EpisodeID  string                `json:"episode_id"`
+	SceneID    string                `json:"scene_id,omitempty"`
+	StartTime  float64               `json:"start_time"`
+	EndTime    float64               `json:"end_time"`
+	Summary    string                `json:"summary"`
+	Location   string                `json:"location,omitempty"`
+	Entities   []StructuredEntity    `json:"entities"`
+	Relations  []StructuredRelation  `json:"relations"`
+	Utterances []StructuredUtterance `json:"utterances"`
+}
+
+type StructuredEntity struct {
+	CanonicalID string   `json:"canonical_id"`
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Confidence  *float64 `json:"confidence,omitempty"`
+}
+
+type StructuredRelation struct {
+	Source     string   `json:"source"`
+	Predicate  string   `json:"predicate"`
+	Target     string   `json:"target"`
+	Fact       string   `json:"fact"`
+	Confidence *float64 `json:"confidence,omitempty"`
+}
+
+type StructuredUtterance struct {
+	SpeakerID  string   `json:"speaker_id"`
+	Speaker    string   `json:"speaker"`
+	Text       string   `json:"text"`
+	StartTime  float64  `json:"start_time"`
+	EndTime    float64  `json:"end_time"`
+	Confidence *float64 `json:"confidence,omitempty"`
 }
 
 type MemorySearchRequest struct {

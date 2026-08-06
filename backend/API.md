@@ -395,7 +395,14 @@ enrollment reference is promoted to `owner`.
 Memograph writes use one durable job per non-empty video modality. Each request
 includes a deterministic idempotency key and canonical `owner_entity_id`;
 successful modality writes are checkpointed independently before another branch
-is attempted or retried.
+is attempted or retried. Speech branches also use Memograph's grounded
+`structured_graph` payload. The Owner is always a `Person` with canonical ID
+`account-owner:<authenticated-user-id>`; exact utterances, speaker attribution,
+and timestamps are retained without an LLM creating another Owner entity.
+Every spoken statement/question is a `ConversationUtterance` node connected
+directly to Owner with `SAID`, `ASKED`, or attribution-safe `HAS_CONTEXT`.
+`FOLLOWED_BY` relations preserve conversational order; no synthetic
+`ConversationEpisode` entity is created.
 
 ## Health
 
@@ -477,7 +484,7 @@ Authorization: Bearer <access_token>
 | `file` | yes | file | FLAC, MP3, MP4, MPEG/MPGA, M4A, OGG, WAV, or WebM. An `audio/*` media type is also accepted. Default maximum is 25 MiB and is configurable. |
 | `session_id` | yes | string | Client-defined recording/capture session identifier. |
 | `memory_id` | yes | string | Memograph memory that receives generated episodes. |
-| `group_id` | no | string | Defaults to `session_id`. |
+| `group_id` | no | string | Defaults to the stable account scope `account-owner:<authenticated-user-id>`. An explicit value intentionally isolates the graph. |
 | `device_id` | no | string | Client/device metadata. |
 | `location` | no | string | Location metadata. |
 | `start_time` | no | number string | Offset in seconds, default `0`, must be non-negative. |
@@ -528,7 +535,7 @@ Request:
 ```ts
 {
   memory_id: string;              // Required.
-  group_id?: string;              // Defaults to the generated session id.
+  group_id?: string;              // Defaults to account-owner:<authenticated-user-id>.
   device_id?: string;
   location?: string;
   chunk_duration_seconds?: number; // Default 30; allowed 5..300.
@@ -752,7 +759,7 @@ merging, and Memograph processing.
 | `file` | yes | file | MP4, WebM, MOV, M4V, or MKV. A `video/*` media type is also accepted. Default maximum is 250 MiB and is configurable. |
 | `session_id` | yes | string | Client-defined capture session identifier. |
 | `memory_id` | yes | string | Memograph memory that receives generated episodes. |
-| `group_id` | no | string | Defaults to `session_id`. |
+| `group_id` | no | string | Defaults to the stable account scope `account-owner:<authenticated-user-id>`. An explicit value intentionally isolates the graph. |
 | `device_id` | no | string | Client/device metadata. |
 | `location` | no | string | Location metadata. |
 | `start_time` | no | number string | Offset in seconds, default `0`, must be non-negative. |
@@ -787,7 +794,7 @@ Creates an active realtime video session.
 ```ts
 {
   memory_id: string;               // Required.
-  group_id?: string;               // Defaults to generated session id.
+  group_id?: string;               // Defaults to account-owner:<authenticated-user-id>.
   device_id?: string;
   location?: string;
   chunk_duration_seconds?: number; // Default 30; allowed 5..300.

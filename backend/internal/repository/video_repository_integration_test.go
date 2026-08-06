@@ -42,11 +42,14 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 	}
 	repository := newVideoRepository(baseRepository)
 	session, err := repository.CreateVideoRealtimeSession(ctx, service.StartVideoRealtimeSessionInput{
-		OwnerUserID: ownerID, MemoryID: "memory-1", GroupID: "group-1",
+		OwnerUserID: ownerID, MemoryID: "memory-1",
 		ChunkDurationSeconds: 30, FrameIntervalSeconds: 5,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if session.GroupID != "account-owner:"+ownerID {
+		t.Fatalf("default graph group = %q", session.GroupID)
 	}
 	recording, err := repository.CreateRealtimeVideoChunk(
 		ctx,

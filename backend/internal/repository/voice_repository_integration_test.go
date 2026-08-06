@@ -53,11 +53,14 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 	}
 
 	session, err := repository.CreateRealtimeSession(ctx, service.StartRealtimeSessionInput{
-		OwnerUserID: ownerID, MemoryID: "memory-1", GroupID: "group-1",
+		OwnerUserID: ownerID, MemoryID: "memory-1",
 		ChunkDurationSeconds: 30,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if session.GroupID != "account-owner:"+ownerID {
+		t.Fatalf("default graph group = %q", session.GroupID)
 	}
 	chunkIndex := 0
 	recording, err := repository.CreateRecording(ctx, service.CreateRecordingInput{

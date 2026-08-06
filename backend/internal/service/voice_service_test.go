@@ -176,6 +176,27 @@ func (r *realtimeTestRepository) StopRealtimeSession(context.Context, string, st
 	return RealtimeVoiceSession{Status: "stopped"}, nil
 }
 
+func TestVoiceIngestDefaultsToStableAccountGraphGroup(t *testing.T) {
+	repository := &realtimeTestRepository{}
+	store := &realtimeTestStore{}
+	voice := newVoiceService(
+		repository, stubTranscriber{}, stubSpeakerAttributor{}, store, store,
+		stubAudioInspector{}, stubMemographClient{}, config.VoiceConfig{},
+		config.WorkerConfig{MaxAttempts: 5},
+	)
+	_, err := voice.Ingest(context.Background(), VoiceIngestInput{
+		OwnerUserID: "owner-1", SessionID: "session-1", MemoryID: "memory-1",
+		FileName: "capture.wav", MediaType: "audio/wav",
+		Content: strings.NewReader("audio"),
+	})
+	if err != nil {
+		t.Fatalf("Ingest() error = %v", err)
+	}
+	if repository.createInput.GroupID != "account-owner:owner-1" {
+		t.Fatalf("default group = %q", repository.createInput.GroupID)
+	}
+}
+
 type realtimeTestStore struct {
 	saveCalls   int
 	deleteCalls int

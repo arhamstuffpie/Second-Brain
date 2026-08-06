@@ -191,7 +191,7 @@ func (s *voiceService) Ingest(ctx context.Context, input VoiceIngestInput) (Voic
 		return VoiceRecording{}, validation("session_id", "is required")
 	}
 	if input.GroupID == "" {
-		input.GroupID = input.SessionID
+		input.GroupID = defaultMemoryGroupID(input.OwnerUserID)
 	}
 	if input.MemoryID == "" {
 		return VoiceRecording{}, validation("memory_id", "is required")
@@ -276,6 +276,9 @@ func (s *voiceService) StartRealtimeSession(
 	}
 	if input.MemoryID == "" {
 		return RealtimeVoiceSession{}, validation("memory_id", "is required")
+	}
+	if input.GroupID == "" {
+		input.GroupID = defaultMemoryGroupID(input.OwnerUserID)
 	}
 	if input.ChunkDurationSeconds == 0 {
 		input.ChunkDurationSeconds = 30
@@ -553,9 +556,14 @@ func (s *voiceService) processMemograph(ctx context.Context, job VoiceJob) error
 	}
 	idempotencyKey := memographIdempotencyKey(job.MemoryID, job.EpisodeID, "audio")
 	meta["idempotency_key"] = idempotencyKey
+	structuredGraph := structuredVoiceConversation(job)
+	if structuredGraph == nil {
+		return fmt.Errorf("voice episode %s has no grounded transcript segments", job.EpisodeID)
+	}
 	result, err := s.memograph.InsertEpisode(ctx, job.MemoryID, EpisodeInsertRequest{
-		Data: ownerAwareMemographData(job.Description, job.OwnerUserID),
-		Meta: meta, CustomFields: custom, IdempotencyKey: idempotencyKey,
+		Data: job.Description, Meta: meta,
+		StructuredGraph: structuredGraph,
+		CustomFields:    custom, IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
 		return err

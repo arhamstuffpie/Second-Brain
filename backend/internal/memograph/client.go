@@ -66,12 +66,15 @@ func (c *Client) InsertEpisode(ctx context.Context, memoryID string, request ser
 		return nil, ctx.Err()
 	}
 	payload := map[string]any{"data": request.Data, "meta": request.Meta}
+	if request.StructuredGraph != nil {
+		payload["structured_graph"] = request.StructuredGraph
+	}
 	if idempotencyKey := strings.TrimSpace(request.IdempotencyKey); idempotencyKey != "" {
 		payload["idempotency_key"] = idempotencyKey
 	}
 	for key, value := range request.CustomFields {
 		switch strings.ToLower(key) {
-		case "data", "meta", "graph_config", "image_url", "document_s3_urls", "idempotency_key":
+		case "data", "meta", "graph_config", "structured_graph", "image_url", "document_s3_urls", "idempotency_key":
 			continue
 		default:
 			payload[key] = value

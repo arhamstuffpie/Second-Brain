@@ -99,6 +99,39 @@ type videoRealtimeRepository struct {
 	createCalls   int
 }
 
+type videoIngestRepository struct {
+	stubVideoRepository
+	input CreateVideoRecordingInput
+}
+
+func (r *videoIngestRepository) CreateVideoRecording(
+	_ context.Context, input CreateVideoRecordingInput, _ int,
+) (VideoRecording, error) {
+	r.input = input
+	return VideoRecording{ID: "video-1", GroupID: input.GroupID}, nil
+}
+
+func TestVideoIngestDefaultsToStableAccountGraphGroup(t *testing.T) {
+	repository := &videoIngestRepository{}
+	store := &realtimeTestStore{}
+	video := newVideoService(
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, store, stubMediaExtractor{}, stubVisualAnalyzer{},
+		stubMemographClient{}, config.VideoConfig{}, config.WorkerConfig{MaxAttempts: 5},
+	)
+	_, err := video.IngestVideo(context.Background(), VideoIngestInput{
+		OwnerUserID: "owner-1", SessionID: "session-1", MemoryID: "memory-1",
+		FileName: "capture.mp4", MediaType: "video/mp4",
+		Content: strings.NewReader("video"),
+	})
+	if err != nil {
+		t.Fatalf("IngestVideo() error = %v", err)
+	}
+	if repository.input.GroupID != "account-owner:owner-1" {
+		t.Fatalf("default group = %q", repository.input.GroupID)
+	}
+}
+
 func (r *videoRealtimeRepository) FindVideoRecordingByClientChunk(
 	context.Context, string, string, string,
 ) (VideoRecording, bool, error) {
@@ -426,6 +459,10 @@ func TestVideoMemographWritesOneDurableBranchWithCanonicalOwner(t *testing.T) {
 		VisualDescription: "View over a lake with a dock.",
 		SpeechDescription: "[30.00s-31.00s] Owner: I prefer tea.",
 		EpisodeStart:      30, EpisodeEnd: 60,
+		Transcript: Transcript{Segments: []TranscriptSegment{{
+			StartTime: 30, EndTime: 31, Speaker: "owner_ref",
+			SpeakerRole: "owner", Text: "I prefer tea.",
+		}}},
 	}
 	if err := video.processVideoMemograph(context.Background(), job); err != nil {
 		t.Fatalf("processVideoMemograph() error = %v", err)
@@ -441,20 +478,23 @@ func TestVideoMemographWritesOneDurableBranchWithCanonicalOwner(t *testing.T) {
 	if request.IdempotencyKey == "" || request.Meta["idempotency_key"] != request.IdempotencyKey {
 		t.Fatalf("idempotency key/meta = %q/%+v", request.IdempotencyKey, request.Meta)
 	}
-	var payload struct {
-		Schema         string `json:"schema"`
-		CanonicalOwner struct {
-			EntityID string `json:"entity_id"`
-		} `json:"canonical_owner"`
-		Episode string `json:"episode"`
+	if request.StructuredGraph == nil {
+		t.Fatal("structured graph is nil")
 	}
-	if err := json.Unmarshal([]byte(request.Data), &payload); err != nil {
-		t.Fatalf("decode owner-aware data %q: %v", request.Data, err)
-	}
-	if payload.Schema != ownerAwareMemorySchema ||
-		payload.CanonicalOwner.EntityID != "account-owner:user-1" ||
-		!strings.Contains(payload.Episode, "Owner: I prefer tea") {
-		t.Fatalf("owner-aware payload = %+v", payload)
+	owner := findStructuredEntity(request.StructuredGraph.Entities, "account-owner:user-1")
+	utterance := findStructuredEntityByText(request.StructuredGraph.Entities, "I prefer tea.")
+	if request.StructuredGraph.EpisodeID != "second-brain:video-speech:episode-1" ||
+		len(request.StructuredGraph.Entities) != 2 ||
+		owner == nil || owner.Type != "Person" ||
+		utterance == nil || utterance.Type != "ConversationUtterance" ||
+		len(request.StructuredGraph.Utterances) != 1 ||
+		request.StructuredGraph.Utterances[0].Text != "I prefer tea." ||
+		len(request.StructuredGraph.Relations) != 1 ||
+		!hasStructuredRelation(
+			request.StructuredGraph.Relations,
+			owner.CanonicalID, "SAID", utterance.CanonicalID,
+		) {
+		t.Fatalf("structured graph = %+v", request.StructuredGraph)
 	}
 	if repository.calls != 1 || repository.job.MemographSource != "speech" {
 		t.Fatalf("branch completion = %d/%+v", repository.calls, repository.job)

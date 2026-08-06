@@ -292,7 +292,8 @@ WITH generated AS (
 	INSERT INTO voice_episode_batches (
 		id, owner_user_id, session_id, group_id, memory_id, closed
 	)
-	SELECT batch_id, $1, session_id, COALESCE(NULLIF($3, ''), session_id), $2, FALSE
+	SELECT batch_id, $1, session_id,
+	       COALESCE(NULLIF($3, ''), 'account-owner:' || $1::text), $2, FALSE
 	FROM generated
 	RETURNING id
 )
@@ -300,7 +301,8 @@ INSERT INTO voice_realtime_sessions (
 	id, owner_user_id, memory_id, group_id, device_id, location,
 	chunk_duration_seconds, batch_id
 )
-SELECT g.session_id, $1, $2, COALESCE(NULLIF($3, ''), g.session_id),
+SELECT g.session_id, $1, $2,
+       COALESCE(NULLIF($3, ''), 'account-owner:' || $1::text),
        $4, $5, $6, b.id
 FROM generated g CROSS JOIN inserted_batch b
 RETURNING id, memory_id, group_id, device_id, location,

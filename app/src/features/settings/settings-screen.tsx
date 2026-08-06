@@ -353,7 +353,7 @@ export function SettingsScreen() {
           value={draft.groupId}
           onChangeText={(value) => patch('groupId', value)}
           placeholder="Optional shared web-app group"
-          hint="Leave blank to let each realtime session create its own group."
+          hint="Leave blank to use one private account group across all of your sessions."
         />
         <Field
           label="Location label"

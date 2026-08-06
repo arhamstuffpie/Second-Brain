@@ -107,8 +107,10 @@ curl -X POST http://localhost:8080/api/v1/voice/enrollments/samples \
 Reference clips are retained in `APP_VOICE_ENROLLMENT_STORAGE_DIR` until the
 authenticated owner deletes them. The API never returns their storage paths.
 
-`group_id` defaults to `session_id`. The legacy `/chunks` alias accepts the same
-fields plus `start_time`, but treats each request as a closed standalone batch.
+`group_id` defaults to the stable account scope
+`account-owner:<authenticated-user-id>`. Supplying a group explicitly creates an
+intentional graph partition. The legacy `/chunks` alias accepts the same fields
+plus `start_time`, but treats each request as a closed standalone batch.
 Use the realtime session routes below when episodes must span chunk boundaries.
 Both upload routes return `202 Accepted` with a recording ID. Poll it until
 `status` is `completed` or `failed`.
@@ -233,7 +235,15 @@ Non-owner conversational context (must not be treated as owner statements):
 
 Metadata includes `source`, `session_id`, `group_id`, `start_time`, `end_time`,
 `location`, and `device_id`. Confidence is sent as a top-level custom field
-when available.
+when available. Speech is sent through Memograph's `structured_graph` contract:
+the Owner is a `Person` with canonical ID
+`account-owner:<authenticated-user-id>`, every utterance retains its speaker and
+timestamps, and each statement or question becomes a real
+`ConversationUtterance` node. Owner speech connects directly with `SAID` or
+`ASKED`; non-owner speech connects to its actual speaker and to Owner only with
+`HAS_CONTEXT`, so it cannot become an Owner fact. `FOLLOWED_BY` edges retain
+conversation order. This bypasses probabilistic LLM identity deduplication
+while leaving visual episode extraction independent.
 
 ### Create and query graph memory
 

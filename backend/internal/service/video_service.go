@@ -73,7 +73,7 @@ func (s *videoService) IngestVideo(
 		return VideoRecording{}, validation("session_id", "is required")
 	}
 	if input.GroupID == "" {
-		input.GroupID = input.SessionID
+		input.GroupID = defaultMemoryGroupID(input.OwnerUserID)
 	}
 	if input.MemoryID == "" {
 		return VideoRecording{}, validation("memory_id", "is required")
@@ -137,6 +137,9 @@ func (s *videoService) StartVideoRealtimeSession(
 	}
 	if input.MemoryID == "" {
 		return RealtimeVideoSession{}, validation("memory_id", "is required")
+	}
+	if input.GroupID == "" {
+		input.GroupID = defaultMemoryGroupID(input.OwnerUserID)
 	}
 	if input.ChunkDurationSeconds == 0 {
 		input.ChunkDurationSeconds = 30
@@ -416,13 +419,22 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 	}
 	source := strings.TrimSpace(job.MemographSource)
 	data := ""
+	var structuredGraph *StructuredGraph
 	switch source {
 	case "visual":
 		data = visualDescription
 	case "speech":
-		data = ownerAwareMemographData(speechDescription, job.OwnerUserID)
+		data = speechDescription
+		structuredGraph = structuredVideoConversation(job)
+		if structuredGraph == nil {
+			return fmt.Errorf(
+				"video speech episode %s has no grounded transcript segments",
+				job.EpisodeID,
+			)
+		}
 	case "legacy":
-		data = ownerAwareMemographData(strings.TrimSpace(job.Description), job.OwnerUserID)
+		data = strings.TrimSpace(job.Description)
+		structuredGraph = structuredVideoConversation(job)
 	default:
 		return fmt.Errorf("unsupported video Memograph source %q", source)
 	}
@@ -434,7 +446,8 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 	idempotencyKey := memographIdempotencyKey(job.MemoryID, job.EpisodeID, source)
 	baseMeta["idempotency_key"] = idempotencyKey
 	response, err := s.memograph.InsertEpisode(ctx, job.MemoryID, EpisodeInsertRequest{
-		Data: data, Meta: baseMeta, CustomFields: custom,
+		Data: data, Meta: baseMeta, StructuredGraph: structuredGraph,
+		CustomFields:   custom,
 		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {

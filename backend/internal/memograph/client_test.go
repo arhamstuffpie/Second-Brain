@@ -40,6 +40,10 @@ func TestInsertEpisodeUsesAPIKeyAndMergesCustomFields(t *testing.T) {
 		if payload["idempotency_key"] != "episode-key-1" {
 			t.Fatalf("idempotency_key = %#v", payload["idempotency_key"])
 		}
+		structured := payload["structured_graph"].(map[string]any)
+		if structured["episode_id"] != "episode-structured-1" {
+			t.Fatalf("structured_graph.episode_id = %#v", structured["episode_id"])
+		}
 		meta := payload["meta"].(map[string]any)
 		if meta["group_id"] != "session-1" {
 			t.Fatalf("meta.group_id = %#v", meta["group_id"])
@@ -47,8 +51,13 @@ func TestInsertEpisodeUsesAPIKeyAndMergesCustomFields(t *testing.T) {
 		return `{"data":{"episode":{"uuid":"episode-1"}}}`
 	})
 	_, err := client.InsertEpisode(context.Background(), "memory-1", service.EpisodeInsertRequest{
-		Data:           "A said hello.",
-		Meta:           map[string]any{"group_id": "session-1"},
+		Data: "A said hello.",
+		Meta: map[string]any{"group_id": "session-1"},
+		StructuredGraph: &service.StructuredGraph{
+			EpisodeID: "episode-structured-1", Summary: "A said hello.",
+			Entities: []service.StructuredEntity{}, Relations: []service.StructuredRelation{},
+			Utterances: []service.StructuredUtterance{},
+		},
 		CustomFields:   map[string]any{"confidence": 0.9},
 		IdempotencyKey: "episode-key-1",
 	})

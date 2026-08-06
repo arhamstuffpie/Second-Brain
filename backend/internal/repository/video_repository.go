@@ -252,7 +252,9 @@ INSERT INTO video_realtime_sessions (
 	id, owner_user_id, memory_id, group_id, device_id, location,
 	chunk_duration_seconds, frame_interval_seconds
 )
-SELECT id, $1, $2, COALESCE(NULLIF($3, ''), id), $4, $5, $6, $7
+SELECT id, $1, $2,
+       COALESCE(NULLIF($3, ''), 'account-owner:' || $1::text),
+       $4, $5, $6, $7
 FROM generated
 RETURNING id, memory_id, group_id, device_id, location, chunk_duration_seconds,
           frame_interval_seconds, next_chunk_index, status, created_at, updated_at, stopped_at`
