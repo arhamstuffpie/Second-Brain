@@ -20,6 +20,8 @@ type voiceService struct {
 	repository            VoiceRepository
 	transcriber           Transcriber
 	attributor            SpeakerAttributor
+	speakerProfiles       SpeakerProfileRepository
+	speakerIdentifier     SpeakerIdentifier
 	store                 AudioStore
 	enrollmentStore       AudioStore
 	inspector             AudioInspector
@@ -161,6 +163,90 @@ func (s *voiceService) DeleteVoiceEnrollment(
 	return err
 }
 
+func (s *voiceService) ListSpeakerProfiles(
+	ctx context.Context, ownerUserID string,
+) ([]SpeakerProfile, error) {
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	if ownerUserID == "" {
+		return nil, validation("owner_user_id", "is required")
+	}
+	if err := purgeExpiredSpeakerFiles(ctx, s.speakerProfiles, s.enrollmentStore, ownerUserID); err != nil {
+		return nil, err
+	}
+	return s.speakerProfiles.ListSpeakerProfiles(ctx, ownerUserID)
+}
+
+func (s *voiceService) UpdateSpeakerProfile(
+	ctx context.Context, input UpdateSpeakerProfileInput,
+) (SpeakerProfile, error) {
+	input.ID = strings.TrimSpace(input.ID)
+	input.OwnerUserID = strings.TrimSpace(input.OwnerUserID)
+	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	input.RelationshipCategory = strings.ToLower(strings.TrimSpace(input.RelationshipCategory))
+	input.RelationshipLabel = strings.TrimSpace(input.RelationshipLabel)
+	if input.ID == "" || input.OwnerUserID == "" {
+		return SpeakerProfile{}, validation("speaker_profile_id", "is required")
+	}
+	if input.DisplayName == "" || len([]rune(input.DisplayName)) > 100 {
+		return SpeakerProfile{}, validation("display_name", "must be between 1 and 100 characters")
+	}
+	validRelationships := map[string]bool{
+		"": true, "family": true, "friend": true, "colleague": true,
+		"professional": true, "acquaintance": true, "other": true,
+	}
+	if !validRelationships[input.RelationshipCategory] {
+		return SpeakerProfile{}, validation("relationship_category", "is invalid")
+	}
+	if len([]rune(input.RelationshipLabel)) > 100 {
+		return SpeakerProfile{}, validation("relationship_label", "must not exceed 100 characters")
+	}
+	return s.speakerProfiles.UpdateSpeakerProfile(ctx, input)
+}
+
+func (s *voiceService) DeleteSpeakerProfile(ctx context.Context, id, ownerUserID string) error {
+	id = strings.TrimSpace(id)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	if id == "" || ownerUserID == "" {
+		return validation("speaker_profile_id", "is required")
+	}
+	samples, err := s.speakerProfiles.ListSpeakerSamples(ctx, id, ownerUserID)
+	if err != nil {
+		return err
+	}
+	var deleteErrors []error
+	for _, sample := range samples {
+		if err := s.enrollmentStore.Delete(ctx, sample.FilePath); err != nil {
+			deleteErrors = append(deleteErrors, err)
+		}
+	}
+	if err := errors.Join(deleteErrors...); err != nil {
+		return fmt.Errorf("delete speaker sample files: %w", err)
+	}
+	_, err = s.speakerProfiles.DeleteSpeakerProfile(ctx, id, ownerUserID)
+	return err
+}
+
+func (s *voiceService) OpenSpeakerSample(
+	ctx context.Context, profileID, sampleID, ownerUserID string,
+) (SpeakerSampleAudio, error) {
+	if strings.TrimSpace(profileID) == "" || strings.TrimSpace(sampleID) == "" ||
+		strings.TrimSpace(ownerUserID) == "" {
+		return SpeakerSampleAudio{}, validation("speaker_sample_id", "is required")
+	}
+	sample, err := s.speakerProfiles.GetSpeakerSample(ctx, sampleID, profileID, ownerUserID)
+	if err != nil {
+		return SpeakerSampleAudio{}, err
+	}
+	content, err := s.enrollmentStore.Open(ctx, sample.FilePath)
+	if err != nil {
+		return SpeakerSampleAudio{}, fmt.Errorf("open speaker sample: %w", err)
+	}
+	return SpeakerSampleAudio{
+		Content: content, FileName: sample.FileName, MediaType: sample.MediaType,
+		SizeBytes: sample.SizeBytes,
+	}, nil
+}
+
 func publicEnrollment(record VoiceEnrollmentRecord) VoiceEnrollmentSample {
 	return VoiceEnrollmentSample{
 		ID: record.ID, FileName: record.FileName, MediaType: record.MediaType,
@@ -259,7 +345,23 @@ func (s *voiceService) GetRecording(ctx context.Context, id, ownerUserID string)
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerUserID) == "" {
 		return VoiceRecordingDetail{}, validation("recording_id", "is required")
 	}
-	return s.repository.GetRecording(ctx, id, ownerUserID)
+	detail, err := s.repository.GetRecording(ctx, id, ownerUserID)
+	if err != nil {
+		return VoiceRecordingDetail{}, err
+	}
+	profiles, err := s.speakerProfiles.ListSpeakerProfiles(ctx, ownerUserID)
+	if err != nil {
+		return VoiceRecordingDetail{}, err
+	}
+	if detail.Transcript != nil {
+		enrichTranscriptSpeakerProfiles(detail.Transcript, profiles)
+	}
+	for episodeIndex := range detail.Episodes {
+		for segmentIndex := range detail.Episodes[episodeIndex].Segments {
+			enrichEpisodeSpeakerProfile(&detail.Episodes[episodeIndex].Segments[segmentIndex], profiles)
+		}
+	}
+	return detail, nil
 }
 
 func (s *voiceService) StartRealtimeSession(
@@ -510,6 +612,17 @@ func (s *voiceService) processSTT(ctx context.Context, job VoiceJob) error {
 	if err != nil {
 		return fmt.Errorf("attribute transcript speakers: %w", err)
 	}
+	if s.speakerIdentifier != nil {
+		identified, identifyErr := s.speakerIdentifier.Identify(ctx, SpeakerIdentificationInput{
+			OwnerUserID: job.OwnerUserID, SourceKind: "voice",
+			SourceRecordingID: job.RecordingID, AudioPath: job.FilePath,
+			Transcript: transcript,
+		})
+		transcript = identified
+		if identifyErr != nil {
+			transcript.Warning = appendTranscriptWarning(transcript.Warning, "persistent speaker identification was unavailable")
+		}
+	}
 	if err := s.repository.SaveTranscriptAndQueueAssembly(
 		ctx, job, transcript, speakerReferenceIDs(references),
 		transcriptionProvider(transcript, s.transcriber),
@@ -535,6 +648,19 @@ func (s *voiceService) processAssembly(ctx context.Context, job VoiceJob) error 
 }
 
 func (s *voiceService) processMemograph(ctx context.Context, job VoiceJob) error {
+	if s.speakerProfiles != nil {
+		profiles, err := s.speakerProfiles.ListSpeakerProfiles(ctx, job.OwnerUserID)
+		if err != nil {
+			return fmt.Errorf("refresh speaker labels for graph write: %w", err)
+		}
+		for index := range job.EpisodeSegments {
+			enrichEpisodeSpeakerProfile(&job.EpisodeSegments[index], profiles)
+		}
+		if len(job.EpisodeSegments) > 0 {
+			refreshed := episodeFromSegments(0, job.SessionID, job.Location, job.EpisodeSegments)
+			job.Description = refreshed.Description
+		}
+	}
 	meta := map[string]any{
 		"source": "audio", "source_description": "voice recording",
 		"session_id": job.SessionID, "group_id": job.GroupID,
@@ -556,7 +682,9 @@ func (s *voiceService) processMemograph(ctx context.Context, job VoiceJob) error
 	if job.Confidence != nil {
 		custom["confidence"] = *job.Confidence
 	}
-	idempotencyKey := memographIdempotencyKey(job.MemoryID, job.EpisodeID, "audio")
+	idempotencyKey := memographIdempotencyKey(
+		job.MemoryID, job.EpisodeID, "audio", job.GraphRevision,
+	)
 	meta["idempotency_key"] = idempotencyKey
 	structuredGraph := structuredVoiceConversation(job)
 	if structuredGraph == nil {
@@ -638,7 +766,10 @@ func BuildConversationEpisodes(
 				StartTime: recording.StartOffset + math.Max(segment.StartTime, 0),
 				EndTime:   recording.StartOffset + math.Max(segment.EndTime, segment.StartTime),
 				Speaker:   segment.Speaker, SpeakerRole: role, Text: text,
-				Confidence: segment.Confidence,
+				SpeakerProfileID: segment.SpeakerProfileID,
+				SpeakerName:      segment.SpeakerName, SpeakerRelationship: segment.SpeakerRelationship,
+				SpeakerIdentityStatus: segment.SpeakerIdentityStatus,
+				Confidence:            segment.Confidence,
 			})
 		}
 	}

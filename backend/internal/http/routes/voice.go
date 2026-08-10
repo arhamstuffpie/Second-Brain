@@ -11,6 +11,10 @@ func registerVoice(router *gin.RouterGroup, voice handler.VoiceHandler) {
 	voiceRoutes.POST("/enrollments/samples", voice.EnrollVoice)
 	voiceRoutes.GET("/enrollments/samples", voice.ListVoiceEnrollments)
 	voiceRoutes.DELETE("/enrollments/samples/:sample_id", voice.DeleteVoiceEnrollment)
+	voiceRoutes.GET("/speakers", voice.ListSpeakerProfiles)
+	voiceRoutes.PATCH("/speakers/:speaker_profile_id", voice.UpdateSpeakerProfile)
+	voiceRoutes.DELETE("/speakers/:speaker_profile_id", voice.DeleteSpeakerProfile)
+	voiceRoutes.GET("/speakers/:speaker_profile_id/samples/:sample_id/audio", voice.GetSpeakerSampleAudio)
 
 	// POST /api/v1/voice/recordings
 	// Authenticated multipart/form-data upload. Fields: file, session_id and

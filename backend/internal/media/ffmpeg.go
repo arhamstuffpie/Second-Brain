@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,7 +89,95 @@ func (e *FFmpegExtractor) ExtractAudio(
 	return service.ExtractedAudio{
 		FileName:  strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath)) + ".wav",
 		MediaType: "audio/wav",
+		Path:      audioPath,
 		Audio:     &temporaryReadCloser{File: audio, path: audioPath},
+	}, nil
+}
+
+func (e *FFmpegExtractor) ExtractSpeakerClip(
+	ctx context.Context,
+	sourcePath string,
+	ranges []service.AudioRange,
+	maxDuration time.Duration,
+) (service.SpeakerClip, error) {
+	if strings.TrimSpace(sourcePath) == "" || len(ranges) == 0 || maxDuration <= 0 {
+		return service.SpeakerClip{}, fmt.Errorf("speaker clip source, ranges, and maximum duration are required")
+	}
+	remaining := maxDuration.Seconds()
+	selected := make([]service.AudioRange, 0, len(ranges))
+	for _, audioRange := range ranges {
+		if remaining <= 0 {
+			break
+		}
+		if math.IsNaN(audioRange.StartTime) || math.IsNaN(audioRange.EndTime) ||
+			math.IsInf(audioRange.StartTime, 0) || math.IsInf(audioRange.EndTime, 0) ||
+			audioRange.StartTime < 0 || audioRange.EndTime <= audioRange.StartTime {
+			continue
+		}
+		duration := math.Min(audioRange.EndTime-audioRange.StartTime, remaining)
+		selected = append(selected, service.AudioRange{
+			StartTime: audioRange.StartTime,
+			EndTime:   audioRange.StartTime + duration,
+		})
+		remaining -= duration
+	}
+	if len(selected) == 0 {
+		return service.SpeakerClip{}, fmt.Errorf("speaker clip has no valid ranges")
+	}
+
+	temp, err := os.CreateTemp("", "second-brain-speaker-*.wav")
+	if err != nil {
+		return service.SpeakerClip{}, fmt.Errorf("create speaker clip file: %w", err)
+	}
+	clipPath := temp.Name()
+	_ = temp.Close()
+	defer os.Remove(clipPath)
+
+	filters := make([]string, 0, len(selected)+1)
+	inputs := make([]string, 0, len(selected))
+	totalDuration := 0.0
+	for index, audioRange := range selected {
+		label := fmt.Sprintf("a%d", index)
+		filters = append(filters, fmt.Sprintf(
+			"[0:a]atrim=start=%s:end=%s,asetpts=PTS-STARTPTS[%s]",
+			strconv.FormatFloat(audioRange.StartTime, 'f', 6, 64),
+			strconv.FormatFloat(audioRange.EndTime, 'f', 6, 64), label,
+		))
+		inputs = append(inputs, "["+label+"]")
+		totalDuration += audioRange.EndTime - audioRange.StartTime
+	}
+	if len(inputs) == 1 {
+		filters = append(filters, inputs[0]+"anull[out]")
+	} else {
+		filters = append(filters, strings.Join(inputs, "")+fmt.Sprintf("concat=n=%d:v=0:a=1[out]", len(inputs)))
+	}
+
+	commandCtx, cancel := context.WithTimeout(ctx, e.timeout)
+	defer cancel()
+	var stderr bytes.Buffer
+	command := exec.CommandContext(
+		commandCtx, e.binary,
+		"-hide_banner", "-loglevel", "error", "-y", "-i", sourcePath,
+		"-filter_complex", strings.Join(filters, ";"),
+		"-map", "[out]", "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", clipPath,
+	)
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		if commandCtx.Err() != nil {
+			return service.SpeakerClip{}, fmt.Errorf("extract speaker clip: %w", commandCtx.Err())
+		}
+		return service.SpeakerClip{}, fmt.Errorf("extract speaker clip: %w: %s", err, bounded(stderr.String()))
+	}
+	audio, err := os.ReadFile(clipPath)
+	if err != nil {
+		return service.SpeakerClip{}, fmt.Errorf("read speaker clip: %w", err)
+	}
+	if len(audio) == 0 {
+		return service.SpeakerClip{}, fmt.Errorf("speaker clip is empty")
+	}
+	return service.SpeakerClip{
+		FileName: filepath.Base(clipPath), MediaType: "audio/wav", Audio: audio,
+		DurationSeconds: totalDuration,
 	}, nil
 }
 
@@ -187,3 +276,4 @@ func (reader *temporaryReadCloser) Close() error {
 }
 
 var _ service.MediaExtractor = (*FFmpegExtractor)(nil)
+var _ service.SpeakerClipper = (*FFmpegExtractor)(nil)

@@ -43,6 +43,16 @@ normalized to `owner`, `other`, or `unknown` by a separate attribution boundary.
 Without enrollment, transcription continues and every speaker remains unknown.
 The speech-to-text and attribution boundaries are interfaces, so a dedicated
 voiceprint implementation can replace provider-assisted matching later.
+
+Persistent identification of non-owner speakers is an optional second stage.
+OpenAI diarization determines which time ranges belong to the same speaker in a
+recording; the configured ECAPA embedder converts clean ranges into a voice
+vector. PostgreSQL then matches only compatible model/dimension vectors using
+cosine similarity and a per-account advisory lock. A new voice becomes a
+30-day provisional profile with a private review sample. The owner can play,
+name, relate, or remove it in Settings; confirmed profile IDs remain stable in
+future voice and video graph episodes. Embedder failures are fail-open and add a
+warning to the transcript instead of causing another paid STT attempt.
 PostgreSQL is the durable queue: workers claim rows with
 `FOR UPDATE SKIP LOCKED`, and STT, episode-assembly, and Memograph jobs have
 separate retry lifecycles. A failed graph
@@ -78,6 +88,10 @@ All routes require this application's JWT in
 | `POST` | `/api/v1/voice/enrollments/samples` | Enroll one owner voice reference |
 | `GET` | `/api/v1/voice/enrollments/samples` | List enrolled reference metadata |
 | `DELETE` | `/api/v1/voice/enrollments/samples/:sample_id` | Delete an owner reference |
+| `GET` | `/api/v1/voice/speakers` | List provisional and confirmed speaker profiles |
+| `PATCH` | `/api/v1/voice/speakers/:speaker_profile_id` | Name a speaker and set their relationship |
+| `DELETE` | `/api/v1/voice/speakers/:speaker_profile_id` | Remove a profile and its retained sample |
+| `GET` | `/api/v1/voice/speakers/:speaker_profile_id/samples/:sample_id/audio` | Stream an owned review sample |
 | `POST` | `/api/v1/voice/recordings` | Upload a complete audio file |
 | `POST` | `/api/v1/voice/chunks` | Upload one legacy standalone chunk |
 | `GET` | `/api/v1/voice/recordings/:recording_id` | Poll transcript, episodes, and write status |
@@ -114,6 +128,36 @@ curl -X POST http://localhost:8080/api/v1/voice/enrollments/samples \
 
 Reference clips are retained in `APP_VOICE_ENROLLMENT_STORAGE_DIR` until the
 authenticated owner deletes them. The API never returns their storage paths.
+
+### Persistent speaker embedder
+
+Run the included CPU ECAPA service, migrate PostgreSQL, and enable it:
+
+```bash
+make speaker-up
+make migrate-up DATABASE_URL="$APP_DATABASE_URL"
+curl http://127.0.0.1:8091/healthz
+```
+
+```dotenv
+APP_SPEAKER_EMBEDDING_PROVIDER=local
+APP_SPEAKER_EMBEDDING_BASE_URL=http://127.0.0.1:8091
+APP_SPEAKER_EMBEDDING_MODEL=speechbrain/spkrec-ecapa-voxceleb
+```
+
+The first start downloads the model. CPU execution is appropriate because
+matching runs in durable background workers, not in the capture UI. Full image,
+authentication, resource, and remote deployment instructions are in
+`speaker-embedder/README.md`.
+
+For a managed/external setup, deploy that same image behind HTTPS and set
+`APP_SPEAKER_EMBEDDING_PROVIDER=external`, its HTTPS base URL, and
+`APP_SPEAKER_EMBEDDING_API_KEY`. This is the recommended plug-and-play external
+option because it preserves the exact vector contract. pyannoteAI voiceprints,
+Picovoice Eagle profiles, and ElevenLabs' speaker library are useful alternatives
+but are identification products rather than compatible raw ECAPA embedding
+endpoints; they require dedicated adapters and their stored profiles must not be
+mixed with ECAPA centroids.
 
 `group_id` defaults to the stable account scope
 `account-owner:<authenticated-user-id>`. Supplying a group explicitly creates an

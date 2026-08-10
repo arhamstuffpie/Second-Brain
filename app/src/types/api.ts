@@ -71,8 +71,50 @@ export type TranscriptSegment = {
   end_time: number;
   speaker: string;
   speaker_role: 'owner' | 'other' | 'unknown';
+  speaker_profile_id?: string;
+  speaker_name?: string;
+  speaker_relationship?: string;
+  speaker_identity_status?: 'provisional' | 'confirmed';
   text: string;
   confidence?: number;
+};
+
+export type SpeakerRelationshipCategory =
+  | ''
+  | 'family'
+  | 'friend'
+  | 'colleague'
+  | 'professional'
+  | 'acquaintance'
+  | 'other';
+
+export type SpeakerSample = {
+  id: string;
+  profile_id: string;
+  file_name: string;
+  media_type: string;
+  size_bytes: number;
+  duration_seconds: number;
+  created_at: string;
+};
+
+export type SpeakerProfile = {
+  id: string;
+  status: 'provisional' | 'confirmed';
+  display_name: string;
+  relationship_category: SpeakerRelationshipCategory;
+  relationship_label: string;
+  sample_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  expires_at?: string;
+  samples: SpeakerSample[];
+};
+
+export type SpeakerProfileInput = {
+  display_name: string;
+  relationship_category: SpeakerRelationshipCategory;
+  relationship_label: string;
 };
 
 export type Transcript = {

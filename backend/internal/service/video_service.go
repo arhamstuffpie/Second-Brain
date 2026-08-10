@@ -15,19 +15,21 @@ import (
 )
 
 type videoService struct {
-	repository      VideoRepository
-	enrollments     VoiceRepository
-	transcriber     Transcriber
-	attributor      SpeakerAttributor
-	enrollmentStore AudioStore
-	store           VideoStore
-	extractor       MediaExtractor
-	analyzer        VisualAnalyzer
-	memograph       MemographClient
-	episodeDuration time.Duration
-	frameInterval   time.Duration
-	maxFrames       int
-	maxAttempts     int
+	repository        VideoRepository
+	enrollments       VoiceRepository
+	transcriber       Transcriber
+	attributor        SpeakerAttributor
+	speakerProfiles   SpeakerProfileRepository
+	speakerIdentifier SpeakerIdentifier
+	enrollmentStore   AudioStore
+	store             VideoStore
+	extractor         MediaExtractor
+	analyzer          VisualAnalyzer
+	memograph         MemographClient
+	episodeDuration   time.Duration
+	frameInterval     time.Duration
+	maxFrames         int
+	maxAttempts       int
 }
 
 func newVideoService(
@@ -120,7 +122,16 @@ func (s *videoService) GetVideoRecording(
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerUserID) == "" {
 		return VideoRecordingDetail{}, validation("recording_id", "is required")
 	}
-	return s.repository.GetVideoRecording(ctx, id, ownerUserID)
+	detail, err := s.repository.GetVideoRecording(ctx, id, ownerUserID)
+	if err != nil || detail.Transcript == nil {
+		return detail, err
+	}
+	profiles, err := s.speakerProfiles.ListSpeakerProfiles(ctx, ownerUserID)
+	if err != nil {
+		return VideoRecordingDetail{}, err
+	}
+	enrichTranscriptSpeakerProfiles(detail.Transcript, profiles)
+	return detail, nil
 }
 
 func (s *videoService) StartVideoRealtimeSession(
@@ -343,6 +354,17 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 	if err != nil {
 		return fmt.Errorf("attribute video transcript speakers: %w", err)
 	}
+	if s.speakerIdentifier != nil {
+		identified, identifyErr := s.speakerIdentifier.Identify(ctx, SpeakerIdentificationInput{
+			OwnerUserID: job.OwnerUserID, SourceKind: "video",
+			SourceRecordingID: job.RecordingID, AudioPath: extracted.Path,
+			Transcript: transcript,
+		})
+		transcript = identified
+		if identifyErr != nil {
+			transcript.Warning = appendTranscriptWarning(transcript.Warning, "persistent speaker identification was unavailable")
+		}
+	}
 	if transcript.Segments == nil {
 		transcript.Segments = []TranscriptSegment{}
 	}
@@ -394,6 +416,16 @@ func (s *videoService) processVideoMerge(ctx context.Context, job VideoJob) erro
 }
 
 func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) error {
+	if s.speakerProfiles != nil && (job.MemographSource == "speech" || job.MemographSource == "legacy") {
+		profiles, err := s.speakerProfiles.ListSpeakerProfiles(ctx, job.OwnerUserID)
+		if err != nil {
+			return fmt.Errorf("refresh speaker labels for graph write: %w", err)
+		}
+		enrichTranscriptSpeakerProfiles(&job.Transcript, profiles)
+		job.SpeechDescription = videoSpeechDescription(
+			job.Transcript, job.StartOffset, job.EpisodeStart, job.EpisodeEnd,
+		)
+	}
 	baseMeta := map[string]any{
 		"session_id": job.SessionID, "group_id": job.GroupID,
 		"episode_id": job.EpisodeID,
@@ -445,7 +477,9 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 	}
 	baseMeta["source"] = source
 	baseMeta["source_description"] = source + " from video recording"
-	idempotencyKey := memographIdempotencyKey(job.MemoryID, job.EpisodeID, source)
+	idempotencyKey := memographIdempotencyKey(
+		job.MemoryID, job.EpisodeID, source, job.GraphRevision,
+	)
 	baseMeta["idempotency_key"] = idempotencyKey
 	response, err := s.memograph.InsertEpisode(ctx, job.MemoryID, EpisodeInsertRequest{
 		Data: data, Meta: baseMeta, StructuredGraph: structuredGraph,
@@ -625,6 +659,12 @@ func BuildVideoEpisodes(
 }
 
 func videoEpisodeSpeaker(segment TranscriptSegment) string {
+	if name := strings.TrimSpace(segment.SpeakerName); name != "" {
+		if relationship := strings.TrimSpace(segment.SpeakerRelationship); relationship != "" {
+			return name + " (" + relationship + ")"
+		}
+		return name
+	}
 	switch segment.SpeakerRole {
 	case "owner":
 		return "Owner"
@@ -639,6 +679,24 @@ func videoEpisodeSpeaker(segment TranscriptSegment) string {
 		}
 		return "Unknown speaker"
 	}
+}
+
+func videoSpeechDescription(
+	transcript Transcript, offset, episodeStart, episodeEnd float64,
+) string {
+	lines := make([]string, 0, len(transcript.Segments))
+	for _, segment := range transcript.Segments {
+		start := offset + segment.StartTime
+		if start < episodeStart || start >= episodeEnd || strings.TrimSpace(segment.Text) == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf(
+			"[%.2fs-%.2fs] %s: %s",
+			start, offset+segment.EndTime, videoEpisodeSpeaker(segment),
+			strings.TrimSpace(segment.Text),
+		))
+	}
+	return strings.Join(lines, " ")
 }
 
 func supportedVideo(filename, mediaType string) bool {

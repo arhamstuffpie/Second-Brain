@@ -17,6 +17,10 @@ func TestMemographIdempotencyKeyIsStableAndBranchSpecific(t *testing.T) {
 	if first == visual {
 		t.Fatalf("speech and visual keys are equal: %q", first)
 	}
+	refreshed := memographIdempotencyKey("memory-1", "episode-1", "speech", 1)
+	if refreshed == first || refreshed != memographIdempotencyKey("memory-1", "episode-1", "speech", 1) {
+		t.Fatalf("graph revision key = %q, original = %q", refreshed, first)
+	}
 }
 
 type retryHintError struct{ delay time.Duration }
@@ -124,8 +128,30 @@ func TestStructuredConversationKeepsRepeatedUtterancesDistinct(t *testing.T) {
 	}
 	if len(utterances) != 2 ||
 		utterances[0].CanonicalID == utterances[1].CanonicalID ||
-		utterances[0].Name == utterances[1].Name {
+		utterances[0].Name != "Okay." || utterances[1].Name != "Okay." {
 		t.Fatalf("repeated utterance entities = %+v", utterances)
+	}
+}
+
+func TestStructuredConversationUsesCleanTitlesAndConfirmedSpeakerName(t *testing.T) {
+	graph := buildStructuredConversation(
+		"episode-1", "audio", "session-1", "user-1", "", "Conversation",
+		0, 2,
+		[]groundedConversationSegment{{
+			StartTime: 0, EndTime: 2, Role: "other", Speaker: "A",
+			SpeakerProfileID: "profile-1", SpeakerName: "Raj",
+			Text: "Game management decides close matches.",
+		}},
+	)
+	if graph == nil {
+		t.Fatal("structured conversation is nil")
+	}
+	speaker := findStructuredEntity(graph.Entities, "speaker-profile:profile-1")
+	utterance := findStructuredEntityByText(graph.Entities, "Game management decides close matches.")
+	if speaker == nil || speaker.Name != "Raj" || utterance == nil ||
+		utterance.Name != "Game management decides close matches." ||
+		strings.Contains(utterance.Name, " @ ") {
+		t.Fatalf("speaker/utterance entities = %+v", graph.Entities)
 	}
 }
 
@@ -140,7 +166,7 @@ func findStructuredEntity(entities []StructuredEntity, canonicalID string) *Stru
 
 func findStructuredEntityByText(entities []StructuredEntity, text string) *StructuredEntity {
 	for index := range entities {
-		if strings.HasPrefix(entities[index].Name, text+" [") {
+		if entities[index].Name == text || strings.HasPrefix(entities[index].Name, text+" [") {
 			return &entities[index]
 		}
 	}

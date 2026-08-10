@@ -18,6 +18,8 @@ import type {
   RecordingUploadInput,
   StartVideoSessionInput,
   StartVoiceSessionInput,
+  SpeakerProfile,
+  SpeakerProfileInput,
   UploadFile,
   VideoChunkUploadInput,
   VideoRecording,
@@ -33,7 +35,7 @@ import { randomUUID } from 'expo-crypto';
 import { ServerSentEventParser, type ServerSentEvent } from '@/lib/sse';
 
 type RequestOptions = {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   form?: FormData;
   authenticated?: boolean;
@@ -390,6 +392,34 @@ export class ApiClient {
         `/api/v1/voice/enrollments/samples/${encodeURIComponent(sampleId)}`,
         { method: 'DELETE' },
       ),
+
+    listSpeakerProfiles: () =>
+      this.request<SpeakerProfile[]>('/api/v1/voice/speakers'),
+
+    updateSpeakerProfile: (profileId: string, input: SpeakerProfileInput) =>
+      this.request<SpeakerProfile>(
+        `/api/v1/voice/speakers/${encodeURIComponent(profileId)}`,
+        { method: 'PATCH', body: input },
+      ),
+
+    deleteSpeakerProfile: (profileId: string) =>
+      this.request<null>(`/api/v1/voice/speakers/${encodeURIComponent(profileId)}`, {
+        method: 'DELETE',
+      }),
+
+    speakerSampleAudioSource: (profileId: string, sampleId: string) => {
+      if (!__DEV__ && !this.baseUrl.startsWith('https://')) {
+        throw new ApiError('Production backend URL must use HTTPS.', 0, 'INSECURE_BACKEND_URL');
+      }
+      const token = this.getAccessToken();
+      if (!token) throw new ApiError('Please sign in again.', 401, 'UNAUTHORIZED');
+      return {
+        uri:
+          `${this.baseUrl}/api/v1/voice/speakers/${encodeURIComponent(profileId)}` +
+          `/samples/${encodeURIComponent(sampleId)}/audio`,
+        headers: { Authorization: `Bearer ${token}` },
+      };
+    },
 
     ingestRecording: (input: RecordingUploadInput) =>
       this.request<VoiceRecording>('/api/v1/voice/recordings', {

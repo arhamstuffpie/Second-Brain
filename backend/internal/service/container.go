@@ -14,6 +14,8 @@ type Dependencies struct {
 	JWT               config.JWTConfig
 	STTConfig         config.STTConfig
 	VoiceRepository   VoiceRepository
+	SpeakerProfiles   SpeakerProfileRepository
+	SpeakerIdentifier SpeakerIdentifier
 	VideoRepository   VideoRepository
 	Transcriber       Transcriber
 	SpeakerAttributor SpeakerAttributor
@@ -47,7 +49,7 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	if deps.ModelProfiles == nil || deps.CredentialCipher == nil {
 		return nil, fmt.Errorf("model profile dependencies are required")
 	}
-	if deps.VoiceRepository == nil || deps.Transcriber == nil || deps.SpeakerAttributor == nil ||
+	if deps.VoiceRepository == nil || deps.SpeakerProfiles == nil || deps.Transcriber == nil || deps.SpeakerAttributor == nil ||
 		deps.AudioStore == nil || deps.EnrollmentStore == nil || deps.AudioInspector == nil ||
 		deps.Memograph == nil {
 		return nil, fmt.Errorf("voice service dependencies are required")
@@ -60,21 +62,28 @@ func NewContainer(deps Dependencies) (*Container, error) {
 		return nil, fmt.Errorf("valid JWT configuration is required")
 	}
 
+	voice := newVoiceService(
+		deps.VoiceRepository, deps.Transcriber, deps.SpeakerAttributor,
+		deps.AudioStore, deps.EnrollmentStore, deps.AudioInspector, deps.Memograph,
+		deps.VoiceConfig, deps.WorkerConfig,
+	)
+	voice.speakerProfiles = deps.SpeakerProfiles
+	voice.speakerIdentifier = deps.SpeakerIdentifier
+	video := newVideoService(
+		deps.VideoRepository, deps.VoiceRepository, deps.Transcriber,
+		deps.SpeakerAttributor, deps.EnrollmentStore, deps.VideoStore,
+		deps.MediaExtractor, deps.VisualAnalyzer, deps.Memograph,
+		deps.VideoConfig, deps.WorkerConfig,
+	)
+	video.speakerProfiles = deps.SpeakerProfiles
+	video.speakerIdentifier = deps.SpeakerIdentifier
+
 	container := &Container{
 		Health: newHealthService(deps.HealthRepository),
 		Auth:   newAuthService(deps.UserRepository, deps.JWT),
 		Models: newModelProfileService(deps.ModelProfiles, deps.CredentialCipher, deps.STTConfig),
-		Voice: newVoiceService(
-			deps.VoiceRepository, deps.Transcriber, deps.SpeakerAttributor,
-			deps.AudioStore, deps.EnrollmentStore, deps.AudioInspector, deps.Memograph,
-			deps.VoiceConfig, deps.WorkerConfig,
-		),
-		Video: newVideoService(
-			deps.VideoRepository, deps.VoiceRepository, deps.Transcriber,
-			deps.SpeakerAttributor, deps.EnrollmentStore, deps.VideoStore,
-			deps.MediaExtractor, deps.VisualAnalyzer, deps.Memograph,
-			deps.VideoConfig, deps.WorkerConfig,
-		),
+		Voice:  voice,
+		Video:  video,
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err

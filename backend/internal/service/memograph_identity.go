@@ -7,10 +7,12 @@ import (
 	"strings"
 )
 
-func memographIdempotencyKey(memoryID, episodeID, source string) string {
-	digest := sha256.Sum256([]byte(strings.Join(
-		[]string{"second-brain-v1", memoryID, episodeID, source}, "\x00",
-	)))
+func memographIdempotencyKey(memoryID, episodeID, source string, graphRevision ...int64) string {
+	identity := []string{"second-brain-v1", memoryID, episodeID, source}
+	if len(graphRevision) > 0 && graphRevision[0] > 0 {
+		identity = append(identity, fmt.Sprintf("graph-revision:%d", graphRevision[0]))
+	}
+	digest := sha256.Sum256([]byte(strings.Join(identity, "\x00")))
 	return "second-brain-" + hex.EncodeToString(digest[:])
 }
 
@@ -37,12 +39,14 @@ func addOwnerIdentityMeta(meta map[string]any, ownerUserID string) {
 }
 
 type groundedConversationSegment struct {
-	StartTime  float64
-	EndTime    float64
-	Speaker    string
-	Role       string
-	Text       string
-	Confidence *float64
+	StartTime        float64
+	EndTime          float64
+	Speaker          string
+	Role             string
+	SpeakerProfileID string
+	SpeakerName      string
+	Text             string
+	Confidence       *float64
 }
 
 func structuredVoiceConversation(job VoiceJob) *StructuredGraph {
@@ -51,6 +55,7 @@ func structuredVoiceConversation(job VoiceJob) *StructuredGraph {
 		segments = append(segments, groundedConversationSegment{
 			StartTime: segment.StartTime, EndTime: segment.EndTime,
 			Speaker: segment.Speaker, Role: segment.SpeakerRole,
+			SpeakerProfileID: segment.SpeakerProfileID, SpeakerName: segment.SpeakerName,
 			Text: segment.Text, Confidence: segment.Confidence,
 		})
 	}
@@ -71,6 +76,7 @@ func structuredVideoConversation(job VideoJob) *StructuredGraph {
 		segments = append(segments, groundedConversationSegment{
 			StartTime: start, EndTime: end, Speaker: segment.Speaker,
 			Role: segment.SpeakerRole, Text: segment.Text,
+			SpeakerProfileID: segment.SpeakerProfileID, SpeakerName: segment.SpeakerName,
 			Confidence: segment.Confidence,
 		})
 	}
@@ -111,6 +117,7 @@ func buildStructuredConversation(
 		}
 		speakerID, speakerName := structuredSpeakerIdentity(
 			ownerID, sessionID, segment.Role, segment.Speaker,
+			segment.SpeakerProfileID, segment.SpeakerName,
 		)
 		if _, exists := seenEntities[speakerID]; !exists {
 			seenEntities[speakerID] = struct{}{}
@@ -124,10 +131,8 @@ func buildStructuredConversation(
 		)
 		graph.Entities = append(graph.Entities, StructuredEntity{
 			CanonicalID: utteranceID,
-			Name: conversationUtteranceName(
-				text, utteranceID, segment.StartTime,
-			),
-			Type: "ConversationUtterance", Confidence: segment.Confidence,
+			Name:        conversationUtteranceName(text),
+			Type:        "ConversationUtterance", Confidence: segment.Confidence,
 		})
 		graph.Utterances = append(graph.Utterances, StructuredUtterance{
 			SpeakerID: speakerID, Speaker: speakerName, Text: text,
@@ -181,19 +186,13 @@ func structuredUtteranceID(
 	return "conversation-utterance:" + hex.EncodeToString(digest[:12])
 }
 
-func conversationUtteranceName(text, utteranceID string, startTime float64) string {
+func conversationUtteranceName(text string) string {
 	const maximumRunes = 120
-	shortID := strings.TrimPrefix(utteranceID, "conversation-utterance:")
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
-	suffix := fmt.Sprintf(" [%s @ %.2fs]", shortID, startTime)
-	available := maximumRunes - len([]rune(suffix))
 	runes := []rune(strings.TrimSpace(text))
-	if len(runes) <= available {
-		return string(runes) + suffix
+	if len(runes) <= maximumRunes {
+		return string(runes)
 	}
-	return string(runes[:available-3]) + "..." + suffix
+	return string(runes[:maximumRunes-3]) + "..."
 }
 
 func isQuestionUtterance(text string) bool {
@@ -211,10 +210,24 @@ func isQuestionUtterance(text string) bool {
 }
 
 func structuredSpeakerIdentity(
-	ownerID, sessionID, role, providerSpeaker string,
+	ownerID, sessionID, role, providerSpeaker string, persistentIdentity ...string,
 ) (string, string) {
 	if role == "owner" {
 		return ownerID, "Owner"
+	}
+	speakerProfileID := ""
+	speakerName := ""
+	if len(persistentIdentity) > 0 {
+		speakerProfileID = persistentIdentity[0]
+	}
+	if len(persistentIdentity) > 1 {
+		speakerName = persistentIdentity[1]
+	}
+	if speakerProfileID = strings.TrimSpace(speakerProfileID); speakerProfileID != "" {
+		if speakerName = strings.TrimSpace(speakerName); speakerName == "" {
+			speakerName = "Unlabeled speaker"
+		}
+		return "speaker-profile:" + speakerProfileID, speakerName
 	}
 	providerSpeaker = strings.TrimSpace(providerSpeaker)
 	if providerSpeaker == "" || strings.EqualFold(providerSpeaker, "speaker") {

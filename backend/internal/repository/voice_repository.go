@@ -549,7 +549,7 @@ SELECT c.id, c.kind, COALESCE(c.recording_id, ''), COALESCE(c.episode_id, ''),
 	   COALESCE(e.confidence, r.default_confidence), b.id, b.owner_user_id, b.closed,
 	   COALESCE(e.segments, '[]'::jsonb), COALESCE(e.source_recording_ids, '[]'::jsonb),
 	   COALESCE(e.owner_utterance_count, 0), COALESCE(e.other_utterance_count, 0),
-	   COALESCE(e.unknown_utterance_count, 0)
+	   COALESCE(e.unknown_utterance_count, 0), COALESCE(e.graph_revision, 0)
 FROM claimed c
 LEFT JOIN voice_episodes e ON e.id = c.episode_id
 LEFT JOIN voice_recordings r ON r.id = COALESCE(c.recording_id, e.recording_id)
@@ -565,7 +565,7 @@ JOIN voice_episode_batches b ON b.id = COALESCE(c.batch_id, e.batch_id, r.batch_
 		&job.Description, &job.EpisodeStart, &job.EpisodeEnd, &confidence,
 		&job.BatchID, &job.OwnerUserID, &job.BatchClosed,
 		&segmentsJSON, &sourceIDsJSON, &job.OwnerUtteranceCount,
-		&job.OtherUtteranceCount, &job.UnknownUtteranceCount,
+		&job.OtherUtteranceCount, &job.UnknownUtteranceCount, &job.GraphRevision,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return service.VoiceJob{}, false, nil

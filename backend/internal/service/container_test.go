@@ -43,6 +43,39 @@ func (stubCredentialCipher) Open(value string) (string, error) {
 	return strings.TrimPrefix(value, "sealed:"), nil
 }
 
+type stubSpeakerProfileRepository struct{}
+
+func (stubSpeakerProfileRepository) FindSpeakerObservation(context.Context, string, string, string, string) (SpeakerObservation, bool, error) {
+	return SpeakerObservation{}, false, nil
+}
+func (stubSpeakerProfileRepository) ResolveSpeakerProfile(context.Context, ResolveSpeakerProfileInput) (SpeakerProfileResolution, error) {
+	return SpeakerProfileResolution{}, nil
+}
+func (stubSpeakerProfileRepository) CreateSpeakerSample(context.Context, CreateSpeakerSampleInput) (SpeakerSample, error) {
+	return SpeakerSample{}, nil
+}
+func (stubSpeakerProfileRepository) CreateSpeakerObservation(context.Context, CreateSpeakerObservationInput) (SpeakerObservation, error) {
+	return SpeakerObservation{}, nil
+}
+func (stubSpeakerProfileRepository) ListSpeakerProfiles(context.Context, string) ([]SpeakerProfile, error) {
+	return []SpeakerProfile{}, nil
+}
+func (stubSpeakerProfileRepository) UpdateSpeakerProfile(_ context.Context, input UpdateSpeakerProfileInput) (SpeakerProfile, error) {
+	return SpeakerProfile{ID: input.ID}, nil
+}
+func (stubSpeakerProfileRepository) DeleteSpeakerProfile(context.Context, string, string) ([]string, error) {
+	return []string{}, nil
+}
+func (stubSpeakerProfileRepository) PurgeExpiredSpeakerProfiles(context.Context, string) ([]string, error) {
+	return []string{}, nil
+}
+func (stubSpeakerProfileRepository) ListSpeakerSamples(context.Context, string, string) ([]SpeakerSample, error) {
+	return []SpeakerSample{}, nil
+}
+func (stubSpeakerProfileRepository) GetSpeakerSample(context.Context, string, string, string) (SpeakerSample, error) {
+	return SpeakerSample{}, nil
+}
+
 func (stubUserRepository) FindByEmail(context.Context, string) (StoredUser, bool, error) {
 	return StoredUser{}, true, nil
 }
@@ -228,6 +261,7 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		ModelProfiles:     stubModelProfileRepository{},
 		CredentialCipher:  stubCredentialCipher{},
 		VoiceRepository:   stubVoiceRepository{},
+		SpeakerProfiles:   stubSpeakerProfileRepository{},
 		VideoRepository:   stubVideoRepository{},
 		Transcriber:       stubTranscriber{},
 		SpeakerAttributor: stubSpeakerAttributor{},

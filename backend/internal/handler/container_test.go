@@ -45,6 +45,16 @@ func (stubVoiceService) ListVoiceEnrollments(context.Context, string) ([]service
 	return nil, nil
 }
 func (stubVoiceService) DeleteVoiceEnrollment(context.Context, string, string) error { return nil }
+func (stubVoiceService) ListSpeakerProfiles(context.Context, string) ([]service.SpeakerProfile, error) {
+	return []service.SpeakerProfile{}, nil
+}
+func (stubVoiceService) UpdateSpeakerProfile(context.Context, service.UpdateSpeakerProfileInput) (service.SpeakerProfile, error) {
+	return service.SpeakerProfile{}, nil
+}
+func (stubVoiceService) DeleteSpeakerProfile(context.Context, string, string) error { return nil }
+func (stubVoiceService) OpenSpeakerSample(context.Context, string, string, string) (service.SpeakerSampleAudio, error) {
+	return service.SpeakerSampleAudio{}, nil
+}
 
 func (stubVoiceService) Ingest(context.Context, service.VoiceIngestInput) (service.VoiceRecording, error) {
 	return service.VoiceRecording{}, nil
