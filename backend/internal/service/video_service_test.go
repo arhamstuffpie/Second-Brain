@@ -537,3 +537,13 @@ func TestLegacyVideoMemographDataRemovesCombinedEpisodeWrappers(t *testing.T) {
 		t.Fatalf("legacy speech data = %q", speech)
 	}
 }
+
+func TestVideoSpeechDescriptionUsesConfirmedSpeakerName(t *testing.T) {
+	got := videoSpeechDescription(Transcript{Segments: []TranscriptSegment{{
+		StartTime: 1, EndTime: 2, Speaker: "A", SpeakerRole: "other",
+		SpeakerName: "Raj", SpeakerRelationship: "friend", Text: "Hello.",
+	}}}, 30, 30, 60)
+	if got != "[31.00s-32.00s] Raj (friend): Hello." {
+		t.Fatalf("videoSpeechDescription() = %q", got)
+	}
+}

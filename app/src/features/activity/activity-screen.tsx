@@ -40,6 +40,12 @@ function formatTimestamp(seconds: number) {
 
 function speakerLabel(segment: TranscriptSegment) {
   if (segment.speaker_role === 'owner') return 'Owner';
+  if (segment.speaker_name) {
+    return segment.speaker_relationship
+      ? `${segment.speaker_name} · ${segment.speaker_relationship}`
+      : segment.speaker_name;
+  }
+  if (segment.speaker_identity_status === 'provisional') return 'New speaker · label in Settings';
   if (segment.speaker_role === 'other') {
     return segment.speaker ? `Other speaker ${segment.speaker}` : 'Other speaker';
   }

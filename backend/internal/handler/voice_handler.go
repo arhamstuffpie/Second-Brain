@@ -2,9 +2,11 @@ package handler
 
 import (
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/arham/ai-second-brain/internal/http/response"
 	"github.com/arham/ai-second-brain/internal/service"
@@ -16,6 +18,10 @@ type VoiceHandler interface {
 	EnrollVoice(c *gin.Context)
 	ListVoiceEnrollments(c *gin.Context)
 	DeleteVoiceEnrollment(c *gin.Context)
+	ListSpeakerProfiles(c *gin.Context)
+	UpdateSpeakerProfile(c *gin.Context)
+	DeleteSpeakerProfile(c *gin.Context)
+	GetSpeakerSampleAudio(c *gin.Context)
 	Ingest(c *gin.Context)
 	IngestChunk(c *gin.Context)
 	GetRecording(c *gin.Context)
@@ -117,6 +123,90 @@ func (h *voiceHandler) DeleteVoiceEnrollment(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, nil, "owner voice sample deleted")
+}
+
+func (h *voiceHandler) ListSpeakerProfiles(c *gin.Context) {
+	principal, ok := utils.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required")
+		return
+	}
+	profiles, err := h.service.ListSpeakerProfiles(c.Request.Context(), principal.Subject)
+	if err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, profiles, "speaker profiles")
+}
+
+func (h *voiceHandler) UpdateSpeakerProfile(c *gin.Context) {
+	principal, ok := utils.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required")
+		return
+	}
+	var input service.UpdateSpeakerProfileInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid speaker profile")
+		return
+	}
+	input.ID = c.Param("speaker_profile_id")
+	input.OwnerUserID = principal.Subject
+	profile, err := h.service.UpdateSpeakerProfile(c.Request.Context(), input)
+	if err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, profile, "speaker profile updated")
+}
+
+func (h *voiceHandler) DeleteSpeakerProfile(c *gin.Context) {
+	principal, ok := utils.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required")
+		return
+	}
+	if err := h.service.DeleteSpeakerProfile(
+		c.Request.Context(), c.Param("speaker_profile_id"), principal.Subject,
+	); err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, nil, "speaker profile removed")
+}
+
+func (h *voiceHandler) GetSpeakerSampleAudio(c *gin.Context) {
+	principal, ok := utils.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required")
+		return
+	}
+	audio, err := h.service.OpenSpeakerSample(
+		c.Request.Context(), c.Param("speaker_profile_id"), c.Param("sample_id"), principal.Subject,
+	)
+	if err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	defer audio.Content.Close()
+	mediaType := strings.TrimSpace(audio.MediaType)
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	c.Header("Content-Type", mediaType)
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": audio.FileName}))
+	if seeker, ok := audio.Content.(io.ReadSeeker); ok {
+		http.ServeContent(c.Writer, c.Request, audio.FileName, time.Time{}, seeker)
+		return
+	}
+	c.Header("Content-Length", strconv.FormatInt(audio.SizeBytes, 10))
+	c.Status(http.StatusOK)
+	_, _ = io.Copy(c.Writer, audio.Content)
 }
 
 func (h *voiceHandler) Ingest(c *gin.Context) {

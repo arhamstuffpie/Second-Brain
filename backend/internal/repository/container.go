@@ -3,11 +3,12 @@ package repository
 import "fmt"
 
 type Container struct {
-	Health HealthRepository
-	User   UserRepository
-	Models ModelProfileRepository
-	Voice  VoiceRepository
-	Video  VideoRepository
+	Health   HealthRepository
+	User     UserRepository
+	Models   ModelProfileRepository
+	Speakers SpeakerProfileRepository
+	Voice    VoiceRepository
+	Video    VideoRepository
 }
 
 func NewContainer(db DBTX) (*Container, error) {
@@ -17,11 +18,12 @@ func NewContainer(db DBTX) (*Container, error) {
 	}
 
 	container := &Container{
-		Health: newHealthRepository(baseRepository),
-		User:   newUserRepository(baseRepository),
-		Models: newModelProfileRepository(baseRepository),
-		Voice:  newVoiceRepository(baseRepository),
-		Video:  newVideoRepository(baseRepository),
+		Health:   newHealthRepository(baseRepository),
+		User:     newUserRepository(baseRepository),
+		Models:   newModelProfileRepository(baseRepository),
+		Speakers: newSpeakerProfileRepository(baseRepository),
+		Voice:    newVoiceRepository(baseRepository),
+		Video:    newVideoRepository(baseRepository),
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err
@@ -41,6 +43,9 @@ func (c *Container) Validate() error {
 	}
 	if c.Models == nil {
 		return fmt.Errorf("model profile repository is required")
+	}
+	if c.Speakers == nil {
+		return fmt.Errorf("speaker profile repository is required")
 	}
 	if c.Voice == nil {
 		return fmt.Errorf("voice repository is required")

@@ -71,6 +71,31 @@ type SpeakerAttributor interface {
 	Attribute(ctx context.Context, input SpeakerAttributionInput) (Transcript, error)
 }
 
+type SpeakerEmbedder interface {
+	Embed(ctx context.Context, input SpeakerEmbeddingInput) (SpeakerEmbedding, error)
+}
+
+type SpeakerClipper interface {
+	ExtractSpeakerClip(ctx context.Context, sourcePath string, ranges []AudioRange, maxDuration time.Duration) (SpeakerClip, error)
+}
+
+type SpeakerIdentifier interface {
+	Identify(ctx context.Context, input SpeakerIdentificationInput) (Transcript, error)
+}
+
+type SpeakerProfileRepository interface {
+	FindSpeakerObservation(ctx context.Context, ownerUserID, sourceKind, sourceRecordingID, providerSpeaker string) (SpeakerObservation, bool, error)
+	ResolveSpeakerProfile(ctx context.Context, input ResolveSpeakerProfileInput) (SpeakerProfileResolution, error)
+	CreateSpeakerSample(ctx context.Context, input CreateSpeakerSampleInput) (SpeakerSample, error)
+	CreateSpeakerObservation(ctx context.Context, input CreateSpeakerObservationInput) (SpeakerObservation, error)
+	ListSpeakerProfiles(ctx context.Context, ownerUserID string) ([]SpeakerProfile, error)
+	UpdateSpeakerProfile(ctx context.Context, input UpdateSpeakerProfileInput) (SpeakerProfile, error)
+	DeleteSpeakerProfile(ctx context.Context, id, ownerUserID string) ([]string, error)
+	PurgeExpiredSpeakerProfiles(ctx context.Context, ownerUserID string) ([]string, error)
+	ListSpeakerSamples(ctx context.Context, profileID, ownerUserID string) ([]SpeakerSample, error)
+	GetSpeakerSample(ctx context.Context, id, profileID, ownerUserID string) (SpeakerSample, error)
+}
+
 type AudioInspector interface {
 	Duration(ctx context.Context, path string) (float64, error)
 }
@@ -127,6 +152,10 @@ type VoiceService interface {
 	EnrollVoice(ctx context.Context, input VoiceEnrollmentInput) (VoiceEnrollmentSample, error)
 	ListVoiceEnrollments(ctx context.Context, ownerUserID string) ([]VoiceEnrollmentSample, error)
 	DeleteVoiceEnrollment(ctx context.Context, id, ownerUserID string) error
+	ListSpeakerProfiles(ctx context.Context, ownerUserID string) ([]SpeakerProfile, error)
+	UpdateSpeakerProfile(ctx context.Context, input UpdateSpeakerProfileInput) (SpeakerProfile, error)
+	DeleteSpeakerProfile(ctx context.Context, id, ownerUserID string) error
+	OpenSpeakerSample(ctx context.Context, profileID, sampleID, ownerUserID string) (SpeakerSampleAudio, error)
 	Ingest(ctx context.Context, input VoiceIngestInput) (VoiceRecording, error)
 	GetRecording(ctx context.Context, id, ownerUserID string) (VoiceRecordingDetail, error)
 	StartRealtimeSession(ctx context.Context, input StartRealtimeSessionInput) (RealtimeVoiceSession, error)
@@ -308,13 +337,139 @@ type VoiceEpisode struct {
 }
 
 type TranscriptSegment struct {
-	ID          string   `json:"id,omitempty"`
-	StartTime   float64  `json:"start_time"`
-	EndTime     float64  `json:"end_time"`
-	Speaker     string   `json:"speaker"`
-	SpeakerRole string   `json:"speaker_role"`
-	Text        string   `json:"text"`
-	Confidence  *float64 `json:"confidence,omitempty"`
+	ID                    string   `json:"id,omitempty"`
+	StartTime             float64  `json:"start_time"`
+	EndTime               float64  `json:"end_time"`
+	Speaker               string   `json:"speaker"`
+	SpeakerRole           string   `json:"speaker_role"`
+	SpeakerProfileID      string   `json:"speaker_profile_id,omitempty"`
+	SpeakerName           string   `json:"speaker_name,omitempty"`
+	SpeakerRelationship   string   `json:"speaker_relationship,omitempty"`
+	SpeakerIdentityStatus string   `json:"speaker_identity_status,omitempty"`
+	Text                  string   `json:"text"`
+	Confidence            *float64 `json:"confidence,omitempty"`
+}
+
+type AudioRange struct {
+	StartTime float64
+	EndTime   float64
+}
+
+type SpeakerClip struct {
+	FileName        string
+	MediaType       string
+	Audio           []byte
+	DurationSeconds float64
+}
+
+type SpeakerEmbeddingInput struct {
+	FileName  string
+	MediaType string
+	Audio     []byte
+}
+
+type SpeakerEmbedding struct {
+	Vector []float64
+	Model  string
+}
+
+type SpeakerIdentificationInput struct {
+	OwnerUserID       string
+	SourceKind        string
+	SourceRecordingID string
+	AudioPath         string
+	Transcript        Transcript
+}
+
+type SpeakerProfile struct {
+	ID                   string          `json:"id"`
+	Status               string          `json:"status"`
+	DisplayName          string          `json:"display_name"`
+	RelationshipCategory string          `json:"relationship_category"`
+	RelationshipLabel    string          `json:"relationship_label"`
+	SampleCount          int             `json:"sample_count"`
+	FirstSeenAt          time.Time       `json:"first_seen_at"`
+	LastSeenAt           time.Time       `json:"last_seen_at"`
+	ExpiresAt            *time.Time      `json:"expires_at,omitempty"`
+	Samples              []SpeakerSample `json:"samples"`
+	EmbeddingModel       string          `json:"-"`
+	EmbeddingDimensions  int             `json:"-"`
+	Centroid             []float64       `json:"-"`
+}
+
+type SpeakerSample struct {
+	ID              string    `json:"id"`
+	ProfileID       string    `json:"profile_id"`
+	FileName        string    `json:"file_name"`
+	FilePath        string    `json:"-"`
+	MediaType       string    `json:"media_type"`
+	SizeBytes       int64     `json:"size_bytes"`
+	DurationSeconds float64   `json:"duration_seconds"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+type SpeakerSampleAudio struct {
+	Content   io.ReadCloser
+	FileName  string
+	MediaType string
+	SizeBytes int64
+}
+
+type SpeakerObservation struct {
+	ID                 string
+	ProfileID          string
+	Outcome            string
+	Similarity         *float64
+	RunnerUpSimilarity *float64
+}
+
+type ResolveSpeakerProfileInput struct {
+	OwnerUserID     string
+	EmbeddingModel  string
+	Embedding       []float64
+	MatchThreshold  float64
+	AmbiguousMargin float64
+	ProvisionalTTL  time.Duration
+}
+
+type SpeakerProfileResolution struct {
+	Profile            SpeakerProfile
+	Created            bool
+	Similarity         *float64
+	RunnerUpSimilarity *float64
+}
+
+type CreateSpeakerSampleInput struct {
+	OwnerUserID       string
+	ProfileID         string
+	SourceKind        string
+	SourceRecordingID string
+	ProviderSpeaker   string
+	FileName          string
+	FilePath          string
+	MediaType         string
+	SizeBytes         int64
+	DurationSeconds   float64
+}
+
+type CreateSpeakerObservationInput struct {
+	OwnerUserID        string
+	ProfileID          string
+	SourceKind         string
+	SourceRecordingID  string
+	ProviderSpeaker    string
+	SegmentIDs         []string
+	Outcome            string
+	Similarity         *float64
+	RunnerUpSimilarity *float64
+}
+
+type UpdateSpeakerProfileInput struct {
+	ID                   string `json:"-"`
+	OwnerUserID          string `json:"-"`
+	DisplayName          string `json:"display_name"`
+	RelationshipCategory string `json:"relationship_category"`
+	RelationshipLabel    string `json:"relationship_label"`
 }
 
 type Transcript struct {
@@ -379,14 +534,18 @@ type SpeakerAttributionInput struct {
 }
 
 type EpisodeSegment struct {
-	ID          string   `json:"id,omitempty"`
-	RecordingID string   `json:"recording_id"`
-	StartTime   float64  `json:"start_time"`
-	EndTime     float64  `json:"end_time"`
-	Speaker     string   `json:"speaker"`
-	SpeakerRole string   `json:"speaker_role"`
-	Text        string   `json:"text"`
-	Confidence  *float64 `json:"confidence,omitempty"`
+	ID                    string   `json:"id,omitempty"`
+	RecordingID           string   `json:"recording_id"`
+	StartTime             float64  `json:"start_time"`
+	EndTime               float64  `json:"end_time"`
+	Speaker               string   `json:"speaker"`
+	SpeakerRole           string   `json:"speaker_role"`
+	SpeakerProfileID      string   `json:"speaker_profile_id,omitempty"`
+	SpeakerName           string   `json:"speaker_name,omitempty"`
+	SpeakerRelationship   string   `json:"speaker_relationship,omitempty"`
+	SpeakerIdentityStatus string   `json:"speaker_identity_status,omitempty"`
+	Text                  string   `json:"text"`
+	Confidence            *float64 `json:"confidence,omitempty"`
 }
 
 type EpisodeDraft struct {
@@ -431,6 +590,7 @@ type VoiceJob struct {
 	OwnerUtteranceCount   int
 	OtherUtteranceCount   int
 	UnknownUtteranceCount int
+	GraphRevision         int64
 }
 
 type StartRealtimeSessionInput struct {

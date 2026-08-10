@@ -24,6 +24,7 @@ import (
 	"github.com/arham/ai-second-brain/internal/repository"
 	"github.com/arham/ai-second-brain/internal/secrets"
 	"github.com/arham/ai-second-brain/internal/service"
+	"github.com/arham/ai-second-brain/internal/speaker"
 	"github.com/arham/ai-second-brain/internal/stt"
 	"github.com/arham/ai-second-brain/internal/vision"
 	"github.com/arham/ai-second-brain/internal/worker"
@@ -116,6 +117,19 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct profile-aware transcriber: %w", err)
 	}
+	var speakerIdentifier service.SpeakerIdentifier
+	if cfg.Speaker.Provider != "disabled" {
+		embedder, embedderErr := speaker.NewHTTPEmbedder(cfg.Speaker)
+		if embedderErr != nil {
+			return fmt.Errorf("construct speaker embedder: %w", embedderErr)
+		}
+		speakerIdentifier, err = service.NewPersistentSpeakerIdentifier(
+			repositories.Speakers, embedder, mediaExtractor, enrollmentStore, cfg.Speaker,
+		)
+		if err != nil {
+			return fmt.Errorf("construct persistent speaker identifier: %w", err)
+		}
+	}
 	var visualAnalyzer service.VisualAnalyzer
 	switch cfg.Vision.Provider {
 	case "openai":
@@ -129,6 +143,8 @@ func run() error {
 	appLogger.Info().
 		Str("stt_provider", transcriber.Provider()).
 		Str("stt_model", transcriber.Model()).
+		Str("speaker_embedding_provider", cfg.Speaker.Provider).
+		Str("speaker_embedding_model", cfg.Speaker.Model).
 		Str("vision_provider", visualAnalyzer.Provider()).
 		Str("vision_model", visualAnalyzer.Model()).
 		Msg("media analysis providers configured")
@@ -140,6 +156,8 @@ func run() error {
 		CredentialCipher:  credentialCipher,
 		STTConfig:         cfg.STT,
 		VoiceRepository:   repositories.Voice,
+		SpeakerProfiles:   repositories.Speakers,
+		SpeakerIdentifier: speakerIdentifier,
 		VideoRepository:   repositories.Video,
 		Transcriber:       transcriber,
 		SpeakerAttributor: stt.NewReferenceAttributor(),

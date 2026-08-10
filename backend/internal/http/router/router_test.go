@@ -58,6 +58,16 @@ func (fakeVoiceService) ListVoiceEnrollments(context.Context, string) ([]service
 	return nil, nil
 }
 func (fakeVoiceService) DeleteVoiceEnrollment(context.Context, string, string) error { return nil }
+func (fakeVoiceService) ListSpeakerProfiles(context.Context, string) ([]service.SpeakerProfile, error) {
+	return []service.SpeakerProfile{}, nil
+}
+func (fakeVoiceService) UpdateSpeakerProfile(context.Context, service.UpdateSpeakerProfileInput) (service.SpeakerProfile, error) {
+	return service.SpeakerProfile{}, nil
+}
+func (fakeVoiceService) DeleteSpeakerProfile(context.Context, string, string) error { return nil }
+func (fakeVoiceService) OpenSpeakerSample(context.Context, string, string, string) (service.SpeakerSampleAudio, error) {
+	return service.SpeakerSampleAudio{}, nil
+}
 
 func (fakeVoiceService) Ingest(context.Context, service.VoiceIngestInput) (service.VoiceRecording, error) {
 	return service.VoiceRecording{}, nil

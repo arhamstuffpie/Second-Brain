@@ -15,6 +15,7 @@ import {
 } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/theme';
 import { VoiceSampleRecorder } from '@/features/voice-enrollment/voice-sample-recorder';
+import { SpeakerProfilesCard } from '@/features/speakers/speaker-profiles-card';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { getReadableError } from '@/lib/readable-error';
 import { useApp } from '@/state/app-provider';
@@ -407,6 +408,8 @@ export function SettingsScreen() {
           </View>
         )}
       </Card>
+
+      <SpeakerProfilesCard />
 
       <Card>
         <View style={styles.voiceHeader}>

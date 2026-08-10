@@ -131,6 +131,7 @@ type RealtimeVideoSessionDetail struct {
 type ExtractedAudio struct {
 	FileName  string
 	MediaType string
+	Path      string
 	Audio     io.ReadCloser
 }
 
@@ -226,4 +227,5 @@ type VideoJob struct {
 	EpisodeStart      float64
 	EpisodeEnd        float64
 	Confidence        *float64
+	GraphRevision     int64
 }

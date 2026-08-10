@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,6 +18,7 @@ type Config struct {
 	Voice       VoiceConfig
 	Video       VideoConfig
 	STT         STTConfig
+	Speaker     SpeakerEmbeddingConfig
 	Vision      VisionConfig
 	Models      ModelConfig
 	Memograph   MemographConfig
@@ -98,6 +100,22 @@ type STTConfig struct {
 	Language string
 	Prompt   string
 	Timeout  time.Duration
+}
+
+// SpeakerEmbeddingConfig configures persistent speaker identification. Local
+// and external providers intentionally use the same HTTP contract so vectors
+// from different model families are never mixed in one profile index.
+type SpeakerEmbeddingConfig struct {
+	Provider        string
+	BaseURL         string
+	APIKey          string
+	Model           string
+	Timeout         time.Duration
+	MatchThreshold  float64
+	AmbiguousMargin float64
+	ProvisionalTTL  time.Duration
+	MinClipDuration time.Duration
+	MaxClipDuration time.Duration
 }
 
 type VisionConfig struct {
@@ -200,6 +218,18 @@ func Load() (Config, error) {
 			Prompt:   GetEnv("APP_STT_PROMPT", ""),
 			Timeout:  getEnvDuration("APP_STT_TIMEOUT", 2*time.Minute),
 		},
+		Speaker: SpeakerEmbeddingConfig{
+			Provider:        strings.ToLower(strings.TrimSpace(GetEnv("APP_SPEAKER_EMBEDDING_PROVIDER", "disabled"))),
+			BaseURL:         strings.TrimRight(GetEnv("APP_SPEAKER_EMBEDDING_BASE_URL", "http://127.0.0.1:8091"), "/"),
+			APIKey:          GetEnv("APP_SPEAKER_EMBEDDING_API_KEY", ""),
+			Model:           GetEnv("APP_SPEAKER_EMBEDDING_MODEL", "speechbrain/spkrec-ecapa-voxceleb"),
+			Timeout:         getEnvDuration("APP_SPEAKER_EMBEDDING_TIMEOUT", 30*time.Second),
+			MatchThreshold:  getEnvFloat("APP_SPEAKER_MATCH_THRESHOLD", 0.62),
+			AmbiguousMargin: getEnvFloat("APP_SPEAKER_AMBIGUOUS_MARGIN", 0.08),
+			ProvisionalTTL:  getEnvDuration("APP_SPEAKER_PROVISIONAL_TTL", 30*24*time.Hour),
+			MinClipDuration: getEnvDuration("APP_SPEAKER_MIN_CLIP_DURATION", 2*time.Second),
+			MaxClipDuration: getEnvDuration("APP_SPEAKER_MAX_CLIP_DURATION", 10*time.Second),
+		},
 		Vision: VisionConfig{
 			Provider: GetEnv("APP_VISION_PROVIDER", "mock"),
 			BaseURL:  strings.TrimRight(GetEnv("APP_VISION_BASE_URL", "https://api.openai.com/v1"), "/"),
@@ -241,6 +271,16 @@ func getEnvDuration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return duration
+}
+
+func getEnvFloat(key string, def float64) float64 {
+	value := strings.TrimSpace(GetEnv(key, strconv.FormatFloat(def, 'f', -1, 64)))
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		log.Printf("invalid float for %s: %v", key, err)
+		return def
+	}
+	return parsed
 }
 
 func getEnvCSV(key, def string) []string {
@@ -320,6 +360,25 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.STT.BaseURL) == "" || strings.TrimSpace(c.STT.Model) == "" || c.STT.Timeout <= 0 {
 		return fmt.Errorf("valid STT configuration is required")
+	}
+	if c.Speaker.Provider != "disabled" && c.Speaker.Provider != "local" && c.Speaker.Provider != "external" {
+		return fmt.Errorf("APP_SPEAKER_EMBEDDING_PROVIDER must be disabled, local, or external")
+	}
+	if c.Speaker.Provider != "disabled" {
+		if strings.TrimSpace(c.Speaker.BaseURL) == "" || strings.TrimSpace(c.Speaker.Model) == "" || c.Speaker.Timeout <= 0 {
+			return fmt.Errorf("valid speaker embedding configuration is required")
+		}
+		if c.Speaker.Provider == "external" && strings.TrimSpace(c.Speaker.APIKey) == "" {
+			return fmt.Errorf("APP_SPEAKER_EMBEDDING_API_KEY is required for the external provider")
+		}
+		if c.Speaker.MatchThreshold <= 0 || c.Speaker.MatchThreshold > 1 ||
+			c.Speaker.AmbiguousMargin < 0 || c.Speaker.AmbiguousMargin >= 1 {
+			return fmt.Errorf("speaker matching threshold and ambiguity margin are invalid")
+		}
+		if c.Speaker.ProvisionalTTL <= 0 || c.Speaker.MinClipDuration < 2*time.Second ||
+			c.Speaker.MaxClipDuration < c.Speaker.MinClipDuration || c.Speaker.MaxClipDuration > 10*time.Second {
+			return fmt.Errorf("speaker clip duration must be between 2 and 10 seconds")
+		}
 	}
 	if c.Vision.Provider != "openai" && c.Vision.Provider != "mock" {
 		return fmt.Errorf("APP_VISION_PROVIDER must be openai or mock")

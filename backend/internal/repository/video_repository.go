@@ -421,9 +421,9 @@ SELECT target.id, target.kind, COALESCE(target.recording_id, ''),
        COALESCE(r.client_chunk_id, ''),
        r.start_offset_seconds, r.frame_interval_seconds,
        r.transcript, r.visual_analysis, COALESCE(e.description, ''),
-       COALESCE(e.visual_description, ''), COALESCE(e.speech_description, ''),
-       COALESCE(e.start_time, 0), COALESCE(e.end_time, 0),
-       COALESCE(e.confidence, r.default_confidence)
+	   COALESCE(e.visual_description, ''), COALESCE(e.speech_description, ''),
+	   COALESCE(e.start_time, 0), COALESCE(e.end_time, 0),
+	   COALESCE(e.confidence, r.default_confidence), COALESCE(e.graph_revision, 0)
 FROM target
 JOIN video_recordings r ON r.id = target.target_recording_id
 LEFT JOIN video_episodes e ON e.id = target.episode_id`
@@ -439,7 +439,7 @@ LEFT JOIN video_episodes e ON e.id = target.episode_id`
 		&job.StartOffset, &job.FrameInterval,
 		&transcriptJSON, &visualJSON, &job.Description,
 		&job.VisualDescription, &job.SpeechDescription, &job.EpisodeStart,
-		&job.EpisodeEnd, &confidence,
+		&job.EpisodeEnd, &confidence, &job.GraphRevision,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return service.VideoJob{}, false, nil
