@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -103,7 +105,7 @@ func (s *videoService) IngestVideo(
 	result, err := s.repository.CreateVideoRecording(ctx, CreateVideoRecordingInput{
 		OwnerUserID: input.OwnerUserID, SessionID: input.SessionID,
 		GroupID: input.GroupID, MemoryID: input.MemoryID, DeviceID: input.DeviceID,
-		Location: input.Location, FileName: input.FileName, FilePath: stored.Path,
+		Location: input.Location, FileName: input.FileName, FilePath: stored.Path, StorageProvider: stored.Provider, StorageBucket: stored.Bucket, SHA256: stored.SHA256,
 		MediaType: input.MediaType, SizeBytes: stored.SizeBytes,
 		StartOffset: input.StartOffset, FrameInterval: s.frameInterval.Seconds(),
 		DefaultConfidence: input.DefaultConfidence,
@@ -235,7 +237,7 @@ func (s *videoService) IngestVideoRealtimeChunk(
 		CreateRealtimeVideoChunkInput{
 			OwnerUserID: input.OwnerUserID, RealtimeSessionID: input.SessionID,
 			ClientChunkID: input.ClientChunkID, FileName: input.FileName,
-			FilePath: stored.Path, MediaType: input.MediaType, SizeBytes: stored.SizeBytes,
+			FilePath: stored.Path, StorageProvider: stored.Provider, StorageBucket: stored.Bucket, SHA256: stored.SHA256, MediaType: input.MediaType, SizeBytes: stored.SizeBytes,
 			IsFinal: input.IsFinal, DefaultConfidence: input.DefaultConfidence,
 		},
 		s.maxAttempts,
@@ -318,7 +320,12 @@ func (s *videoService) ProcessNextVideoJob(ctx context.Context) (bool, error) {
 }
 
 func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) error {
-	extracted, err := s.extractor.ExtractAudio(ctx, job.FilePath)
+	path, cleanup, err := materializeObject(ctx, s.store, job.FilePath, job.FileName)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	extracted, err := s.extractor.ExtractAudio(ctx, path)
 	if errors.Is(err, ErrNoAudioTrack) {
 		audioTrackPresent := false
 		return s.repository.SaveVideoTranscript(
@@ -385,7 +392,12 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 	if interval <= 0 {
 		interval = s.frameInterval
 	}
-	frames, err := s.extractor.ExtractFrames(ctx, job.FilePath, interval, s.maxFrames)
+	path, cleanup, err := materializeObject(ctx, s.store, job.FilePath, job.FileName)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	frames, err := s.extractor.ExtractFrames(ctx, path, interval, s.maxFrames)
 	if err != nil {
 		return err
 	}
@@ -400,6 +412,28 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 	)
 }
 
+func materializeObject(ctx context.Context, store AudioStore, key, filename string) (string, func(), error) {
+	r, err := store.Open(ctx, key)
+	if err != nil {
+		return "", nil, err
+	}
+	defer r.Close()
+	f, err := os.CreateTemp("", "media-*"+filepath.Ext(filename))
+	if err != nil {
+		return "", nil, err
+	}
+	if _, err := io.Copy(f, r); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", nil, err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", nil, err
+	}
+	return f.Name(), func() { _ = os.Remove(f.Name()) }, nil
+}
+
 func (s *videoService) processVideoMerge(ctx context.Context, job VideoJob) error {
 	episodes := BuildVideoEpisodes(
 		job.Transcript, job.VisualAnalysis, s.episodeDuration,
@@ -411,7 +445,6 @@ func (s *videoService) processVideoMerge(ctx context.Context, job VideoJob) erro
 	if err := s.repository.SaveVideoEpisodes(ctx, job, episodes, s.maxAttempts); err != nil {
 		return err
 	}
-	_ = s.store.Delete(context.Background(), job.FilePath)
 	return nil
 }
 

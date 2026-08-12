@@ -40,6 +40,13 @@ func main() {
 	}
 }
 
+func newStore(ctx context.Context, cfg config.Config, localDir string, maxBytes int64) (service.AudioStore, error) {
+	if cfg.Storage.S3Bucket != "" && os.Getenv("AWS_ACCESS_KEY_ID") != "" && os.Getenv("AWS_SECRET_ACCESS_KEY") != "" {
+		return audio.NewS3Store(ctx, cfg.Storage.S3Bucket, cfg.Storage.S3Prefix, cfg.Storage.S3Region, maxBytes)
+	}
+	return audio.NewLocalStore(localDir, maxBytes)
+}
+
 func run() error {
 	// This is the only composition root: each container is constructed once and
 	// passed down to the next layer.
@@ -73,13 +80,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct repositories: %w", err)
 	}
-	audioStore, err := audio.NewLocalStore(cfg.Voice.StorageDir, cfg.Voice.MaxUploadBytes)
+	audioStore, err := newStore(rootCtx, cfg, cfg.Voice.StorageDir, cfg.Voice.MaxUploadBytes)
 	if err != nil {
 		return fmt.Errorf("construct audio store: %w", err)
 	}
-	enrollmentStore, err := audio.NewLocalStore(
-		cfg.Voice.EnrollmentStorageDir, cfg.Voice.EnrollmentMaxUploadBytes,
-	)
+	enrollmentStore, err := newStore(rootCtx, cfg, cfg.Voice.EnrollmentStorageDir, cfg.Voice.EnrollmentMaxUploadBytes)
 	if err != nil {
 		return fmt.Errorf("construct voice enrollment store: %w", err)
 	}
@@ -89,7 +94,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct voice audio inspector: %w", err)
 	}
-	videoStore, err := audio.NewLocalStore(cfg.Video.StorageDir, cfg.Video.MaxUploadBytes)
+	videoStore, err := newStore(rootCtx, cfg, cfg.Video.StorageDir, cfg.Video.MaxUploadBytes)
 	if err != nil {
 		return fmt.Errorf("construct video store: %w", err)
 	}

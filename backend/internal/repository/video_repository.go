@@ -29,16 +29,19 @@ func (r *videoRepository) CreateVideoRecording(
 	maxAttempts int,
 ) (service.VideoRecording, error) {
 	const query = `
-WITH recording AS (
+WITH asset AS (
+	INSERT INTO media_assets (owner_user_id, session_id, source_kind, storage_provider, bucket, object_key, file_name, media_type, size_bytes, sha256)
+	VALUES ($1,$2,'video',$14,$15,$8,$7,$9,$10,$16) RETURNING id
+), recording AS (
 	INSERT INTO video_recordings (
 		owner_user_id, session_id, group_id, memory_id, device_id, location,
 		file_name, file_path, media_type, size_bytes, start_offset_seconds,
-		frame_interval_seconds, default_confidence
-	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		frame_interval_seconds, default_confidence, media_asset_id
+	) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,id FROM asset
 	RETURNING *
 ), jobs AS (
 	INSERT INTO video_jobs (kind, recording_id, max_attempts)
-	SELECT kind, recording.id, $14
+	SELECT kind, recording.id, $17
 	FROM recording
 	CROSS JOIN (VALUES ('audio'), ('visual')) AS kinds(kind)
 )
@@ -51,7 +54,7 @@ FROM recording`
 		input.OwnerUserID, input.SessionID, input.GroupID, input.MemoryID,
 		input.DeviceID, input.Location, input.FileName, input.FilePath,
 		input.MediaType, input.SizeBytes, input.StartOffset, input.FrameInterval,
-		input.DefaultConfidence, maxAttempts,
+		input.DefaultConfidence, input.StorageProvider, input.StorageBucket, input.SHA256, maxAttempts,
 	).Scan(
 		&result.ID, &result.SessionID, &result.GroupID, &result.MemoryID,
 		&result.Status, &result.AudioStatus, &result.VisualStatus, &result.MergeStatus,
@@ -75,22 +78,27 @@ WITH claimed_session AS (
 	SET next_chunk_index = next_chunk_index + 1, updated_at = NOW()
 	WHERE id = $1 AND owner_user_id = $2 AND status = 'active'
 	RETURNING *, next_chunk_index - 1 AS assigned_chunk_index
+), asset AS (
+	INSERT INTO media_assets (owner_user_id, session_id, chunk_id, source_kind, storage_provider, bucket, object_key, file_name, media_type, size_bytes, sha256)
+	SELECT $2,id,$3,'video',$10,$11,$6,$5,$7,$8,$12 FROM claimed_session RETURNING id
 ), recording AS (
 	INSERT INTO video_recordings (
 		owner_user_id, realtime_session_id, session_id, group_id, memory_id,
 		device_id, location, client_chunk_id, chunk_index, is_final,
 		file_name, file_path, media_type, size_bytes, start_offset_seconds,
-		frame_interval_seconds, default_confidence
+		frame_interval_seconds, default_confidence, media_asset_id
 	)
-	SELECT $2, id, id, group_id, memory_id, device_id, location, $3,
-	       assigned_chunk_index, $4, $5, $6, $7, $8,
-	       assigned_chunk_index * chunk_duration_seconds,
-	       frame_interval_seconds, $9
-	FROM claimed_session
+	SELECT $2, claimed_session.id, claimed_session.id,
+	       claimed_session.group_id, claimed_session.memory_id,
+	       claimed_session.device_id, claimed_session.location, $3,
+	       claimed_session.assigned_chunk_index, $4, $5, $6, $7, $8,
+	       claimed_session.assigned_chunk_index * claimed_session.chunk_duration_seconds,
+	       claimed_session.frame_interval_seconds, $9, asset.id
+	FROM claimed_session CROSS JOIN asset
 	RETURNING *
 ), jobs AS (
 	INSERT INTO video_jobs (kind, recording_id, max_attempts)
-	SELECT kind, recording.id, $10
+	SELECT kind, recording.id, $13
 	FROM recording
 	CROSS JOIN (VALUES ('audio'), ('visual')) AS kinds(kind)
 )
@@ -104,7 +112,7 @@ FROM recording`
 		ctx, query,
 		input.RealtimeSessionID, input.OwnerUserID, input.ClientChunkID, input.IsFinal,
 		input.FileName, input.FilePath, input.MediaType, input.SizeBytes,
-		input.DefaultConfidence, maxAttempts,
+		input.DefaultConfidence, input.StorageProvider, input.StorageBucket, input.SHA256, maxAttempts,
 	).Scan(
 		&result.ID, &result.SessionID, &result.GroupID, &result.MemoryID,
 		&result.Status, &result.AudioStatus, &result.VisualStatus, &result.MergeStatus,
@@ -599,11 +607,17 @@ WITH episode_rows AS (
 ), completed_job AS (
 	UPDATE video_jobs SET status = 'completed', locked_at = NULL, updated_at = NOW()
 	WHERE id = $4
+), completed_recording AS (
+	UPDATE video_recordings
+	SET status = 'memograph_pending', merge_status = 'completed',
+	    last_error = '', updated_at = NOW()
+	WHERE id = $1
+	RETURNING media_asset_id
 )
-UPDATE video_recordings
-SET status = 'memograph_pending', merge_status = 'completed',
-    last_error = '', updated_at = NOW()
-WHERE id = $1`
+UPDATE media_assets a
+SET status = 'completed', updated_at = NOW()
+FROM completed_recording r
+WHERE a.id = r.media_asset_id`
 	if _, err := r.db.ExecContext(ctx, query, job.RecordingID, payload, maxAttempts, job.ID); err != nil {
 		return fmt.Errorf("save merged video episodes: %w", err)
 	}

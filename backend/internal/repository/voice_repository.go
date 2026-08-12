@@ -114,14 +114,18 @@ WITH created_batch AS (
 	SELECT id FROM created_batch
 	UNION ALL
 	SELECT $16 WHERE $16 <> ''
+), asset AS (
+	INSERT INTO media_assets (owner_user_id, session_id, chunk_id, source_kind, storage_provider, bucket, object_key, file_name, media_type, size_bytes, sha256)
+	VALUES ($1,$2,NULL,'voice',$18,$19,$8,$7,$9,$10,$20)
+	RETURNING id
 ), recording AS (
 	INSERT INTO voice_recordings (
 		owner_user_id, session_id, group_id, memory_id, device_id, location,
 		file_name, file_path, media_type, size_bytes, start_offset_seconds,
-		default_confidence, chunk_index, is_final, batch_id
+		default_confidence, chunk_index, is_final, batch_id, media_asset_id
 	)
-	SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,id
-	FROM selected_batch
+	SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,b.id,a.id
+	FROM selected_batch b CROSS JOIN asset a
 	RETURNING id, session_id, group_id, memory_id, status, file_name, media_type, size_bytes, created_at
 ), job AS (
 	INSERT INTO voice_jobs (kind, recording_id, max_attempts)
@@ -135,6 +139,7 @@ FROM recording`
 		input.DeviceID, input.Location, input.FileName, input.FilePath,
 		input.MediaType, input.SizeBytes, input.StartOffset, input.DefaultConfidence,
 		input.ChunkIndex, input.IsFinal, maxAttempts, input.BatchID, input.BatchClosed,
+		input.StorageProvider, input.StorageBucket, input.SHA256,
 	).Scan(
 		&recording.ID, &recording.SessionID, &recording.GroupID, &recording.MemoryID,
 		&recording.Status, &recording.FileName, &recording.MediaType,
@@ -608,7 +613,12 @@ WITH updated_recording AS (
 	    speaker_reference_ids = $5::jsonb,
 	    status = 'assembling', last_error = '', updated_at = NOW()
 	WHERE id = $1
-    RETURNING batch_id
+	RETURNING batch_id, media_asset_id
+), completed_asset AS (
+	UPDATE media_assets a
+	SET status = 'completed', updated_at = NOW()
+	FROM updated_recording r
+	WHERE a.id = r.media_asset_id
 ), revised_batch AS (
 	UPDATE voice_episode_batches b
 	SET transcript_revision = transcript_revision + 1, updated_at = NOW()

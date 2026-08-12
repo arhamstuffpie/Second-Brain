@@ -32,6 +32,9 @@ type CreateVideoRecordingInput struct {
 	Location          string
 	FileName          string
 	FilePath          string
+	StorageProvider   string
+	StorageBucket     string
+	SHA256            string
 	MediaType         string
 	SizeBytes         int64
 	StartOffset       float64
@@ -45,6 +48,9 @@ type CreateRealtimeVideoChunkInput struct {
 	ClientChunkID     string
 	FileName          string
 	FilePath          string
+	StorageProvider   string
+	StorageBucket     string
+	SHA256            string
 	MediaType         string
 	SizeBytes         int64
 	IsFinal           bool

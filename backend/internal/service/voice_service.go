@@ -320,7 +320,7 @@ func (s *voiceService) Ingest(ctx context.Context, input VoiceIngestInput) (Voic
 		OwnerUserID: input.OwnerUserID, SessionID: input.SessionID, GroupID: input.GroupID,
 		MemoryID: input.MemoryID, DeviceID: strings.TrimSpace(input.DeviceID),
 		Location: strings.TrimSpace(input.Location), FileName: input.FileName,
-		FilePath: stored.Path, MediaType: input.MediaType, SizeBytes: stored.SizeBytes,
+		FilePath: stored.Path, StorageProvider: stored.Provider, StorageBucket: stored.Bucket, SHA256: stored.SHA256, MediaType: input.MediaType, SizeBytes: stored.SizeBytes,
 		StartOffset: input.StartOffset, ChunkIndex: input.ChunkIndex, IsFinal: input.IsFinal,
 		DefaultConfidence: input.DefaultConfidence, BatchID: input.BatchID,
 		BatchClosed: input.BatchClosed || input.BatchID == "",
@@ -630,7 +630,6 @@ func (s *voiceService) processSTT(ctx context.Context, job VoiceJob) error {
 	); err != nil {
 		return err
 	}
-	_ = s.store.Delete(context.Background(), job.FilePath)
 	return nil
 }
 

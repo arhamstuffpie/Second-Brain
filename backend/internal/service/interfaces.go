@@ -100,17 +100,23 @@ type AudioInspector interface {
 	Duration(ctx context.Context, path string) (float64, error)
 }
 
-type AudioStore interface {
-	Save(ctx context.Context, filename string, content io.Reader) (StoredAudio, error)
-	Open(ctx context.Context, path string) (io.ReadCloser, error)
-	Delete(ctx context.Context, path string) error
+type ObjectStorage interface {
+	Save(context.Context, string, io.Reader) (StoredObject, error)
+	Open(context.Context, string) (io.ReadCloser, error)
+	Delete(context.Context, string) error
+	Exists(context.Context, string) (bool, error)
+	Checksum(context.Context, string) (string, error)
+	SignedDownloadURL(context.Context, string, time.Duration) (string, error)
+	RestoreStatus(context.Context, string) (string, error)
 }
 
-type VideoStore interface {
-	Save(ctx context.Context, filename string, content io.Reader) (StoredAudio, error)
-	Open(ctx context.Context, path string) (io.ReadCloser, error)
-	Delete(ctx context.Context, path string) error
+// Legacy names stay during the recording migration; both are object stores.
+type AudioStore interface {
+	Save(context.Context, string, io.Reader) (StoredObject, error)
+	Open(context.Context, string) (io.ReadCloser, error)
+	Delete(context.Context, string) error
 }
+type VideoStore = AudioStore
 
 type VideoRepository interface {
 	CreateVideoRecording(ctx context.Context, input CreateVideoRecordingInput, maxAttempts int) (VideoRecording, error)
@@ -208,10 +214,13 @@ type AuthResult struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 }
 
-type StoredAudio struct {
-	Path      string
-	SizeBytes int64
+type StoredObject struct {
+	Provider, Bucket, Key, Path, SHA256 string
+	SizeBytes                           int64
 }
+
+// StoredAudio is retained while callers migrate to StoredObject.
+type StoredAudio = StoredObject
 
 type VoiceIngestInput struct {
 	OwnerUserID       string
@@ -280,6 +289,9 @@ type CreateRecordingInput struct {
 	Location          string
 	FileName          string
 	FilePath          string
+	StorageProvider   string
+	StorageBucket     string
+	SHA256            string
 	MediaType         string
 	SizeBytes         int64
 	StartOffset       float64

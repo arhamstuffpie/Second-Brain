@@ -23,6 +23,7 @@ type Config struct {
 	Models      ModelConfig
 	Memograph   MemographConfig
 	Worker      WorkerConfig
+	Storage     StorageConfig
 }
 
 type HTTPConfig struct {
@@ -149,6 +150,8 @@ type WorkerConfig struct {
 	MaxAttempts  int
 }
 
+type StorageConfig struct{ S3Bucket, S3Prefix, S3Region string }
+
 func Load() (Config, error) {
 	environment := GetEnv("APP_ENV", "development")
 	cfg := Config{
@@ -254,6 +257,7 @@ func Load() (Config, error) {
 			Concurrency:  GetEnvInt("APP_VOICE_WORKER_CONCURRENCY", 2),
 			MaxAttempts:  GetEnvInt("APP_VOICE_WORKER_MAX_ATTEMPTS", 5),
 		},
+		Storage: StorageConfig{S3Bucket: GetEnv("APP_S3_BUCKET", ""), S3Prefix: GetEnv("APP_S3_PREFIX", "media"), S3Region: GetEnv("AWS_REGION", "us-east-1")},
 	}
 
 	if err := cfg.Validate(); err != nil {

@@ -12,6 +12,39 @@ import (
 	"github.com/arham/ai-second-brain/internal/config"
 )
 
+type retentionVideoRepository struct {
+	stubVideoRepository
+	saved bool
+}
+
+func (r *retentionVideoRepository) SaveVideoEpisodes(context.Context, VideoJob, []VideoEpisodeDraft, int) error {
+	r.saved = true
+	return nil
+}
+
+func TestVideoMergeRetainsOriginal(t *testing.T) {
+	repository := &retentionVideoRepository{}
+	store := &realtimeTestStore{}
+	video := newVideoService(
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, store, stubMediaExtractor{}, stubVisualAnalyzer{},
+		stubMemographClient{}, config.VideoConfig{EpisodeDuration: 30 * time.Second},
+		config.WorkerConfig{MaxAttempts: 5},
+	)
+	err := video.processVideoMerge(context.Background(), VideoJob{
+		ID: 1, RecordingID: "recording-1", FilePath: "original.webm",
+		VisualAnalysis: VisualAnalysis{Observations: []VideoObservation{{
+			StartTime: 0, EndTime: 5, Summary: "A person is visible.",
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repository.saved || store.deleteCalls != 0 {
+		t.Fatalf("saved = %v, original delete calls = %d", repository.saved, store.deleteCalls)
+	}
+}
+
 func TestBuildVideoEpisodesMergesSpeechAndVisualContext(t *testing.T) {
 	speechConfidence := 0.8
 	visionConfidence := 0.9
