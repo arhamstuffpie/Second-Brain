@@ -389,3 +389,14 @@ func TestIngestRealtimeChunkIsIdempotent(t *testing.T) {
 		t.Fatalf("idempotent result = %+v, createCalls=%d saveCalls=%d", result, repository.createCalls, store.saveCalls)
 	}
 }
+
+func TestEvidenceFirstFiltersPreservesExplicitSource(t *testing.T) {
+	defaults := evidenceFirstFilters(nil)
+	if len(defaults["source"].([]string)) != 2 {
+		t.Fatalf("default filters = %+v", defaults)
+	}
+	explicit := evidenceFirstFilters(map[string]any{"source": "context_summary"})
+	if explicit["source"] != "context_summary" {
+		t.Fatalf("explicit source was replaced: %+v", explicit)
+	}
+}

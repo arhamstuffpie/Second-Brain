@@ -554,14 +554,18 @@ SELECT c.id, c.kind, COALESCE(c.recording_id, ''), COALESCE(c.episode_id, ''),
 	   COALESCE(e.confidence, r.default_confidence), b.id, b.owner_user_id, b.closed,
 	   COALESCE(e.segments, '[]'::jsonb), COALESCE(e.source_recording_ids, '[]'::jsonb),
 	   COALESCE(e.owner_utterance_count, 0), COALESCE(e.other_utterance_count, 0),
-	   COALESCE(e.unknown_utterance_count, 0), COALESCE(e.graph_revision, 0)
+	   COALESCE(e.unknown_utterance_count, 0), COALESCE(e.graph_revision, 0),
+	   COALESCE(e.media_asset_ids, '[]'::jsonb),
+	   COALESCE(e.source_identity, ''), COALESCE(e.processing_version, 2),
+	   COALESCE((SELECT vr.stt_provider FROM voice_episode_recordings er JOIN voice_recordings vr ON vr.id = er.recording_id WHERE er.episode_id = e.id ORDER BY vr.created_at LIMIT 1), ''),
+	   COALESCE((SELECT vr.stt_model FROM voice_episode_recordings er JOIN voice_recordings vr ON vr.id = er.recording_id WHERE er.episode_id = e.id ORDER BY vr.created_at LIMIT 1), '')
 FROM claimed c
 LEFT JOIN voice_episodes e ON e.id = c.episode_id
 LEFT JOIN voice_recordings r ON r.id = COALESCE(c.recording_id, e.recording_id)
 JOIN voice_episode_batches b ON b.id = COALESCE(c.batch_id, e.batch_id, r.batch_id)`
 	var job service.VoiceJob
 	var confidence sql.NullFloat64
-	var segmentsJSON, sourceIDsJSON []byte
+	var segmentsJSON, sourceIDsJSON, mediaAssetIDsJSON []byte
 	err := r.db.QueryRowContext(ctx, query).Scan(
 		&job.ID, &job.Kind, &job.RecordingID, &job.EpisodeID,
 		&job.Attempts, &job.MaxAttempts, &job.FilePath, &job.FileName,
@@ -571,6 +575,8 @@ JOIN voice_episode_batches b ON b.id = COALESCE(c.batch_id, e.batch_id, r.batch_
 		&job.BatchID, &job.OwnerUserID, &job.BatchClosed,
 		&segmentsJSON, &sourceIDsJSON, &job.OwnerUtteranceCount,
 		&job.OtherUtteranceCount, &job.UnknownUtteranceCount, &job.GraphRevision,
+		&mediaAssetIDsJSON, &job.SourceIdentity, &job.ProcessingVersion,
+		&job.Provider, &job.Model,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return service.VoiceJob{}, false, nil
@@ -586,6 +592,9 @@ JOIN voice_episode_batches b ON b.id = COALESCE(c.batch_id, e.batch_id, r.batch_
 	}
 	if err := json.Unmarshal(sourceIDsJSON, &job.SourceRecordingIDs); err != nil {
 		return service.VoiceJob{}, false, fmt.Errorf("decode voice job source recording IDs: %w", err)
+	}
+	if err := json.Unmarshal(mediaAssetIDsJSON, &job.MediaAssetIDs); err != nil {
+		return service.VoiceJob{}, false, fmt.Errorf("decode voice job media asset IDs: %w", err)
 	}
 	return job, true, nil
 }
@@ -734,20 +743,27 @@ WITH episode_rows AS (
 		description text, confidence double precision, segments jsonb,
 		source_recording_ids jsonb, owner_utterance_count integer,
 		other_utterance_count integer, unknown_utterance_count integer
+		, evidence_kind text, source_identity text, processing_version integer
 	)
 ), inserted_episodes AS (
 	INSERT INTO voice_episodes (
 		recording_id, batch_id, bucket_index, episode_index,
 		start_time, end_time, description, confidence, segments,
 		source_recording_ids, owner_utterance_count,
-		other_utterance_count, unknown_utterance_count
+		other_utterance_count, unknown_utterance_count,
+		evidence_kind, source_identity, processing_version, media_asset_ids
 	)
 	SELECT source_recording_ids->>0, $1, bucket_index, episode_index,
 	       start_time, end_time, description, confidence, segments,
 	       source_recording_ids, owner_utterance_count,
-	       other_utterance_count, unknown_utterance_count
+	       other_utterance_count, unknown_utterance_count,
+	       COALESCE(NULLIF(evidence_kind, ''), 'speech_evidence'),
+	       COALESCE(NULLIF(source_identity, ''), 'legacy:' || md5(description)),
+	       COALESCE(NULLIF(processing_version, 0), 2),
+	       COALESCE((SELECT jsonb_agg(vr.media_asset_id) FROM voice_recordings vr
+	                 WHERE vr.id IN (SELECT jsonb_array_elements_text(episode_rows.source_recording_ids))), '[]'::jsonb)
 	FROM episode_rows
-	ON CONFLICT (batch_id, episode_index) DO NOTHING
+	ON CONFLICT (batch_id, evidence_kind, source_identity, processing_version) DO NOTHING
 	RETURNING id, source_recording_ids
 ), episode_recordings AS (
 	INSERT INTO voice_episode_recordings (episode_id, recording_id)

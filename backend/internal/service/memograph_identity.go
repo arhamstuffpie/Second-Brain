@@ -86,6 +86,67 @@ func structuredVideoConversation(job VideoJob) *StructuredGraph {
 	)
 }
 
+func structuredVisualEvidence(job VideoJob) *StructuredGraph {
+	if len(job.EpisodeVisual) == 0 || strings.TrimSpace(job.SourceIdentity) == "" {
+		return nil
+	}
+	graph := &StructuredGraph{
+		EpisodeID: "second-brain:visual:" + job.SourceIdentity,
+		SceneID:   fmt.Sprintf("%s:%.0f-%.0f", job.SessionID, job.EpisodeStart, job.EpisodeEnd),
+		StartTime: job.EpisodeStart, EndTime: job.EpisodeEnd,
+		Summary: job.VisualDescription, Location: job.Location,
+		Entities: []StructuredEntity{}, Relations: []StructuredRelation{},
+		Utterances: []StructuredUtterance{},
+	}
+	seen := make(map[string]bool)
+	for _, observation := range job.EpisodeVisual {
+		labels := make(map[string]string)
+		for _, person := range observation.People {
+			label := strings.TrimSpace(person.VisualLabel)
+			if label == "" {
+				continue
+			}
+			id := strings.Join([]string{job.MediaAssetID, observation.ObservationID, label}, ":")
+			labels[label] = id
+			if !seen[id] {
+				seen[id] = true
+				graph.Entities = append(graph.Entities, StructuredEntity{
+					CanonicalID: id, Name: "Unidentified " + strings.ReplaceAll(label, "-", " "),
+					Type: "person", Confidence: person.Confidence,
+				})
+			}
+		}
+		for index, object := range observation.Objects {
+			label := strings.TrimSpace(object.ObjectID)
+			if label == "" {
+				label = fmt.Sprintf("object-%d", index+1)
+			}
+			id := strings.Join([]string{job.MediaAssetID, observation.ObservationID, label}, ":")
+			labels[label] = id
+			if !seen[id] {
+				seen[id] = true
+				graph.Entities = append(graph.Entities, StructuredEntity{
+					CanonicalID: id, Name: strings.TrimSpace(object.Name), Type: "object",
+					Confidence: object.Confidence,
+				})
+			}
+		}
+		for _, relation := range observation.Relations {
+			source, sourceOK := labels[strings.TrimSpace(relation.Source)]
+			target, targetOK := labels[strings.TrimSpace(relation.Target)]
+			if !sourceOK || !targetOK || strings.TrimSpace(relation.Predicate) == "" {
+				continue
+			}
+			graph.Relations = append(graph.Relations, StructuredRelation{
+				Source: source, Predicate: strings.TrimSpace(relation.Predicate), Target: target,
+				Fact:       fmt.Sprintf("%s %s %s.", relation.Source, relation.Predicate, relation.Target),
+				Confidence: relation.Confidence,
+			})
+		}
+	}
+	return graph
+}
+
 func buildStructuredConversation(
 	episodeID, source, sessionID, ownerUserID, location, summary string,
 	startTime, endTime float64,

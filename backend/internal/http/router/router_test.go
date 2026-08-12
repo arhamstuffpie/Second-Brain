@@ -111,6 +111,13 @@ func (fakeVoiceService) ProcessNextJob(context.Context) (bool, error) { return f
 
 type fakeVideoService struct{}
 
+func (fakeVideoService) ReprocessVideo(context.Context, string, string) (service.VideoRecording, error) {
+	return service.VideoRecording{}, nil
+}
+func (fakeVideoService) GetVideoEvidenceURL(context.Context, string, string, float64) (service.EvidencePlayback, error) {
+	return service.EvidencePlayback{}, nil
+}
+
 func (fakeVideoService) IngestVideo(context.Context, service.VideoIngestInput) (service.VideoRecording, error) {
 	return service.VideoRecording{}, nil
 }

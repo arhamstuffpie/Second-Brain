@@ -257,7 +257,10 @@ type noAudioExtractor struct{}
 func (noAudioExtractor) ExtractAudio(context.Context, string) (ExtractedAudio, error) {
 	return ExtractedAudio{}, ErrNoAudioTrack
 }
-func (noAudioExtractor) ExtractFrames(context.Context, string, time.Duration, int) ([]VideoFrame, error) {
+func (noAudioExtractor) ExtractFrames(context.Context, string, time.Duration, int) (FrameExtraction, error) {
+	return FrameExtraction{}, errors.New("not used")
+}
+func (noAudioExtractor) ExtractFramesAt(context.Context, string, []VideoFrame) ([]VideoFrame, error) {
 	return nil, errors.New("not used")
 }
 
@@ -578,5 +581,43 @@ func TestVideoSpeechDescriptionUsesConfirmedSpeakerName(t *testing.T) {
 	}}}, 30, 30, 60)
 	if got != "[31.00s-32.00s] Raj (friend): Hello." {
 		t.Fatalf("videoSpeechDescription() = %q", got)
+	}
+}
+
+func TestBuildEvidenceEpisodesUsesFiveSecondWindowsAndExactSpeech(t *testing.T) {
+	confidence := 0.9
+	episodes := BuildEvidenceEpisodes(
+		Transcript{Language: "English", Segments: []TranscriptSegment{{
+			ID: "segment-1", StartTime: 2, EndTime: 4, SpeakerRole: "owner",
+			Text: "Keep this wording exactly.", Confidence: &confidence,
+		}}},
+		VisualAnalysis{Observations: []VideoObservation{
+			{ObservationID: "obs-1", FrameID: "frame-1", StartTime: 4.9, EndTime: 5.4, Summary: "A document is visible."},
+			{ObservationID: "obs-2", FrameID: "frame-2", StartTime: 6, EndTime: 7, Summary: "A screen is visible."},
+		}},
+		30*time.Second, 0, "session-1", "office", "recording-1", "asset-1", 2,
+	)
+	visual, speech, summaries := 0, 0, 0
+	for _, episode := range episodes {
+		switch episode.EvidenceKind {
+		case "visual_evidence":
+			visual++
+			if episode.Visual[0].ObservationID == "obs-1" && episode.StartTime != 0 {
+				t.Fatalf("cross-boundary observation assigned to %.2f, want start window 0", episode.StartTime)
+			}
+		case "speech_evidence":
+			speech++
+			if !strings.Contains(episode.Description, "Keep this wording exactly.") {
+				t.Fatalf("speech was not preserved: %q", episode.Description)
+			}
+		case "context_summary":
+			summaries++
+			if len(episode.SupportingEpisodeIDs) == 0 {
+				t.Fatal("context summary has no supporting evidence IDs")
+			}
+		}
+	}
+	if visual != 2 || speech != 1 || summaries != 1 {
+		t.Fatalf("episode counts visual/speech/summary = %d/%d/%d", visual, speech, summaries)
 	}
 }

@@ -80,7 +80,7 @@ func TestLoadUsesFallbackValues(t *testing.T) {
 	if cfg.HTTP.ReadTimeout != 10*time.Second {
 		t.Fatalf("HTTP.ReadTimeout = %s, want 10s", cfg.HTTP.ReadTimeout)
 	}
-	if cfg.Video.FrameInterval != 5*time.Second || cfg.Video.MaxFrames != 12 {
+	if cfg.Video.FrameInterval != 5*time.Second || cfg.Video.MaxFrames != 120 {
 		t.Fatalf("Video defaults = %+v", cfg.Video)
 	}
 	if cfg.Vision.Provider != "mock" || cfg.Vision.Model != "gpt-4.1-mini" {

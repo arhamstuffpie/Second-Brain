@@ -126,9 +126,16 @@ type VideoRepository interface {
 	CreateVideoRealtimeSession(ctx context.Context, input StartVideoRealtimeSessionInput) (RealtimeVideoSession, error)
 	GetVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSessionDetail, error)
 	StopVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSession, error)
+	QueueVideoReprocessing(ctx context.Context, id, ownerUserID string) (VideoRecording, error)
+	GetVideoSourceObject(ctx context.Context, id, ownerUserID string) (string, StoredObject, error)
 	ClaimVideoJob(ctx context.Context) (VideoJob, bool, error)
+	CreateVideoAnalysisBatches(ctx context.Context, job VideoJob, durationSeconds float64, frames []VideoFrame) error
+	ClaimVideoAnalysisBatch(ctx context.Context, job VideoJob) (VideoAnalysisBatch, bool, error)
+	CompleteVideoAnalysisBatch(ctx context.Context, job VideoJob, batch VideoAnalysisBatch, analysis VisualAnalysis) error
+	RetryVideoAnalysisBatch(ctx context.Context, job VideoJob, batch VideoAnalysisBatch, cause string, dead bool) error
+	FinishVideoAnalysis(ctx context.Context, job VideoJob, durationSeconds float64, provider, model string, maxAttempts int) (bool, error)
 	SaveVideoTranscript(ctx context.Context, job VideoJob, transcript Transcript, referenceIDs []string, provider, model string, maxAttempts int) error
-	SaveVideoAnalysis(ctx context.Context, job VideoJob, analysis VisualAnalysis, provider, model string, maxAttempts int) error
+	SaveVideoAnalysis(ctx context.Context, job VideoJob, durationSeconds float64, analysis VisualAnalysis, provider, model string, maxAttempts int) error
 	SaveVideoEpisodes(ctx context.Context, job VideoJob, episodes []VideoEpisodeDraft, maxAttempts int) error
 	CompleteVideoMemographBranch(ctx context.Context, job VideoJob, response json.RawMessage) error
 	RetryVideoJob(ctx context.Context, job VideoJob, cause string, runAt time.Time, dead bool) error
@@ -136,7 +143,8 @@ type VideoRepository interface {
 
 type MediaExtractor interface {
 	ExtractAudio(ctx context.Context, videoPath string) (ExtractedAudio, error)
-	ExtractFrames(ctx context.Context, videoPath string, interval time.Duration, maxFrames int) ([]VideoFrame, error)
+	ExtractFrames(ctx context.Context, videoPath string, interval time.Duration, maxFrames int) (FrameExtraction, error)
+	ExtractFramesAt(ctx context.Context, videoPath string, frames []VideoFrame) ([]VideoFrame, error)
 }
 
 type VisualAnalyzer interface {
@@ -183,6 +191,8 @@ type VideoService interface {
 	IngestVideoRealtimeChunk(ctx context.Context, input RealtimeVideoChunkInput) (VideoRecording, error)
 	GetVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSessionDetail, error)
 	StopVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSession, error)
+	ReprocessVideo(ctx context.Context, id, ownerUserID string) (VideoRecording, error)
+	GetVideoEvidenceURL(ctx context.Context, id, ownerUserID string, timestamp float64) (EvidencePlayback, error)
 	ProcessNextVideoJob(ctx context.Context) (bool, error)
 }
 
@@ -572,6 +582,9 @@ type EpisodeDraft struct {
 	OwnerUtteranceCount   int              `json:"owner_utterance_count"`
 	OtherUtteranceCount   int              `json:"other_utterance_count"`
 	UnknownUtteranceCount int              `json:"unknown_utterance_count"`
+	EvidenceKind          string           `json:"evidence_kind"`
+	SourceIdentity        string           `json:"source_identity"`
+	ProcessingVersion     int              `json:"processing_version"`
 }
 
 type VoiceJob struct {
@@ -603,6 +616,11 @@ type VoiceJob struct {
 	OtherUtteranceCount   int
 	UnknownUtteranceCount int
 	GraphRevision         int64
+	MediaAssetIDs         []string
+	Provider              string
+	Model                 string
+	ProcessingVersion     int
+	SourceIdentity        string
 }
 
 type StartRealtimeSessionInput struct {

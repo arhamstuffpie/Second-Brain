@@ -183,3 +183,20 @@ func hasStructuredRelation(
 	}
 	return false
 }
+
+func TestStructuredVisualEvidenceUsesObservationLocalIDs(t *testing.T) {
+	confidence := 0.9
+	graph := structuredVisualEvidence(VideoJob{
+		SourceIdentity: "window-1", SessionID: "session-1", MediaAssetID: "asset-1",
+		EpisodeStart: 0, EpisodeEnd: 5, VisualDescription: "A person holds a document.",
+		EpisodeVisual: []VideoObservation{{
+			ObservationID: "obs-1", People: []VisualPerson{{VisualLabel: "person-1", Confidence: &confidence}},
+			Objects:   []DetectedObject{{ObjectID: "document-1", Name: "Agreement", Confidence: &confidence}},
+			Relations: []VisualRelation{{Source: "person-1", Predicate: "holds", Target: "document-1", Confidence: &confidence}},
+		}},
+	})
+	if graph == nil || len(graph.Entities) != 2 || len(graph.Relations) != 1 ||
+		graph.Relations[0].Source != "asset-1:obs-1:person-1" {
+		t.Fatalf("visual graph = %+v", graph)
+	}
+}

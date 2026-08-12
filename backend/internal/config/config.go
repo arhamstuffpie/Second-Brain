@@ -208,7 +208,7 @@ func Load() (Config, error) {
 			MaxUploadBytes:    int64(GetEnvInt("APP_VIDEO_MAX_UPLOAD_MB", 250)) << 20,
 			EpisodeDuration:   getEnvDuration("APP_VIDEO_EPISODE_DURATION", 30*time.Second),
 			FrameInterval:     getEnvDuration("APP_VIDEO_FRAME_INTERVAL", 5*time.Second),
-			MaxFrames:         GetEnvInt("APP_VIDEO_MAX_FRAMES", 12),
+			MaxFrames:         GetEnvInt("APP_VIDEO_MAX_FRAMES", 120),
 			FFmpegPath:        GetEnv("APP_VIDEO_FFMPEG_PATH", "ffmpeg"),
 			ExtractionTimeout: getEnvDuration("APP_VIDEO_EXTRACTION_TIMEOUT", 2*time.Minute),
 		},
@@ -352,7 +352,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("APP_VIDEO_STORAGE_DIR must not be empty")
 	}
 	if c.Video.MaxUploadBytes < 1 || c.Video.EpisodeDuration <= 0 ||
-		c.Video.FrameInterval <= 0 || c.Video.MaxFrames < 1 ||
+		c.Video.FrameInterval <= 0 || c.Video.MaxFrames < 2 ||
 		strings.TrimSpace(c.Video.FFmpegPath) == "" || c.Video.ExtractionTimeout <= 0 {
 		return fmt.Errorf("valid video processing configuration is required")
 	}

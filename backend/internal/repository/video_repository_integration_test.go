@@ -88,7 +88,7 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 			)
 		case "visual":
 			err = repository.SaveVideoAnalysis(
-				ctx, job,
+				ctx, job, 30,
 				service.VisualAnalysis{Observations: []service.VideoObservation{{
 					StartTime: 0, EndTime: 5, Summary: "A person is visible.",
 				}}},

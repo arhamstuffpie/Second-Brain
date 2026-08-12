@@ -93,6 +93,13 @@ func (stubVoiceService) ProcessNextJob(context.Context) (bool, error) { return f
 
 type stubVideoService struct{}
 
+func (stubVideoService) ReprocessVideo(context.Context, string, string) (service.VideoRecording, error) {
+	return service.VideoRecording{}, nil
+}
+func (stubVideoService) GetVideoEvidenceURL(context.Context, string, string, float64) (service.EvidencePlayback, error) {
+	return service.EvidencePlayback{}, nil
+}
+
 func (stubVideoService) IngestVideo(context.Context, service.VideoIngestInput) (service.VideoRecording, error) {
 	return service.VideoRecording{}, nil
 }

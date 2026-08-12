@@ -1,7 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -134,6 +137,45 @@ func (s *videoService) GetVideoRecording(
 	}
 	enrichTranscriptSpeakerProfiles(detail.Transcript, profiles)
 	return detail, nil
+}
+
+func (s *videoService) ReprocessVideo(
+	ctx context.Context,
+	id, ownerUserID string,
+) (VideoRecording, error) {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerUserID) == "" {
+		return VideoRecording{}, validation("recording_id", "is required")
+	}
+	return s.repository.QueueVideoReprocessing(ctx, id, ownerUserID)
+}
+
+func (s *videoService) GetVideoEvidenceURL(
+	ctx context.Context,
+	id, ownerUserID string,
+	timestamp float64,
+) (EvidencePlayback, error) {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerUserID) == "" || timestamp < 0 {
+		return EvidencePlayback{}, validation("recording_id", "recording and non-negative timestamp are required")
+	}
+	assetID, object, err := s.repository.GetVideoSourceObject(ctx, id, ownerUserID)
+	if err != nil {
+		return EvidencePlayback{}, err
+	}
+	signer, ok := s.store.(interface {
+		SignedDownloadURL(context.Context, string, time.Duration) (string, error)
+	})
+	if !ok {
+		return EvidencePlayback{}, fmt.Errorf("video storage does not support evidence playback URLs")
+	}
+	ttl := 5 * time.Minute
+	url, err := signer.SignedDownloadURL(ctx, object.Key, ttl)
+	if err != nil {
+		return EvidencePlayback{}, err
+	}
+	return EvidencePlayback{
+		MediaAssetID: assetID, Timestamp: timestamp, URL: url,
+		ExpiresAt: time.Now().UTC().Add(ttl),
+	}, nil
 }
 
 func (s *videoService) StartVideoRealtimeSession(
@@ -392,24 +434,159 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 	if interval <= 0 {
 		interval = s.frameInterval
 	}
+	batch, found, err := s.repository.ClaimVideoAnalysisBatch(ctx, job)
+	if err != nil {
+		return err
+	}
+	if !found {
+		completed, err := s.repository.FinishVideoAnalysis(
+			ctx, job, job.ActualDuration, s.analyzer.Provider(), s.analyzer.Model(), s.maxAttempts,
+		)
+		if err != nil || completed {
+			return err
+		}
+	}
 	path, cleanup, err := materializeObject(ctx, s.store, job.FilePath, job.FileName)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	frames, err := s.extractor.ExtractFrames(ctx, path, interval, s.maxFrames)
+	duration := job.ActualDuration
+	if !found {
+		if job.MediaAssetID == "" {
+			return fmt.Errorf("visual processing requires a durable media asset")
+		}
+		extraction, extractErr := s.extractor.ExtractFrames(ctx, path, interval, s.maxFrames)
+		if extractErr != nil {
+			return extractErr
+		}
+		duration = extraction.DurationSeconds
+		for index := range extraction.Frames {
+			frame := &extraction.Frames[index]
+			frame.SourceAssetID = job.MediaAssetID
+			frame.FrameID = stableEvidenceID(
+				"frame", job.MediaAssetID, fmt.Sprintf("%.6f", frame.Timestamp),
+				frame.SelectionReason, fmt.Sprint(job.ProcessingVersion),
+			)
+			if frame.SelectionReason == "scene_change" || frame.SelectionReason == "text_change" {
+				stored, storeErr := s.store.Save(ctx, frame.FrameID+".jpg", bytes.NewReader(frame.Image))
+				if storeErr != nil {
+					return fmt.Errorf("store evidence frame %s: %w", frame.FrameID, storeErr)
+				}
+				frame.DerivedObjectKey = stored.Key
+			}
+			frame.Image = nil
+		}
+		if err := s.repository.CreateVideoAnalysisBatches(ctx, job, duration, extraction.Frames); err != nil {
+			return err
+		}
+		batch, found, err = s.repository.ClaimVideoAnalysisBatch(ctx, job)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("selected visual frames produced no analysis batch")
+		}
+	}
+	frames, err := s.extractor.ExtractFramesAt(ctx, path, batch.Frames)
 	if err != nil {
-		return err
+		return s.finishFailedVideoBatch(ctx, job, batch, duration, err)
 	}
 	analysis, err := s.analyzer.Analyze(ctx, VisualAnalysisInput{
 		Frames: frames, WindowDuration: interval.Seconds(),
 	})
 	if err != nil {
+		return s.finishFailedVideoBatch(ctx, job, batch, duration, err)
+	}
+	groundVisualObservations(&analysis, frames, job.ProcessingVersion)
+	s.storeImportantEvidenceFrames(ctx, &analysis, frames)
+	analysis.Provider, analysis.Model = s.analyzer.Provider(), s.analyzer.Model()
+	analysis.ProcessingVersion = job.ProcessingVersion
+	if err := s.repository.CompleteVideoAnalysisBatch(ctx, job, batch, analysis); err != nil {
 		return err
 	}
-	return s.repository.SaveVideoAnalysis(
-		ctx, job, analysis, s.analyzer.Provider(), s.analyzer.Model(), s.maxAttempts,
+	_, err = s.repository.FinishVideoAnalysis(
+		ctx, job, duration, s.analyzer.Provider(), s.analyzer.Model(), s.maxAttempts,
 	)
+	return err
+}
+
+func (s *videoService) storeImportantEvidenceFrames(
+	ctx context.Context,
+	analysis *VisualAnalysis,
+	frames []VideoFrame,
+) {
+	for index := range analysis.Observations {
+		if index >= len(frames) {
+			break
+		}
+		observation := &analysis.Observations[index]
+		if observation.DerivedObjectKey != "" || !importantVisualEvidence(*observation) {
+			continue
+		}
+		stored, err := s.store.Save(
+			ctx, observation.FrameID+".jpg", bytes.NewReader(frames[index].Image),
+		)
+		if err != nil {
+			analysis.Warning = appendTranscriptWarning(
+				analysis.Warning, "important evidence frame storage failed for "+observation.FrameID,
+			)
+			continue
+		}
+		observation.DerivedObjectKey = stored.Key
+	}
+}
+
+func importantVisualEvidence(observation VideoObservation) bool {
+	if len(observation.TextDetected) > 0 || observation.SelectionReason == "scene_change" || observation.SelectionReason == "text_change" {
+		return true
+	}
+	for _, object := range observation.Objects {
+		name := strings.ToLower(object.Name)
+		if strings.Contains(name, "document") || strings.Contains(name, "screen") {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *videoService) finishFailedVideoBatch(
+	ctx context.Context,
+	job VideoJob,
+	batch VideoAnalysisBatch,
+	duration float64,
+	cause error,
+) error {
+	dead := batch.Attempts >= s.maxAttempts
+	if err := s.repository.RetryVideoAnalysisBatch(ctx, job, batch, cause.Error(), dead); err != nil {
+		return err
+	}
+	_, err := s.repository.FinishVideoAnalysis(
+		ctx, job, duration, s.analyzer.Provider(), s.analyzer.Model(), s.maxAttempts,
+	)
+	return err
+}
+
+func groundVisualObservations(analysis *VisualAnalysis, frames []VideoFrame, version int) {
+	for index := range analysis.Observations {
+		if index >= len(frames) {
+			break
+		}
+		frame := frames[index]
+		observation := &analysis.Observations[index]
+		observation.FrameID = frame.FrameID
+		observation.SelectionReason = frame.SelectionReason
+		observation.DerivedObjectKey = frame.DerivedObjectKey
+		observation.StartTime = frame.Timestamp
+		observation.ObservationID = stableEvidenceID(
+			"observation", frame.FrameID, fmt.Sprint(version),
+		)
+	}
+}
+
+func stableEvidenceID(kind string, parts ...string) string {
+	digest := sha256.Sum256([]byte(strings.Join(append([]string{kind}, parts...), "\x00")))
+	return kind + "-" + hex.EncodeToString(digest[:16])
 }
 
 func materializeObject(ctx context.Context, store AudioStore, key, filename string) (string, func(), error) {
@@ -435,9 +612,10 @@ func materializeObject(ctx context.Context, store AudioStore, key, filename stri
 }
 
 func (s *videoService) processVideoMerge(ctx context.Context, job VideoJob) error {
-	episodes := BuildVideoEpisodes(
+	episodes := BuildEvidenceEpisodes(
 		job.Transcript, job.VisualAnalysis, s.episodeDuration,
-		job.StartOffset, job.SessionID, job.Location,
+		job.StartOffset, job.SessionID, job.Location, job.RecordingID,
+		job.MediaAssetID, job.ProcessingVersion,
 	)
 	if len(episodes) == 0 {
 		return fmt.Errorf("audio and visual processing produced no episodes")
@@ -446,6 +624,132 @@ func (s *videoService) processVideoMerge(ctx context.Context, job VideoJob) erro
 		return err
 	}
 	return nil
+}
+
+func BuildEvidenceEpisodes(
+	transcript Transcript,
+	analysis VisualAnalysis,
+	summaryDuration time.Duration,
+	offset float64,
+	sessionID, fallbackLocation, recordingID, mediaAssetID string,
+	processingVersion int,
+) []VideoEpisodeDraft {
+	if processingVersion < 1 {
+		processingVersion = 2
+	}
+	result := make([]VideoEpisodeDraft, 0)
+	visualBuckets := make(map[int][]VideoObservation)
+	for _, observation := range analysis.Observations {
+		bucket := int(math.Floor(math.Max(observation.StartTime, 0) / 5))
+		visualBuckets[bucket] = append(visualBuckets[bucket], observation)
+	}
+	indices := make([]int, 0, len(visualBuckets))
+	for index := range visualBuckets {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	for _, bucket := range indices {
+		observations := visualBuckets[bucket]
+		start, end := offset+float64(bucket)*5, offset+float64(bucket+1)*5
+		absolute := make([]VideoObservation, len(observations))
+		observationIDs, frameIDs := make([]string, 0, len(observations)), make([]string, 0, len(observations))
+		confidenceTotal, confidenceCount := 0.0, 0
+		location := fallbackLocation
+		for index, observation := range observations {
+			absolute[index] = observation
+			absolute[index].StartTime += offset
+			absolute[index].EndTime += offset
+			appendUnique(&observationIDs, observation.ObservationID)
+			appendUnique(&frameIDs, observation.FrameID)
+			addConfidence(observation.Confidence, &confidenceTotal, &confidenceCount)
+			if location == "" {
+				location = observation.LocationGuess
+			}
+		}
+		description := visualEvidenceDescription(sessionID, start, end, mediaAssetID, absolute)
+		var confidence *float64
+		if confidenceCount > 0 {
+			value := confidenceTotal / float64(confidenceCount)
+			confidence = &value
+		}
+		identity := stableEvidenceID("visual-window", recordingID, fmt.Sprint(bucket), fmt.Sprint(processingVersion))
+		result = append(result, VideoEpisodeDraft{
+			BucketIndex: len(result), StartTime: start, EndTime: end,
+			Description: description, VisualDescription: description, Location: location,
+			Confidence: confidence, Visual: absolute, EvidenceKind: "visual_evidence",
+			SourceIdentity: identity, ProcessingVersion: processingVersion,
+			MediaAssetID: mediaAssetID, ObservationIDs: observationIDs, FrameIDs: frameIDs,
+		})
+	}
+	for index, segment := range transcript.Segments {
+		text := strings.TrimSpace(segment.Text)
+		if text == "" {
+			continue
+		}
+		segmentID := strings.TrimSpace(segment.ID)
+		if segmentID == "" {
+			segmentID = stableEvidenceID("transcript-segment", recordingID, fmt.Sprint(index), fmt.Sprintf("%.3f", segment.StartTime), text)
+		}
+		start, end := offset+segment.StartTime, offset+segment.EndTime
+		description := fmt.Sprintf(
+			"At %.2fs-%.2fs, %s said:\n%q\n\nSpeaker attribution: %s.\nLanguage: %s.\nSource media asset: %s.",
+			start, end, videoEpisodeSpeaker(segment), text, segment.SpeakerRole,
+			transcript.Language, mediaAssetID,
+		)
+		result = append(result, VideoEpisodeDraft{
+			BucketIndex: len(result), StartTime: start, EndTime: end,
+			Description: description, SpeechDescription: description,
+			Location: fallbackLocation, Confidence: segment.Confidence,
+			EvidenceKind: "speech_evidence", SourceIdentity: segmentID,
+			ProcessingVersion: processingVersion, MediaAssetID: mediaAssetID,
+		})
+	}
+	for _, summary := range BuildVideoEpisodes(
+		transcript, analysis, summaryDuration, offset, sessionID, fallbackLocation,
+	) {
+		summary.BucketIndex = len(result)
+		summary.EvidenceKind = "context_summary"
+		summary.SourceIdentity = stableEvidenceID("context-summary", recordingID, fmt.Sprintf("%.2f", summary.StartTime), fmt.Sprint(processingVersion))
+		summary.ProcessingVersion = processingVersion
+		summary.MediaAssetID = mediaAssetID
+		for _, evidence := range result {
+			if evidence.StartTime < summary.EndTime && evidence.EndTime > summary.StartTime {
+				summary.SupportingEpisodeIDs = append(summary.SupportingEpisodeIDs, evidence.SourceIdentity)
+			}
+		}
+		result = append(result, summary)
+	}
+	return result
+}
+
+func visualEvidenceDescription(
+	sessionID string,
+	start, end float64,
+	mediaAssetID string,
+	observations []VideoObservation,
+) string {
+	lines := []string{fmt.Sprintf(
+		"Visual evidence from session %s between %.2fs and %.2fs.", sessionID, start, end,
+	)}
+	for _, observation := range observations {
+		lines = append(lines, fmt.Sprintf("At %.2fs, %s", observation.StartTime, strings.TrimSpace(observation.Summary)))
+		for _, text := range observation.TextDetected {
+			lines = append(lines, fmt.Sprintf(
+				"The %s displays the exact text %q at %s (reading: %s).",
+				text.Surface, text.Text, text.Region, text.ReadingStatus,
+			))
+		}
+		for _, relation := range observation.Relations {
+			lines = append(lines, fmt.Sprintf("%s %s %s.", relation.Source, relation.Predicate, relation.Target))
+		}
+		lines = append(lines,
+			"The visible activity is "+strings.TrimSpace(observation.Activity)+".",
+			"The location appears to be "+strings.TrimSpace(observation.LocationGuess)+".",
+			fmt.Sprintf("Source frame: %s at %.2fs.", observation.FrameID, observation.StartTime),
+		)
+	}
+	lines = append(lines, "Source video: media asset "+mediaAssetID+".")
+	return strings.Join(lines, "\n")
 }
 
 func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) error {
@@ -463,6 +767,8 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 		"session_id": job.SessionID, "group_id": job.GroupID,
 		"episode_id": job.EpisodeID,
 		"start_time": job.EpisodeStart, "end_time": job.EpisodeEnd,
+		"recording_id": job.RecordingID, "media_asset_id": job.MediaAssetID,
+		"processing_version": job.ProcessingVersion,
 	}
 	addOwnerIdentityMeta(baseMeta, job.OwnerUserID)
 	if job.ClientChunkID != "" {
@@ -477,6 +783,7 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 	custom := make(map[string]any)
 	if job.Confidence != nil {
 		custom["confidence"] = *job.Confidence
+		baseMeta["confidence"] = *job.Confidence
 	}
 
 	visualDescription := strings.TrimSpace(job.VisualDescription)
@@ -488,6 +795,39 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 	data := ""
 	var structuredGraph *StructuredGraph
 	switch source {
+	case "visual_evidence":
+		data = visualDescription
+		structuredGraph = structuredVisualEvidence(job)
+		baseMeta["evidence_kind"] = "visual"
+		baseMeta["observation_ids"] = job.ObservationIDs
+		baseMeta["frame_ids"] = job.FrameIDs
+		derivedKeys := make([]string, 0)
+		for _, observation := range job.EpisodeVisual {
+			appendUnique(&derivedKeys, observation.DerivedObjectKey)
+		}
+		baseMeta["derived_object_keys"] = derivedKeys
+		baseMeta["provider"] = job.VisualProvider
+		baseMeta["model"] = job.VisualModel
+	case "speech_evidence":
+		data = speechDescription
+		structuredGraph = structuredVideoConversation(job)
+		baseMeta["evidence_kind"] = "speech"
+		baseMeta["provider"] = job.STTProvider
+		baseMeta["model"] = job.STTModel
+		segmentIDs := make([]string, 0)
+		for _, segment := range job.Transcript.Segments {
+			start := job.StartOffset + segment.StartTime
+			if start >= job.EpisodeStart && start < job.EpisodeEnd {
+				segmentIDs = append(segmentIDs, segment.ID)
+			}
+		}
+		baseMeta["transcript_segment_ids"] = segmentIDs
+	case "context_summary":
+		data = strings.TrimSpace(job.Description)
+		baseMeta["evidence_kind"] = "summary"
+		baseMeta["supporting_episode_ids"] = job.SupportingEpisodeIDs
+		baseMeta["provider"] = "second-brain"
+		baseMeta["model"] = "deterministic-context-summary-v2"
 	case "visual":
 		data = visualDescription
 	case "speech":
@@ -510,8 +850,12 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 	}
 	baseMeta["source"] = source
 	baseMeta["source_description"] = source + " from video recording"
+	identity := job.SourceIdentity
+	if identity == "" {
+		identity = job.EpisodeID
+	}
 	idempotencyKey := memographIdempotencyKey(
-		job.MemoryID, job.EpisodeID, source, job.GraphRevision,
+		job.MemoryID, identity, source, int64(job.ProcessingVersion),
 	)
 	baseMeta["idempotency_key"] = idempotencyKey
 	response, err := s.memograph.InsertEpisode(ctx, job.MemoryID, EpisodeInsertRequest{

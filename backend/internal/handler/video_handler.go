@@ -15,6 +15,8 @@ import (
 type VideoHandler interface {
 	Ingest(c *gin.Context)
 	GetRecording(c *gin.Context)
+	Reprocess(c *gin.Context)
+	GetEvidenceURL(c *gin.Context)
 	StartRealtimeSession(c *gin.Context)
 	IngestRealtimeChunk(c *gin.Context)
 	GetRealtimeSession(c *gin.Context)
@@ -83,6 +85,45 @@ func (h *videoHandler) GetRecording(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, result, "video recording status")
+}
+
+func (h *videoHandler) Reprocess(c *gin.Context) {
+	principal, ok := utils.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required")
+		return
+	}
+	result, err := h.service.ReprocessVideo(
+		c.Request.Context(), c.Param("recording_id"), principal.Subject,
+	)
+	if err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	response.Success(c, http.StatusAccepted, result, "video reprocessing queued")
+}
+
+func (h *videoHandler) GetEvidenceURL(c *gin.Context) {
+	principal, ok := utils.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required")
+		return
+	}
+	timestamp, err := strconv.ParseFloat(c.DefaultQuery("timestamp", "0"), 64)
+	if err != nil || timestamp < 0 {
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "timestamp must be non-negative seconds")
+		return
+	}
+	result, err := h.service.GetVideoEvidenceURL(
+		c.Request.Context(), c.Param("recording_id"), principal.Subject, timestamp,
+	)
+	if err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, result, "short-lived evidence URL created")
 }
 
 func (h *videoHandler) StartRealtimeSession(c *gin.Context) {
