@@ -635,7 +635,7 @@ WITH rows AS (
 	UPDATE media_assets SET actual_duration_seconds = $3, updated_at = NOW()
 	WHERE id = $4
 )
-UPDATE video_jobs SET attempts = 0, last_error = '', updated_at = NOW() WHERE id = $5`
+UPDATE video_jobs SET last_error = '', updated_at = NOW() WHERE id = $5`
 	if _, err := r.db.ExecContext(ctx, query, job.RecordingID, payload, durationSeconds, job.MediaAssetID, job.ID); err != nil {
 		return fmt.Errorf("create video analysis batches: %w", err)
 	}
@@ -650,7 +650,7 @@ func (r *videoRepository) ClaimVideoAnalysisBatch(
 WITH candidate AS (
 	SELECT id FROM video_analysis_batches
 	WHERE recording_id = $1 AND processing_version = $2
-	  AND (status = 'queued' OR (status = 'processing' AND updated_at < NOW() - INTERVAL '10 minutes'))
+	  AND status IN ('queued', 'processing')
 	ORDER BY batch_index FOR UPDATE SKIP LOCKED LIMIT 1
 )
 UPDATE video_analysis_batches b

@@ -90,29 +90,51 @@ func structuredVisualEvidence(job VideoJob) *StructuredGraph {
 	if len(job.EpisodeVisual) == 0 || strings.TrimSpace(job.SourceIdentity) == "" {
 		return nil
 	}
+	evidenceID := "visual-evidence:" + strings.TrimSpace(job.SourceIdentity)
 	graph := &StructuredGraph{
 		EpisodeID: "second-brain:visual:" + job.SourceIdentity,
-		SceneID:   fmt.Sprintf("%s:%.0f-%.0f", job.SessionID, job.EpisodeStart, job.EpisodeEnd),
+		SceneID:   strings.TrimSpace(job.SessionID),
 		StartTime: job.EpisodeStart, EndTime: job.EpisodeEnd,
 		Summary: job.VisualDescription, Location: job.Location,
-		Entities: []StructuredEntity{}, Relations: []StructuredRelation{},
+		Entities:   []StructuredEntity{{CanonicalID: evidenceID, Name: "Visual evidence", Type: "VisualEvidence"}},
+		Relations:  []StructuredRelation{},
 		Utterances: []StructuredUtterance{},
 	}
-	seen := make(map[string]bool)
+	seen := map[string]bool{evidenceID: true}
+	if ownerID := canonicalOwnerID(job.OwnerUserID); ownerID != "" {
+		seen[ownerID] = true
+		graph.Entities = append(graph.Entities, StructuredEntity{
+			CanonicalID: ownerID, Name: "Owner", Type: "Person",
+		})
+		graph.Relations = append(graph.Relations, StructuredRelation{
+			Source: ownerID, Predicate: "HAS_VISUAL_CONTEXT", Target: evidenceID,
+			Fact: "Owner has this visual evidence.",
+		})
+	}
 	for _, observation := range job.EpisodeVisual {
-		labels := make(map[string]string)
+		type entityRef struct{ id, name string }
+		labels := make(map[string]entityRef)
 		for _, person := range observation.People {
 			label := strings.TrimSpace(person.VisualLabel)
 			if label == "" {
 				continue
 			}
 			id := strings.Join([]string{job.MediaAssetID, observation.ObservationID, label}, ":")
-			labels[label] = id
+			name := "Unidentified " + strings.ReplaceAll(label, "-", " ")
+			labels[label] = entityRef{id: id, name: name}
 			if !seen[id] {
 				seen[id] = true
 				graph.Entities = append(graph.Entities, StructuredEntity{
-					CanonicalID: id, Name: "Unidentified " + strings.ReplaceAll(label, "-", " "),
+					CanonicalID: id, Name: name,
 					Type: "person", Confidence: person.Confidence,
+				})
+				fact := "Visual evidence shows " + name + "."
+				if action := strings.TrimSpace(person.Action); action != "" {
+					fact = "Visual evidence shows " + name + " " + action + "."
+				}
+				graph.Relations = append(graph.Relations, StructuredRelation{
+					Source: evidenceID, Predicate: "OBSERVED_PERSON", Target: id,
+					Fact: fact, Confidence: person.Confidence,
 				})
 			}
 		}
@@ -122,12 +144,32 @@ func structuredVisualEvidence(job VideoJob) *StructuredGraph {
 				label = fmt.Sprintf("object-%d", index+1)
 			}
 			id := strings.Join([]string{job.MediaAssetID, observation.ObservationID, label}, ":")
-			labels[label] = id
+			name := strings.TrimSpace(object.Name)
+			labels[label] = entityRef{id: id, name: name}
 			if !seen[id] {
 				seen[id] = true
 				graph.Entities = append(graph.Entities, StructuredEntity{
-					CanonicalID: id, Name: strings.TrimSpace(object.Name), Type: "object",
+					CanonicalID: id, Name: name, Type: "object",
 					Confidence: object.Confidence,
+				})
+				graph.Relations = append(graph.Relations, StructuredRelation{
+					Source: evidenceID, Predicate: "OBSERVED_OBJECT", Target: id,
+					Fact: "Visual evidence shows " + name + ".", Confidence: object.Confidence,
+				})
+			}
+		}
+		if location := strings.TrimSpace(observation.LocationGuess); location != "" {
+			placeID := evidenceID + ":place:" + stableShortID(strings.ToLower(location))
+			if !seen[placeID] {
+				seen[placeID] = true
+				graph.Entities = append(graph.Entities, StructuredEntity{
+					CanonicalID: placeID, Name: location, Type: "Place",
+					Confidence: observation.Confidence,
+				})
+				graph.Relations = append(graph.Relations, StructuredRelation{
+					Source: evidenceID, Predicate: "OBSERVED_AT", Target: placeID,
+					Fact:       "Visual evidence appears to occur at " + location + ".",
+					Confidence: observation.Confidence,
 				})
 			}
 		}
@@ -138,13 +180,35 @@ func structuredVisualEvidence(job VideoJob) *StructuredGraph {
 				continue
 			}
 			graph.Relations = append(graph.Relations, StructuredRelation{
-				Source: source, Predicate: strings.TrimSpace(relation.Predicate), Target: target,
-				Fact:       fmt.Sprintf("%s %s %s.", relation.Source, relation.Predicate, relation.Target),
+				Source: source.id, Predicate: visualRelationPredicate(relation.Predicate), Target: target.id,
+				Fact:       fmt.Sprintf("%s %s %s.", source.name, strings.TrimSpace(relation.Predicate), target.name),
 				Confidence: relation.Confidence,
 			})
 		}
 	}
 	return graph
+}
+
+func stableShortID(value string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return hex.EncodeToString(digest[:8])
+}
+
+func visualRelationPredicate(value string) string {
+	predicate := strings.ToUpper(strings.NewReplacer("-", "_", " ", "_").Replace(strings.TrimSpace(value)))
+	allowed := map[string]bool{
+		"HOLDS": true, "LOOKS_AT": true, "INTERACTS_WITH": true, "PURCHASES": true,
+		"PLAYS_WITH": true, "WALKS_THROUGH": true, "EXPLORES": true, "TALKS_TO": true,
+		"SITS_ON": true, "STANDS_IN": true, "LOCATED_AT": true, "NEAR": true,
+		"BESIDE": true, "ON": true, "INSIDE": true, "BEHIND": true,
+		"IN_FRONT_OF": true, "ATTACHED_TO": true, "WEARS": true, "DISPLAYED_ON": true,
+		"CONTAINS": true, "PICKS_UP": true, "CARRIES": true, "RIDES": true,
+		"DRIVES": true, "ENTERS": true, "EXITS": true,
+	}
+	if allowed[predicate] {
+		return predicate
+	}
+	return "INTERACTS_WITH"
 }
 
 func buildStructuredConversation(

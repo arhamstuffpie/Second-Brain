@@ -87,6 +87,22 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 				[]string{"sample-1"}, "test", "test", 3,
 			)
 		case "visual":
+			if err := repository.CreateVideoAnalysisBatches(ctx, job, 30, []service.VideoFrame{{
+				FrameID: "frame-1", Timestamp: 1, SelectionReason: "periodic",
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			claimed, found, claimErr := repository.ClaimVideoAnalysisBatch(ctx, job)
+			if claimErr != nil || !found {
+				t.Fatalf("claim visual batch = %+v, %t, %v", claimed, found, claimErr)
+			}
+			// The coordinator resets its attempts between batches. Recovery must not
+			// compare that counter with the independently tracked batch attempts.
+			job.Attempts = 0
+			resumed, found, claimErr := repository.ClaimVideoAnalysisBatch(ctx, job)
+			if claimErr != nil || !found || resumed.ID != claimed.ID || resumed.Attempts != 2 {
+				t.Fatalf("resume processing visual batch = %+v, %t, %v", resumed, found, claimErr)
+			}
 			err = repository.SaveVideoAnalysis(
 				ctx, job, 30,
 				service.VisualAnalysis{Observations: []service.VideoObservation{{

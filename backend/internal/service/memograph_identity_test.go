@@ -187,16 +187,52 @@ func hasStructuredRelation(
 func TestStructuredVisualEvidenceUsesObservationLocalIDs(t *testing.T) {
 	confidence := 0.9
 	graph := structuredVisualEvidence(VideoJob{
-		SourceIdentity: "window-1", SessionID: "session-1", MediaAssetID: "asset-1",
+		SourceIdentity: "window-1", SessionID: "session-1", MediaAssetID: "asset-1", OwnerUserID: "user-1",
 		EpisodeStart: 0, EpisodeEnd: 5, VisualDescription: "A person holds a document.",
 		EpisodeVisual: []VideoObservation{{
-			ObservationID: "obs-1", People: []VisualPerson{{VisualLabel: "person-1", Confidence: &confidence}},
+			ObservationID: "obs-1", LocationGuess: "office",
+			People:    []VisualPerson{{VisualLabel: "person-1", Action: "holding an agreement", Confidence: &confidence}},
 			Objects:   []DetectedObject{{ObjectID: "document-1", Name: "Agreement", Confidence: &confidence}},
 			Relations: []VisualRelation{{Source: "person-1", Predicate: "holds", Target: "document-1", Confidence: &confidence}},
 		}},
 	})
-	if graph == nil || len(graph.Entities) != 2 || len(graph.Relations) != 1 ||
-		graph.Relations[0].Source != "asset-1:obs-1:person-1" {
+	if graph == nil {
 		t.Fatalf("visual graph = %+v", graph)
+	}
+	evidence := findStructuredEntity(graph.Entities, "visual-evidence:window-1")
+	owner := findStructuredEntity(graph.Entities, "account-owner:user-1")
+	person := findStructuredEntity(graph.Entities, "asset-1:obs-1:person-1")
+	document := findStructuredEntity(graph.Entities, "asset-1:obs-1:document-1")
+	if evidence == nil || evidence.Name != "Visual evidence" || owner == nil || person == nil || document == nil {
+		t.Fatalf("visual entities = %+v", graph.Entities)
+	}
+	if strings.Contains(evidence.Name, "0") || strings.Contains(evidence.CanonicalID, "0-5") ||
+		!hasStructuredRelation(graph.Relations, owner.CanonicalID, "HAS_VISUAL_CONTEXT", evidence.CanonicalID) ||
+		!hasStructuredRelation(graph.Relations, evidence.CanonicalID, "OBSERVED_PERSON", person.CanonicalID) ||
+		!hasStructuredRelation(graph.Relations, evidence.CanonicalID, "OBSERVED_OBJECT", document.CanonicalID) ||
+		!hasStructuredRelation(graph.Relations, person.CanonicalID, "HOLDS", document.CanonicalID) {
+		t.Fatalf("visual graph = %+v", graph)
+	}
+	for _, entity := range graph.Entities {
+		if entity.CanonicalID == evidence.CanonicalID || entity.CanonicalID == owner.CanonicalID {
+			continue
+		}
+		connected := false
+		for _, relation := range graph.Relations {
+			if relation.Source == entity.CanonicalID || relation.Target == entity.CanonicalID {
+				connected = true
+				break
+			}
+		}
+		if !connected {
+			t.Fatalf("orphan visual entity %q in %+v", entity.CanonicalID, graph.Relations)
+		}
+	}
+}
+
+func TestVisualRelationPredicateKeepsVocabularyBounded(t *testing.T) {
+	if visualRelationPredicate("plays with") != "PLAYS_WITH" ||
+		visualRelationPredicate("invented predicate") != "INTERACTS_WITH" {
+		t.Fatal("visual relation predicate was not normalized")
 	}
 }

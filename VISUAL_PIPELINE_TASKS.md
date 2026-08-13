@@ -14,6 +14,7 @@
 - [x] P12 — Scope evidence-first search and provide timestamp playback URLs.
 - [x] P13 — Bound graph volume, writes, windows, and expose batch age/status.
 - [x] P14 — Extend durable queues and add versioned reprocessing from originals.
+- [x] Visual graph connectivity — Add timeless visual-evidence anchors, contextual owner/entity/place edges, and grounded interaction predicates without changing speech graphs.
 
 Verification: all Go tests pass; migrations 1–15 and repository integration tests pass on PostgreSQL 17.
 

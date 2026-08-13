@@ -110,6 +110,15 @@ func (a *OpenAIAnalyzer) Analyze(
 
 		9. Identify the visible activity, action, event, or scenario. Describe who or
 		what is performing the action and which visible entities are involved.
+		For each grounded person-to-object, person-to-person, or person-to-environment
+		interaction, add a relation using only one of: HOLDS, LOOKS_AT,
+		INTERACTS_WITH, PURCHASES, PLAYS_WITH, WALKS_THROUGH, EXPLORES, TALKS_TO,
+		SITS_ON, STANDS_IN, LOCATED_AT, NEAR, BESIDE, ON, INSIDE, BEHIND,
+		IN_FRONT_OF, ATTACHED_TO, WEARS, DISPLAYED_ON, CONTAINS, PICKS_UP, CARRIES,
+		RIDES, DRIVES, ENTERS, or EXITS. Both source and target must be visible labels
+		from people or objects. Represent useful environmental targets such as a park,
+		forest, trail, shop, or field as objects. Use INTERACTS_WITH when no more
+		specific allowed relation is visually supported.
 
 		10. Make a conservative location guess using only visible evidence. Distinguish
 			between directly observed environmental details and inferred location.
