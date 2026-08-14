@@ -15,6 +15,7 @@ import (
 	"github.com/arham/ai-second-brain/internal/audio"
 	"github.com/arham/ai-second-brain/internal/config"
 	internaldb "github.com/arham/ai-second-brain/internal/db"
+	"github.com/arham/ai-second-brain/internal/face"
 	"github.com/arham/ai-second-brain/internal/handler"
 	"github.com/arham/ai-second-brain/internal/http/middleware"
 	"github.com/arham/ai-second-brain/internal/http/router"
@@ -88,6 +89,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct voice enrollment store: %w", err)
 	}
+	faceStore, err := newStore(rootCtx, cfg, cfg.Face.StorageDir, cfg.Face.MaxUploadBytes)
+	if err != nil {
+		return fmt.Errorf("construct face enrollment store: %w", err)
+	}
 	audioInspector, err := audio.NewFFprobeInspector(
 		cfg.Voice.FFprobePath, cfg.Voice.InspectionTimeout,
 	)
@@ -145,11 +150,26 @@ func run() error {
 	default:
 		visualAnalyzer = vision.NewMock()
 	}
+	var faceRecognizer service.FaceRecognizer
+	if cfg.Face.Provider != "disabled" {
+		faceRecognizer, err = face.NewHTTPRecognizer(cfg.Face)
+		if err != nil {
+			return fmt.Errorf("construct face recognizer: %w", err)
+		}
+		validationCtx, cancel := context.WithTimeout(rootCtx, cfg.Face.Timeout)
+		_, err = faceRecognizer.Validate(validationCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("validate face recognizer: %w", err)
+		}
+	}
 	appLogger.Info().
 		Str("stt_provider", transcriber.Provider()).
 		Str("stt_model", transcriber.Model()).
 		Str("speaker_embedding_provider", cfg.Speaker.Provider).
 		Str("speaker_embedding_model", cfg.Speaker.Model).
+		Str("face_recognition_provider", cfg.Face.Provider).
+		Str("face_recognition_model", cfg.Face.Model).
 		Str("vision_provider", visualAnalyzer.Provider()).
 		Str("vision_model", visualAnalyzer.Model()).
 		Msg("media analysis providers configured")
@@ -163,6 +183,9 @@ func run() error {
 		VoiceRepository:   repositories.Voice,
 		SpeakerProfiles:   repositories.Speakers,
 		SpeakerIdentifier: speakerIdentifier,
+		PersonRepository:  repositories.People,
+		FaceRecognizer:    faceRecognizer,
+		FaceStore:         faceStore,
 		VideoRepository:   repositories.Video,
 		Transcriber:       transcriber,
 		SpeakerAttributor: stt.NewReferenceAttributor(),
@@ -175,6 +198,7 @@ func run() error {
 		Memograph:         memographClient,
 		VoiceConfig:       cfg.Voice,
 		VideoConfig:       cfg.Video,
+		FaceConfig:        cfg.Face,
 		WorkerConfig:      cfg.Worker,
 		JWT:               cfg.JWT,
 	})
@@ -189,6 +213,8 @@ func run() error {
 		VoiceConfig:   cfg.Voice,
 		VideoService:  services.Video,
 		VideoConfig:   cfg.Video,
+		PersonService: services.People,
+		FaceConfig:    cfg.Face,
 	})
 	if err != nil {
 		return fmt.Errorf("construct handlers: %w", err)

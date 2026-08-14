@@ -76,6 +76,24 @@ func (stubSpeakerProfileRepository) GetSpeakerSample(context.Context, string, st
 	return SpeakerSample{}, nil
 }
 
+type stubPersonRepository struct{}
+
+func (stubPersonRepository) EnrollFace(context.Context, EnrollFaceProfileInput) (PersonProfile, error) {
+	return PersonProfile{}, nil
+}
+func (stubPersonRepository) MatchFace(context.Context, MatchFaceProfileInput) (FaceMatch, error) {
+	return FaceMatch{}, nil
+}
+func (stubPersonRepository) ListPeople(context.Context, string) ([]PersonProfile, error) {
+	return []PersonProfile{}, nil
+}
+func (stubPersonRepository) UpdatePerson(context.Context, UpdatePersonInput) (PersonProfile, error) {
+	return PersonProfile{}, nil
+}
+func (stubPersonRepository) DeletePerson(context.Context, string, string) ([]string, error) {
+	return []string{}, nil
+}
+
 func (stubUserRepository) FindByEmail(context.Context, string) (StoredUser, bool, error) {
 	return StoredUser{}, true, nil
 }
@@ -286,6 +304,8 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		CredentialCipher:  stubCredentialCipher{},
 		VoiceRepository:   stubVoiceRepository{},
 		SpeakerProfiles:   stubSpeakerProfileRepository{},
+		PersonRepository:  stubPersonRepository{},
+		FaceStore:         stubAudioStore{},
 		VideoRepository:   stubVideoRepository{},
 		Transcriber:       stubTranscriber{},
 		SpeakerAttributor: stubSpeakerAttributor{},
@@ -307,7 +327,7 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
 	if container == nil || container.Health == nil || container.Auth == nil ||
-		container.Models == nil || container.Voice == nil || container.Video == nil {
+		container.Models == nil || container.Voice == nil || container.Video == nil || container.People == nil {
 		t.Fatal("service container has nil required dependency")
 	}
 }

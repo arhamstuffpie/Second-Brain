@@ -16,6 +16,9 @@ type Dependencies struct {
 	VoiceRepository   VoiceRepository
 	SpeakerProfiles   SpeakerProfileRepository
 	SpeakerIdentifier SpeakerIdentifier
+	PersonRepository  PersonRepository
+	FaceRecognizer    FaceRecognizer
+	FaceStore         AudioStore
 	VideoRepository   VideoRepository
 	Transcriber       Transcriber
 	SpeakerAttributor SpeakerAttributor
@@ -28,6 +31,7 @@ type Dependencies struct {
 	Memograph         MemographClient
 	VoiceConfig       config.VoiceConfig
 	VideoConfig       config.VideoConfig
+	FaceConfig        config.FaceRecognitionConfig
 	WorkerConfig      config.WorkerConfig
 }
 
@@ -37,6 +41,7 @@ type Container struct {
 	Models ModelProfileService
 	Voice  VoiceService
 	Video  VideoService
+	People PersonService
 }
 
 func NewContainer(deps Dependencies) (*Container, error) {
@@ -57,6 +62,9 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	if deps.VideoRepository == nil || deps.VideoStore == nil ||
 		deps.MediaExtractor == nil || deps.VisualAnalyzer == nil {
 		return nil, fmt.Errorf("video service dependencies are required")
+	}
+	if deps.PersonRepository == nil || deps.FaceStore == nil {
+		return nil, fmt.Errorf("person identity dependencies are required")
 	}
 	if len(deps.JWT.Secret) < 32 || deps.JWT.Issuer == "" || deps.JWT.AccessTokenTTL <= 0 {
 		return nil, fmt.Errorf("valid JWT configuration is required")
@@ -84,6 +92,7 @@ func NewContainer(deps Dependencies) (*Container, error) {
 		Models: newModelProfileService(deps.ModelProfiles, deps.CredentialCipher, deps.STTConfig),
 		Voice:  voice,
 		Video:  video,
+		People: newPersonService(deps.PersonRepository, deps.FaceRecognizer, deps.FaceStore, deps.FaceConfig),
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err
@@ -109,6 +118,9 @@ func (c *Container) Validate() error {
 	}
 	if c.Video == nil {
 		return fmt.Errorf("video service is required")
+	}
+	if c.People == nil {
+		return fmt.Errorf("person service is required")
 	}
 	return nil
 }

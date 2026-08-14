@@ -159,6 +159,39 @@ but are identification products rather than compatible raw ECAPA embedding
 endpoints; they require dedicated adapters and their stored profiles must not be
 mixed with ECAPA centroids.
 
+### Server-side face identity and temporal actions
+
+Face identity uses a separate private service: YuNet detects faces and five
+landmarks, then SFace emits a 128-value normalized embedding. The Go API owns
+consent, enrollment, account-scoped cosine matching, canonical person IDs,
+retention, and deletion. The mobile app never computes or receives vectors.
+
+```bash
+make face-models
+make face-up
+make migrate-up DATABASE_URL="$APP_DATABASE_URL"
+curl http://127.0.0.1:8092/healthz
+```
+
+```dotenv
+APP_FACE_RECOGNITION_PROVIDER=local
+APP_FACE_RECOGNITION_BASE_URL=http://127.0.0.1:8092
+APP_FACE_RECOGNITION_MODEL=opencv/sface-2021dec@sha256:0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
+APP_FACE_RECOGNITION_API_KEY=
+APP_FACE_AUTO_CONFIRM=false
+```
+
+Authenticated routes are `GET /api/v1/people`, `POST
+/api/v1/people/face-enrollments`, `POST /api/v1/people/face-recognition`, and
+`PATCH`/`DELETE /api/v1/people/:person_profile_id`. The schema also keeps
+versioned recording-local person/object tracks, reviewable face/voice evidence,
+and temporal action events. Action labels are accepted only after deterministic
+before/during/after validation; missing support, release, continuity, or active
+speaker evidence remains ambiguous.
+
+See [FACE_IDENTITY_SETUP.md](FACE_IDENTITY_SETUP.md) for model licensing,
+hashes, deployment, enrollment, threshold calibration, and privacy guidance.
+
 `group_id` defaults to the stable account scope
 `account-owner:<authenticated-user-id>`. Supplying a group explicitly creates an
 intentional graph partition. The legacy `/chunks` alias accepts the same fields

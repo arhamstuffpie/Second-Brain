@@ -96,6 +96,14 @@ type SpeakerProfileRepository interface {
 	GetSpeakerSample(ctx context.Context, id, profileID, ownerUserID string) (SpeakerSample, error)
 }
 
+type PersonRepository interface {
+	EnrollFace(ctx context.Context, input EnrollFaceProfileInput) (PersonProfile, error)
+	MatchFace(ctx context.Context, input MatchFaceProfileInput) (FaceMatch, error)
+	ListPeople(ctx context.Context, ownerUserID string) ([]PersonProfile, error)
+	UpdatePerson(ctx context.Context, input UpdatePersonInput) (PersonProfile, error)
+	DeletePerson(ctx context.Context, id, ownerUserID string) ([]string, error)
+}
+
 type AudioInspector interface {
 	Duration(ctx context.Context, path string) (float64, error)
 }
@@ -194,6 +202,14 @@ type VideoService interface {
 	ReprocessVideo(ctx context.Context, id, ownerUserID string) (VideoRecording, error)
 	GetVideoEvidenceURL(ctx context.Context, id, ownerUserID string, timestamp float64) (EvidencePlayback, error)
 	ProcessNextVideoJob(ctx context.Context) (bool, error)
+}
+
+type PersonService interface {
+	EnrollFace(ctx context.Context, input FaceEnrollmentInput) (PersonProfile, error)
+	RecognizeFace(ctx context.Context, input FaceRecognitionRequest) (FaceMatch, error)
+	ListPeople(ctx context.Context, ownerUserID string) ([]PersonProfile, error)
+	UpdatePerson(ctx context.Context, input UpdatePersonInput) (PersonProfile, error)
+	DeletePerson(ctx context.Context, id, ownerUserID string) error
 }
 
 type Health struct {

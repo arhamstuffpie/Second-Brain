@@ -120,6 +120,22 @@ func (stubVideoService) StopVideoRealtimeSession(context.Context, string, string
 }
 func (stubVideoService) ProcessNextVideoJob(context.Context) (bool, error) { return false, nil }
 
+type stubPersonService struct{}
+
+func (stubPersonService) EnrollFace(context.Context, service.FaceEnrollmentInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
+func (stubPersonService) RecognizeFace(context.Context, service.FaceRecognitionRequest) (service.FaceMatch, error) {
+	return service.FaceMatch{}, nil
+}
+func (stubPersonService) ListPeople(context.Context, string) ([]service.PersonProfile, error) {
+	return []service.PersonProfile{}, nil
+}
+func (stubPersonService) UpdatePerson(context.Context, service.UpdatePersonInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
+func (stubPersonService) DeletePerson(context.Context, string, string) error { return nil }
+
 func TestNewContainerRequiresServices(t *testing.T) {
 	if _, err := NewContainer(Dependencies{}); err == nil {
 		t.Fatal("NewContainer() error = nil, want error")
@@ -133,12 +149,13 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		ModelService:  stubModelProfileService{},
 		VoiceService:  stubVoiceService{},
 		VideoService:  stubVideoService{},
+		PersonService: stubPersonService{},
 	})
 	if err != nil {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
 	if container == nil || container.Health == nil || container.Auth == nil ||
-		container.Models == nil || container.Voice == nil || container.Video == nil {
+		container.Models == nil || container.Voice == nil || container.Video == nil || container.People == nil {
 		t.Fatal("handler container has nil required dependency")
 	}
 }

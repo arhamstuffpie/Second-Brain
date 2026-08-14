@@ -1,4 +1,4 @@
-.PHONY: build run test vet generate migrate-validate migrate-up migrate-down speaker-up speaker-down speaker-logs
+.PHONY: build run test vet generate migrate-validate migrate-up migrate-down speaker-up speaker-down speaker-logs face-models face-up face-down face-logs
 
 BACKEND_DIR := backend
 
@@ -13,3 +13,15 @@ speaker-down:
 
 speaker-logs:
 	docker compose -f speaker-embedder/compose.yaml logs -f speaker-embedder
+
+face-models:
+	./face-embedder/download-models.sh
+
+face-up:
+	docker compose -f face-embedder/compose.yaml up --build -d
+
+face-down:
+	docker compose -f face-embedder/compose.yaml down
+
+face-logs:
+	docker compose -f face-embedder/compose.yaml logs -f face-embedder

@@ -15,6 +15,10 @@
 - [x] P13 — Bound graph volume, writes, windows, and expose batch age/status.
 - [x] P14 — Extend durable queues and add versioned reprocessing from originals.
 - [x] Visual graph connectivity — Add timeless visual-evidence anchors, contextual owner/entity/place edges, and grounded interaction predicates without changing speech graphs.
+- [x] P15 — Add deterministic temporal action semantics for reach, touch, grasp, pick-up, hold/carry, put-down, drop, and verified handover/receive.
+- [x] P16 — Add canonical account-scoped person, face, track, identity-link, action-event, and independent temporal-job persistence.
+- [x] P17 — Add private YuNet/SFace inference, consented enrollment, account-scoped recognition, deletion, and provider-neutral boundaries.
+- [~] P18 — Connect a licensed temporal tracking/action and active-speaker provider to the durable temporal queue; deterministic mocks and fusion gates are complete.
 
 Verification: all Go tests pass; migrations 1–15 and repository integration tests pass on PostgreSQL 17.
 

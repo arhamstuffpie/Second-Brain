@@ -138,6 +138,22 @@ func (fakeVideoService) StopVideoRealtimeSession(context.Context, string, string
 }
 func (fakeVideoService) ProcessNextVideoJob(context.Context) (bool, error) { return false, nil }
 
+type fakePersonService struct{}
+
+func (fakePersonService) EnrollFace(context.Context, service.FaceEnrollmentInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
+func (fakePersonService) RecognizeFace(context.Context, service.FaceRecognitionRequest) (service.FaceMatch, error) {
+	return service.FaceMatch{}, nil
+}
+func (fakePersonService) ListPeople(context.Context, string) ([]service.PersonProfile, error) {
+	return []service.PersonProfile{}, nil
+}
+func (fakePersonService) UpdatePerson(context.Context, service.UpdatePersonInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
+func (fakePersonService) DeletePerson(context.Context, string, string) error { return nil }
+
 func (f fakeAuthService) Signup(context.Context, string, string) (service.AuthResult, error) {
 	return f.signupResult, f.signupErr
 }
@@ -318,6 +334,7 @@ func testRouterWithAuth(t *testing.T, healthService service.HealthService, authS
 		ModelService:  fakeModelProfileService{},
 		VoiceService:  fakeVoiceService{},
 		VideoService:  fakeVideoService{},
+		PersonService: fakePersonService{},
 	})
 	if err != nil {
 		t.Fatalf("handler.NewContainer() error = %v", err)

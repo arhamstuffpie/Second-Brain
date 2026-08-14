@@ -19,6 +19,7 @@ type Config struct {
 	Video       VideoConfig
 	STT         STTConfig
 	Speaker     SpeakerEmbeddingConfig
+	Face        FaceRecognitionConfig
 	Vision      VisionConfig
 	Models      ModelConfig
 	Memograph   MemographConfig
@@ -117,6 +118,20 @@ type SpeakerEmbeddingConfig struct {
 	ProvisionalTTL  time.Duration
 	MinClipDuration time.Duration
 	MaxClipDuration time.Duration
+}
+
+type FaceRecognitionConfig struct {
+	Provider        string
+	StorageDir      string
+	MaxUploadBytes  int64
+	BaseURL         string
+	APIKey          string
+	Model           string
+	Timeout         time.Duration
+	MatchThreshold  float64
+	AmbiguousMargin float64
+	ProvisionalTTL  time.Duration
+	AutoConfirm     bool
 }
 
 type VisionConfig struct {
@@ -232,6 +247,19 @@ func Load() (Config, error) {
 			ProvisionalTTL:  getEnvDuration("APP_SPEAKER_PROVISIONAL_TTL", 30*24*time.Hour),
 			MinClipDuration: getEnvDuration("APP_SPEAKER_MIN_CLIP_DURATION", 2*time.Second),
 			MaxClipDuration: getEnvDuration("APP_SPEAKER_MAX_CLIP_DURATION", 10*time.Second),
+		},
+		Face: FaceRecognitionConfig{
+			Provider:        strings.ToLower(strings.TrimSpace(GetEnv("APP_FACE_RECOGNITION_PROVIDER", "disabled"))),
+			StorageDir:      GetEnv("APP_FACE_ENROLLMENT_STORAGE_DIR", "./data/face-enrollment"),
+			MaxUploadBytes:  int64(GetEnvInt("APP_FACE_MAX_UPLOAD_MB", 10)) << 20,
+			BaseURL:         strings.TrimRight(GetEnv("APP_FACE_RECOGNITION_BASE_URL", "http://127.0.0.1:8092"), "/"),
+			APIKey:          GetEnv("APP_FACE_RECOGNITION_API_KEY", ""),
+			Model:           GetEnv("APP_FACE_RECOGNITION_MODEL", "opencv/sface-2021dec@sha256:0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"),
+			Timeout:         getEnvDuration("APP_FACE_RECOGNITION_TIMEOUT", 10*time.Second),
+			MatchThreshold:  getEnvFloat("APP_FACE_MATCH_THRESHOLD", 0.50),
+			AmbiguousMargin: getEnvFloat("APP_FACE_AMBIGUOUS_MARGIN", 0.10),
+			ProvisionalTTL:  getEnvDuration("APP_FACE_PROVISIONAL_TTL", 30*24*time.Hour),
+			AutoConfirm:     GetEnvBool("APP_FACE_AUTO_CONFIRM", false),
 		},
 		Vision: VisionConfig{
 			Provider: GetEnv("APP_VISION_PROVIDER", "mock"),
@@ -382,6 +410,22 @@ func (c Config) Validate() error {
 		if c.Speaker.ProvisionalTTL <= 0 || c.Speaker.MinClipDuration < 2*time.Second ||
 			c.Speaker.MaxClipDuration < c.Speaker.MinClipDuration || c.Speaker.MaxClipDuration > 10*time.Second {
 			return fmt.Errorf("speaker clip duration must be between 2 and 10 seconds")
+		}
+	}
+	if c.Face.Provider != "disabled" && c.Face.Provider != "local" && c.Face.Provider != "external" {
+		return fmt.Errorf("APP_FACE_RECOGNITION_PROVIDER must be disabled, local, or external")
+	}
+	if c.Face.Provider != "disabled" {
+		if strings.TrimSpace(c.Face.StorageDir) == "" || c.Face.MaxUploadBytes < 1 ||
+			strings.TrimSpace(c.Face.BaseURL) == "" || strings.TrimSpace(c.Face.Model) == "" || c.Face.Timeout <= 0 {
+			return fmt.Errorf("valid face recognition configuration is required")
+		}
+		if c.Face.Provider == "external" && strings.TrimSpace(c.Face.APIKey) == "" {
+			return fmt.Errorf("APP_FACE_RECOGNITION_API_KEY is required for the external provider")
+		}
+		if c.Face.MatchThreshold <= 0 || c.Face.MatchThreshold > 1 ||
+			c.Face.AmbiguousMargin < 0 || c.Face.AmbiguousMargin >= 1 || c.Face.ProvisionalTTL <= 0 {
+			return fmt.Errorf("face matching threshold, margin, and provisional TTL are invalid")
 		}
 	}
 	if c.Vision.Provider != "openai" && c.Vision.Provider != "mock" {
