@@ -26,6 +26,7 @@ type videoService struct {
 	attributor        SpeakerAttributor
 	speakerProfiles   SpeakerProfileRepository
 	speakerIdentifier SpeakerIdentifier
+	faceIdentifier    VideoFaceIdentifier
 	enrollmentStore   AudioStore
 	store             VideoStore
 	extractor         MediaExtractor
@@ -499,6 +500,7 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 		return s.finishFailedVideoBatch(ctx, job, batch, duration, err)
 	}
 	groundVisualObservations(&analysis, frames, job.ProcessingVersion)
+	s.identifyVisualFaces(ctx, job.OwnerUserID, &analysis, frames)
 	s.storeImportantEvidenceFrames(ctx, &analysis, frames)
 	analysis.Provider, analysis.Model = s.analyzer.Provider(), s.analyzer.Model()
 	analysis.ProcessingVersion = job.ProcessingVersion
@@ -509,6 +511,51 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 		ctx, job, duration, s.analyzer.Provider(), s.analyzer.Model(), s.maxAttempts,
 	)
 	return err
+}
+
+func (s *videoService) identifyVisualFaces(
+	ctx context.Context,
+	ownerUserID string,
+	analysis *VisualAnalysis,
+	frames []VideoFrame,
+) {
+	if s.faceIdentifier == nil {
+		return
+	}
+	eligible := make([]VideoFrame, 0, len(frames))
+	for index, observation := range analysis.Observations {
+		if index >= len(frames) || len(observation.People) != 1 {
+			continue
+		}
+		person := observation.People[0]
+		if person.PhysicalPresence && person.FaceVisible {
+			eligible = append(eligible, frames[index])
+		}
+	}
+	if len(eligible) == 0 {
+		return
+	}
+	identities, err := s.faceIdentifier.Identify(ctx, ownerUserID, eligible)
+	if err != nil {
+		analysis.Warning = appendTranscriptWarning(
+			analysis.Warning, "face identification was unavailable for some video frames",
+		)
+	}
+	for index := range analysis.Observations {
+		observation := &analysis.Observations[index]
+		if len(observation.People) != 1 {
+			continue
+		}
+		identity, ok := identities[observation.FrameID]
+		if !ok {
+			continue
+		}
+		person := &observation.People[0]
+		person.PersonProfileID = identity.PersonProfileID
+		person.PersonIdentityStatus = identity.IdentityStatus
+		person.PersonName = identity.DisplayName
+		person.FaceMatchConfidence = identity.Similarity
+	}
 }
 
 func (s *videoService) storeImportantEvidenceFrames(

@@ -85,6 +85,9 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	)
 	video.speakerProfiles = deps.SpeakerProfiles
 	video.speakerIdentifier = deps.SpeakerIdentifier
+	video.faceIdentifier = NewVideoFaceIdentifier(
+		deps.PersonRepository, deps.FaceRecognizer, deps.FaceStore, deps.FaceConfig,
+	)
 
 	container := &Container{
 		Health: newHealthService(deps.HealthRepository),

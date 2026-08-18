@@ -146,6 +146,12 @@ func (a *OpenAIAnalyzer) Analyze(
 			person's identity from appearance. Preserve OCR exactly, use ? for each
 			unreadable character, and store uncertainty instead of guessing.
 
+		15. For each person, set physical_presence true only when the person is
+			physically present in the camera scene. Set it false for a person shown on a
+			TV, phone, computer, photograph, poster, painting, or other display. Set
+			face_visible true only when a real, sufficiently visible face belongs to that
+			physically present person. When uncertain, use false.
+
 		Use each supplied timestamp as start_time and the next supplied timestamp as
 		end_time. For the final frame, use the configured window duration.
 
@@ -303,8 +309,10 @@ func visualAnalysisSchema() map[string]any {
 	}, "setting", "lighting", "foreground", "background")
 	personSchema := strictObject(map[string]any{
 		"visual_label": map[string]any{"type": "string"}, "appearance": map[string]any{"type": "string"},
-		"position": map[string]any{"type": "string"}, "action": map[string]any{"type": "string"}, "confidence": confidence,
-	}, "visual_label", "appearance", "position", "action", "confidence")
+		"position": map[string]any{"type": "string"}, "action": map[string]any{"type": "string"},
+		"physical_presence": map[string]any{"type": "boolean"}, "face_visible": map[string]any{"type": "boolean"},
+		"confidence": confidence,
+	}, "visual_label", "appearance", "position", "action", "physical_presence", "face_visible", "confidence")
 	relationSchema := strictObject(map[string]any{
 		"source": map[string]any{"type": "string"}, "predicate": map[string]any{"type": "string"},
 		"target": map[string]any{"type": "string"}, "confidence": confidence,

@@ -30,6 +30,7 @@ type EnrollFaceProfileInput struct {
 	DisplayName          string
 	RelationshipCategory string
 	RelationshipLabel    string
+	ConsentState         string
 	Provider             string
 	DetectorModel        string
 	EmbeddingModel       string
@@ -58,6 +59,14 @@ type UpdatePersonInput struct {
 	DisplayName          string `json:"display_name"`
 	RelationshipCategory string `json:"relationship_category"`
 	RelationshipLabel    string `json:"relationship_label"`
+}
+
+type ConfirmPersonIdentityInput struct {
+	OwnerUserID           string   `json:"-"`
+	RecordingIDs          []string `json:"recording_ids"`
+	VisualLabel           string   `json:"visual_label"`
+	VoiceSpeakerProfileID string   `json:"voice_speaker_profile_id"`
+	Confirmed             bool     `json:"confirmed"`
 }
 
 type PersonProfile struct {

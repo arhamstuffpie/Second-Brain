@@ -63,7 +63,7 @@ func (s *personService) EnrollFace(ctx context.Context, input FaceEnrollmentInpu
 	profile, err := s.repository.EnrollFace(ctx, EnrollFaceProfileInput{
 		OwnerUserID: input.OwnerUserID, PersonProfileID: input.PersonProfileID,
 		DisplayName: input.DisplayName, RelationshipCategory: input.RelationshipCategory,
-		RelationshipLabel: input.RelationshipLabel, Provider: result.Provider,
+		RelationshipLabel: input.RelationshipLabel, ConsentState: "granted", Provider: result.Provider,
 		DetectorModel: result.Detector, EmbeddingModel: result.Model,
 		Embedding: face.Embedding, FileName: input.FileName, FilePath: stored.Path,
 		MediaType: input.MediaType, SizeBytes: stored.SizeBytes,
@@ -133,6 +133,33 @@ func (s *personService) UpdatePerson(ctx context.Context, input UpdatePersonInpu
 		return PersonProfile{}, err
 	}
 	return s.repository.UpdatePerson(ctx, input)
+}
+
+func (s *personService) ConfirmIdentity(
+	ctx context.Context,
+	input ConfirmPersonIdentityInput,
+) (PersonProfile, error) {
+	input.OwnerUserID = strings.TrimSpace(input.OwnerUserID)
+	input.VisualLabel = strings.TrimSpace(input.VisualLabel)
+	input.VoiceSpeakerProfileID = strings.TrimSpace(input.VoiceSpeakerProfileID)
+	uniqueRecordings := make([]string, 0, len(input.RecordingIDs))
+	seen := make(map[string]bool, len(input.RecordingIDs))
+	for _, recordingID := range input.RecordingIDs {
+		recordingID = strings.TrimSpace(recordingID)
+		if recordingID != "" && !seen[recordingID] {
+			seen[recordingID] = true
+			uniqueRecordings = append(uniqueRecordings, recordingID)
+		}
+	}
+	input.RecordingIDs = uniqueRecordings
+	if input.OwnerUserID == "" || input.VoiceSpeakerProfileID == "" ||
+		input.VisualLabel == "" || len(input.RecordingIDs) == 0 {
+		return PersonProfile{}, validation("identity_link", "voice profile, visual label, and recording IDs are required")
+	}
+	if !input.Confirmed {
+		return PersonProfile{}, validation("confirmed", "must be true for an explicit identity link")
+	}
+	return s.repository.ConfirmIdentity(ctx, input)
 }
 
 func (s *personService) DeletePerson(ctx context.Context, id, ownerUserID string) error {

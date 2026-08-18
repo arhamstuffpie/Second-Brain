@@ -134,6 +134,9 @@ func (stubPersonService) ListPeople(context.Context, string) ([]service.PersonPr
 func (stubPersonService) UpdatePerson(context.Context, service.UpdatePersonInput) (service.PersonProfile, error) {
 	return service.PersonProfile{}, nil
 }
+func (stubPersonService) ConfirmIdentity(context.Context, service.ConfirmPersonIdentityInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
 func (stubPersonService) DeletePerson(context.Context, string, string) error { return nil }
 
 func TestNewContainerRequiresServices(t *testing.T) {

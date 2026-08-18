@@ -17,6 +17,42 @@ type retentionVideoRepository struct {
 	saved bool
 }
 
+type videoFaceIdentifierStub struct {
+	identities map[string]VideoFaceIdentity
+	err        error
+	frames     []VideoFrame
+}
+
+func (s *videoFaceIdentifierStub) Identify(
+	_ context.Context, _ string, frames []VideoFrame,
+) (map[string]VideoFaceIdentity, error) {
+	s.frames = append([]VideoFrame(nil), frames...)
+	return s.identities, s.err
+}
+
+func TestIdentifyVisualFacesEnrichesOnlyOnePhysicalVisiblePersonAndFailsOpen(t *testing.T) {
+	identifier := &videoFaceIdentifierStub{
+		identities: map[string]VideoFaceIdentity{"frame-1": {
+			PersonProfileID: "person-1", IdentityStatus: "confirmed", DisplayName: "Mark",
+		}},
+		err: errors.New("one later frame failed"),
+	}
+	video := &videoService{faceIdentifier: identifier}
+	analysis := VisualAnalysis{Observations: []VideoObservation{
+		{FrameID: "frame-1", People: []VisualPerson{{PhysicalPresence: true, FaceVisible: true}}},
+		{FrameID: "frame-2", People: []VisualPerson{{PhysicalPresence: true, FaceVisible: false}}},
+		{FrameID: "frame-3", People: []VisualPerson{{PhysicalPresence: true, FaceVisible: true}, {PhysicalPresence: true, FaceVisible: true}}},
+	}}
+	frames := []VideoFrame{{FrameID: "frame-1"}, {FrameID: "frame-2"}, {FrameID: "frame-3"}}
+	video.identifyVisualFaces(context.Background(), "owner-1", &analysis, frames)
+	person := analysis.Observations[0].People[0]
+	if len(identifier.frames) != 1 || identifier.frames[0].FrameID != "frame-1" ||
+		person.PersonProfileID != "person-1" || person.PersonName != "Mark" ||
+		!strings.Contains(analysis.Warning, "face identification was unavailable") {
+		t.Fatalf("eligible = %+v, person = %+v, warning = %q", identifier.frames, person, analysis.Warning)
+	}
+}
+
 func (r *retentionVideoRepository) SaveVideoEpisodes(context.Context, VideoJob, []VideoEpisodeDraft, int) error {
 	r.saved = true
 	return nil

@@ -230,6 +230,56 @@ func TestStructuredVisualEvidenceUsesObservationLocalIDs(t *testing.T) {
 	}
 }
 
+func TestStructuredVisualEvidenceReusesResolvedPersonAcrossSessions(t *testing.T) {
+	job := func(source, session, asset, observation string) VideoJob {
+		return VideoJob{
+			SourceIdentity: source, SessionID: session, MediaAssetID: asset, OwnerUserID: "user-1",
+			EpisodeStart: 0, EpisodeEnd: 5,
+			EpisodeVisual: []VideoObservation{{
+				ObservationID: observation,
+				People: []VisualPerson{{
+					VisualLabel: "person-1", PersonProfileID: "person-42",
+					PersonIdentityStatus: "confirmed", PersonName: "Mark",
+				}},
+			}},
+		}
+	}
+	first := structuredVisualEvidence(job("window-1", "session-1", "asset-1", "obs-1"))
+	second := structuredVisualEvidence(job("window-2", "session-2", "asset-2", "obs-2"))
+	firstPerson := findStructuredEntity(first.Entities, "person-profile:person-42")
+	secondPerson := findStructuredEntity(second.Entities, "person-profile:person-42")
+	if firstPerson == nil || secondPerson == nil || firstPerson.Name != "Mark" || secondPerson.Name != "Mark" {
+		t.Fatalf("resolved people = %+v / %+v", first.Entities, second.Entities)
+	}
+}
+
+func TestConfirmedVoiceAndVisualIdentityUseSameCanonicalPerson(t *testing.T) {
+	voice := structuredVideoConversation(VideoJob{
+		EpisodeID: "speech-1", SessionID: "session-1", OwnerUserID: "user-1",
+		EpisodeStart: 0, EpisodeEnd: 2,
+		Transcript: Transcript{Segments: []TranscriptSegment{{
+			StartTime: 0, EndTime: 2, Speaker: "A", SpeakerRole: "other",
+			SpeakerProfileID: "voice-1", PersonProfileID: "person-42", SpeakerName: "Mark",
+			Text: "Hello.",
+		}}},
+	})
+	visual := structuredVisualEvidence(VideoJob{
+		SourceIdentity: "visual-1", SessionID: "session-1", MediaAssetID: "asset-1",
+		OwnerUserID: "user-1", EpisodeStart: 0, EpisodeEnd: 2,
+		EpisodeVisual: []VideoObservation{{ObservationID: "observation-1", People: []VisualPerson{{
+			VisualLabel: "person-1", PersonProfileID: "person-42", PersonName: "Mark",
+		}}}},
+	})
+	if voice == nil || visual == nil ||
+		findStructuredEntity(voice.Entities, "person-profile:person-42") == nil ||
+		findStructuredEntity(visual.Entities, "person-profile:person-42") == nil {
+		t.Fatalf("voice/visual entities = %+v / %+v", voice, visual)
+	}
+	if findStructuredEntity(voice.Entities, "speaker-profile:voice-1") != nil {
+		t.Fatalf("linked voice retained a separate speaker node: %+v", voice.Entities)
+	}
+}
+
 func TestVisualRelationPredicateKeepsVocabularyBounded(t *testing.T) {
 	if visualRelationPredicate("plays with") != "PLAYS_WITH" ||
 		visualRelationPredicate("invented predicate") != "INTERACTS_WITH" {

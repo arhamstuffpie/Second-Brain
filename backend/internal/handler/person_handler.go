@@ -17,6 +17,7 @@ type PersonHandler interface {
 	RecognizeFace(c *gin.Context)
 	List(c *gin.Context)
 	Update(c *gin.Context)
+	ConfirmIdentity(c *gin.Context)
 	Delete(c *gin.Context)
 }
 
@@ -119,6 +120,27 @@ func (h *personHandler) Update(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, result, "person profile updated")
+}
+
+func (h *personHandler) ConfirmIdentity(c *gin.Context) {
+	principal, ok := utils.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required")
+		return
+	}
+	var request service.ConfirmPersonIdentityInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid identity confirmation")
+		return
+	}
+	request.OwnerUserID = principal.Subject
+	result, err := h.service.ConfirmIdentity(c.Request.Context(), request)
+	if err != nil {
+		_ = c.Error(err)
+		response.ServiceError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, result, "voice and visual identity linked")
 }
 
 func (h *personHandler) Delete(c *gin.Context) {

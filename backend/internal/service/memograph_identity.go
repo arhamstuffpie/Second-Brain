@@ -44,6 +44,7 @@ type groundedConversationSegment struct {
 	Speaker          string
 	Role             string
 	SpeakerProfileID string
+	PersonProfileID  string
 	SpeakerName      string
 	Text             string
 	Confidence       *float64
@@ -56,7 +57,8 @@ func structuredVoiceConversation(job VoiceJob) *StructuredGraph {
 			StartTime: segment.StartTime, EndTime: segment.EndTime,
 			Speaker: segment.Speaker, Role: segment.SpeakerRole,
 			SpeakerProfileID: segment.SpeakerProfileID, SpeakerName: segment.SpeakerName,
-			Text: segment.Text, Confidence: segment.Confidence,
+			PersonProfileID: segment.PersonProfileID,
+			Text:            segment.Text, Confidence: segment.Confidence,
 		})
 	}
 	return buildStructuredConversation(
@@ -77,7 +79,8 @@ func structuredVideoConversation(job VideoJob) *StructuredGraph {
 			StartTime: start, EndTime: end, Speaker: segment.Speaker,
 			Role: segment.SpeakerRole, Text: segment.Text,
 			SpeakerProfileID: segment.SpeakerProfileID, SpeakerName: segment.SpeakerName,
-			Confidence: segment.Confidence,
+			PersonProfileID: segment.PersonProfileID,
+			Confidence:      segment.Confidence,
 		})
 	}
 	return buildStructuredConversation(
@@ -121,12 +124,18 @@ func structuredVisualEvidence(job VideoJob) *StructuredGraph {
 			}
 			id := strings.Join([]string{job.MediaAssetID, observation.ObservationID, label}, ":")
 			name := "Unidentified " + strings.ReplaceAll(label, "-", " ")
+			if personProfileID := strings.TrimSpace(person.PersonProfileID); personProfileID != "" {
+				id = "person-profile:" + personProfileID
+				if resolvedName := strings.TrimSpace(person.PersonName); resolvedName != "" {
+					name = resolvedName
+				}
+			}
 			labels[label] = entityRef{id: id, name: name}
 			if !seen[id] {
 				seen[id] = true
 				graph.Entities = append(graph.Entities, StructuredEntity{
 					CanonicalID: id, Name: name,
-					Type: "person", Confidence: person.Confidence,
+					Type: "Person", Confidence: person.Confidence,
 				})
 				fact := "Visual evidence shows " + name + "."
 				if action := strings.TrimSpace(person.Action); action != "" {
@@ -242,7 +251,7 @@ func buildStructuredConversation(
 		}
 		speakerID, speakerName := structuredSpeakerIdentity(
 			ownerID, sessionID, segment.Role, segment.Speaker,
-			segment.SpeakerProfileID, segment.SpeakerName,
+			segment.SpeakerProfileID, segment.SpeakerName, segment.PersonProfileID,
 		)
 		if _, exists := seenEntities[speakerID]; !exists {
 			seenEntities[speakerID] = struct{}{}
@@ -347,6 +356,16 @@ func structuredSpeakerIdentity(
 	}
 	if len(persistentIdentity) > 1 {
 		speakerName = persistentIdentity[1]
+	}
+	personProfileID := ""
+	if len(persistentIdentity) > 2 {
+		personProfileID = strings.TrimSpace(persistentIdentity[2])
+	}
+	if personProfileID != "" {
+		if speakerName = strings.TrimSpace(speakerName); speakerName == "" {
+			speakerName = "Unlabeled person"
+		}
+		return "person-profile:" + personProfileID, speakerName
 	}
 	if speakerProfileID = strings.TrimSpace(speakerProfileID); speakerProfileID != "" {
 		if speakerName = strings.TrimSpace(speakerName); speakerName == "" {

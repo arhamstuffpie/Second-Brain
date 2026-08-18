@@ -85,8 +85,8 @@ WITH account_lock AS MATERIALIZED (
         updated_at = NOW()
     FROM selected s
     WHERE p.id=s.id
-    RETURNING p.id, p.status, p.display_name, p.relationship_category,
-              p.relationship_label, p.embedding_model, p.embedding_dimensions,
+	    RETURNING p.id, p.status, p.display_name, p.relationship_category,
+	              p.relationship_label, COALESCE(p.person_profile_id,''), p.embedding_model, p.embedding_dimensions,
               p.sample_count, p.first_seen_at, p.last_seen_at, p.expires_at,
               false AS created, s.score, s.runner_up_score
 ), inserted AS (
@@ -98,7 +98,8 @@ WITH account_lock AS MATERIALIZED (
     WHERE NOT EXISTS (SELECT 1 FROM matched)
       AND (SELECT COUNT(*) FROM voice_speaker_profiles
            WHERE owner_user_id=$1 AND status <> 'archived') < 20
-    RETURNING id, status, display_name, relationship_category, relationship_label,
+	    RETURNING id, status, display_name, relationship_category, relationship_label,
+	              COALESCE(person_profile_id,''),
               embedding_model, embedding_dimensions, sample_count, first_seen_at,
               last_seen_at, expires_at, true AS created,
               NULL::double precision AS score, NULL::double precision AS runner_up_score
@@ -116,6 +117,7 @@ SELECT * FROM inserted`
 	).Scan(
 		&profile.ID, &profile.Status, &profile.DisplayName,
 		&profile.RelationshipCategory, &profile.RelationshipLabel,
+		&profile.PersonProfileID,
 		&profile.EmbeddingModel, &profile.EmbeddingDimensions, &profile.SampleCount,
 		&profile.FirstSeenAt, &profile.LastSeenAt, &profile.ExpiresAt,
 		&resolution.Created, &resolution.Similarity, &resolution.RunnerUpSimilarity,
@@ -196,7 +198,7 @@ func (r *speakerProfileRepository) ListSpeakerProfiles(
 ) ([]service.SpeakerProfile, error) {
 	const query = `
 SELECT id, status, display_name, relationship_category, relationship_label,
-       embedding_model, embedding_dimensions, sample_count, first_seen_at,
+	       COALESCE(person_profile_id,''), embedding_model, embedding_dimensions, sample_count, first_seen_at,
        last_seen_at, expires_at
 FROM voice_speaker_profiles
 WHERE owner_user_id=$1 AND status <> 'archived'
@@ -212,6 +214,7 @@ ORDER BY CASE status WHEN 'provisional' THEN 0 ELSE 1 END, last_seen_at DESC, id
 		if err := rows.Scan(
 			&profile.ID, &profile.Status, &profile.DisplayName,
 			&profile.RelationshipCategory, &profile.RelationshipLabel,
+			&profile.PersonProfileID,
 			&profile.EmbeddingModel, &profile.EmbeddingDimensions, &profile.SampleCount,
 			&profile.FirstSeenAt, &profile.LastSeenAt, &profile.ExpiresAt,
 		); err != nil {
@@ -370,7 +373,7 @@ WITH updated_profile AS (
     RETURNING j.episode_id
 )
 SELECT id, status, display_name, relationship_category, relationship_label,
-       embedding_model, embedding_dimensions, sample_count, first_seen_at,
+	       COALESCE(person_profile_id,''), embedding_model, embedding_dimensions, sample_count, first_seen_at,
        last_seen_at, expires_at
 FROM updated_profile`
 	var profile service.SpeakerProfile
@@ -380,6 +383,7 @@ FROM updated_profile`
 	).Scan(
 		&profile.ID, &profile.Status, &profile.DisplayName,
 		&profile.RelationshipCategory, &profile.RelationshipLabel,
+		&profile.PersonProfileID,
 		&profile.EmbeddingModel, &profile.EmbeddingDimensions, &profile.SampleCount,
 		&profile.FirstSeenAt, &profile.LastSeenAt, &profile.ExpiresAt,
 	)

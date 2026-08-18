@@ -22,6 +22,7 @@ func (faceRecognizerStub) Model() string    { return "sface" }
 type personRepositoryCapture struct {
 	enrollment EnrollFaceProfileInput
 	match      MatchFaceProfileInput
+	confirmed  ConfirmPersonIdentityInput
 }
 
 func (r *personRepositoryCapture) EnrollFace(_ context.Context, input EnrollFaceProfileInput) (PersonProfile, error) {
@@ -37,6 +38,10 @@ func (*personRepositoryCapture) ListPeople(context.Context, string) ([]PersonPro
 }
 func (*personRepositoryCapture) UpdatePerson(context.Context, UpdatePersonInput) (PersonProfile, error) {
 	return PersonProfile{}, nil
+}
+func (r *personRepositoryCapture) ConfirmIdentity(_ context.Context, input ConfirmPersonIdentityInput) (PersonProfile, error) {
+	r.confirmed = input
+	return PersonProfile{ID: "person-1"}, nil
 }
 func (*personRepositoryCapture) DeletePerson(context.Context, string, string) ([]string, error) {
 	return nil, nil
@@ -73,5 +78,24 @@ func TestPersonServiceKeepsEmbeddingsServerSide(t *testing.T) {
 	})
 	if err != nil || !match.Matched || len(repository.match.Embedding) != 2 {
 		t.Fatalf("match = %#v, repository input = %#v, error = %v", match, repository.match, err)
+	}
+}
+
+func TestPersonServiceRequiresExplicitIdentityConfirmation(t *testing.T) {
+	repository := &personRepositoryCapture{}
+	people := newPersonService(repository, nil, stubAudioStore{}, config.FaceRecognitionConfig{})
+	_, err := people.ConfirmIdentity(context.Background(), ConfirmPersonIdentityInput{
+		OwnerUserID: "owner", RecordingIDs: []string{"recording-1"},
+		VisualLabel: "person-1", VoiceSpeakerProfileID: "speaker-1",
+	})
+	if err == nil || repository.confirmed.OwnerUserID != "" {
+		t.Fatalf("error = %v, confirmation = %+v", err, repository.confirmed)
+	}
+	result, err := people.ConfirmIdentity(context.Background(), ConfirmPersonIdentityInput{
+		OwnerUserID: " owner ", RecordingIDs: []string{"recording-1", " recording-1 "},
+		VisualLabel: " person-1 ", VoiceSpeakerProfileID: " speaker-1 ", Confirmed: true,
+	})
+	if err != nil || result.ID != "person-1" || len(repository.confirmed.RecordingIDs) != 1 {
+		t.Fatalf("result = %+v, confirmation = %+v, error = %v", result, repository.confirmed, err)
 	}
 }

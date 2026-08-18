@@ -12,6 +12,8 @@ This repository now includes:
   action events, and an independent temporal job queue;
 - authenticated `/api/v1/people` enrollment, recognition, naming, listing, and
   deletion routes; and
+- automatic face detection, embedding, account-scoped matching, and canonical
+  person IDs in the server-side video-analysis worker; and
 - deterministic action and face/voice-link validators with model-free fixtures.
 
 The mobile app remains capture/review only. Raw face vectors are accepted only
@@ -184,7 +186,8 @@ FACE_EMBEDDER_DETECTOR_SHA256=8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f42806
 FACE_EMBEDDER_MODEL_PATH=/models/face_recognition_sface_2021dec.onnx
 FACE_EMBEDDER_MODEL=opencv/sface-2021dec@sha256:0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
 FACE_EMBEDDER_MODEL_SHA256=0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
-FACE_EMBEDDER_API_KEY=replace-with-a-managed-secret
+# Optional only for loopback development; set a managed secret in production.
+FACE_EMBEDDER_API_KEY=
 FACE_EMBEDDER_MAX_UPLOAD_BYTES=10485760
 ```
 
@@ -193,7 +196,8 @@ The Go API should use:
 ```dotenv
 APP_FACE_RECOGNITION_PROVIDER=local
 APP_FACE_RECOGNITION_BASE_URL=http://127.0.0.1:8092
-APP_FACE_RECOGNITION_API_KEY=replace-with-the-same-managed-secret
+# Must equal FACE_EMBEDDER_API_KEY when that service key is set.
+APP_FACE_RECOGNITION_API_KEY=
 APP_FACE_RECOGNITION_MODEL=opencv/sface-2021dec@sha256:0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
 APP_FACE_RECOGNITION_TIMEOUT=10s
 
@@ -205,6 +209,10 @@ APP_FACE_MAX_UPLOAD_MB=10
 
 Bind local development to `127.0.0.1:8092`. For a separate host, use a private
 network or HTTPS and treat the bearer key as a managed secret.
+
+The API key is not required when both variables are empty and the embedder is
+bound to loopback. It is required for production or any non-loopback/private
+deployment; configure the same value on both services.
 
 Apply the schema and start the API:
 
@@ -246,6 +254,26 @@ PATCH  /api/v1/people/:person_profile_id
 DELETE /api/v1/people/:person_profile_id
 ```
 
+When a user has reviewed a recording and explicitly confirmed that one visual
+label and one named voice are the same person, link them atomically:
+
+```bash
+curl -X POST http://localhost:8181/api/v1/people/identity-links \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recording_ids": ["recording-id-1", "recording-id-2"],
+    "visual_label": "person-1",
+    "voice_speaker_profile_id": "speaker-profile-id",
+    "confirmed": true
+  }'
+```
+
+This creates or reuses one canonical person, assigns that ID to the confirmed
+visual observations and voice segments, stores accepted manual-link evidence,
+and requeues the affected speech and visual graph revisions. It never infers a
+link from co-occurrence alone.
+
 The recognition response contains the stable person ID, status, scores, and
 quality reasons only. It never contains embeddings or storage paths.
 
@@ -272,6 +300,19 @@ Do not average arbitrary images blindly. Compute the sample-to-centroid cosine
 scores and reject an outlier or a mixed-identity enrollment for human review.
 
 ## Recognition
+
+The recording worker now runs this path automatically after visual analysis. It
+only sends frames containing exactly one visually verified, physically present,
+face-visible person to YuNet/SFace. A known match receives the existing
+`person_profile_id`. A new unambiguous face creates a 30-day, consent-pending
+provisional profile and retains only the cropped face review sample. Ambiguous
+matches remain unidentified. Face-service failures add a batch warning and do
+not fail speech or visual memory processing.
+
+Memograph uses `person-profile:<id>` for a resolved face, so the same face keeps
+one node across recording sessions. Naming a voice profile does not by itself
+name or link a face profile: that link requires independent active-speaker
+evidence or explicit review.
 
 Recognition should happen per temporal face track, not per isolated frame:
 

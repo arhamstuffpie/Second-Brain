@@ -90,6 +90,9 @@ func (stubPersonRepository) ListPeople(context.Context, string) ([]PersonProfile
 func (stubPersonRepository) UpdatePerson(context.Context, UpdatePersonInput) (PersonProfile, error) {
 	return PersonProfile{}, nil
 }
+func (stubPersonRepository) ConfirmIdentity(context.Context, ConfirmPersonIdentityInput) (PersonProfile, error) {
+	return PersonProfile{}, nil
+}
 func (stubPersonRepository) DeletePerson(context.Context, string, string) ([]string, error) {
 	return []string{}, nil
 }

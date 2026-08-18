@@ -152,6 +152,9 @@ func (fakePersonService) ListPeople(context.Context, string) ([]service.PersonPr
 func (fakePersonService) UpdatePerson(context.Context, service.UpdatePersonInput) (service.PersonProfile, error) {
 	return service.PersonProfile{}, nil
 }
+func (fakePersonService) ConfirmIdentity(context.Context, service.ConfirmPersonIdentityInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
 func (fakePersonService) DeletePerson(context.Context, string, string) error { return nil }
 
 func (f fakeAuthService) Signup(context.Context, string, string) (service.AuthResult, error) {

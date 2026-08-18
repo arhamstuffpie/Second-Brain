@@ -199,11 +199,17 @@ type VisualScene struct {
 }
 
 type VisualPerson struct {
-	VisualLabel string   `json:"visual_label"`
-	Appearance  string   `json:"appearance"`
-	Position    string   `json:"position"`
-	Action      string   `json:"action"`
-	Confidence  *float64 `json:"confidence,omitempty"`
+	VisualLabel          string   `json:"visual_label"`
+	Appearance           string   `json:"appearance"`
+	Position             string   `json:"position"`
+	Action               string   `json:"action"`
+	PhysicalPresence     bool     `json:"physical_presence"`
+	FaceVisible          bool     `json:"face_visible"`
+	PersonProfileID      string   `json:"person_profile_id,omitempty"`
+	PersonIdentityStatus string   `json:"person_identity_status,omitempty"`
+	PersonName           string   `json:"person_name,omitempty"`
+	FaceMatchConfidence  *float64 `json:"face_match_confidence,omitempty"`
+	Confidence           *float64 `json:"confidence,omitempty"`
 }
 
 type VisualRelation struct {

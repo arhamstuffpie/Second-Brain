@@ -101,6 +101,7 @@ type PersonRepository interface {
 	MatchFace(ctx context.Context, input MatchFaceProfileInput) (FaceMatch, error)
 	ListPeople(ctx context.Context, ownerUserID string) ([]PersonProfile, error)
 	UpdatePerson(ctx context.Context, input UpdatePersonInput) (PersonProfile, error)
+	ConfirmIdentity(ctx context.Context, input ConfirmPersonIdentityInput) (PersonProfile, error)
 	DeletePerson(ctx context.Context, id, ownerUserID string) ([]string, error)
 }
 
@@ -209,6 +210,7 @@ type PersonService interface {
 	RecognizeFace(ctx context.Context, input FaceRecognitionRequest) (FaceMatch, error)
 	ListPeople(ctx context.Context, ownerUserID string) ([]PersonProfile, error)
 	UpdatePerson(ctx context.Context, input UpdatePersonInput) (PersonProfile, error)
+	ConfirmIdentity(ctx context.Context, input ConfirmPersonIdentityInput) (PersonProfile, error)
 	DeletePerson(ctx context.Context, id, ownerUserID string) error
 }
 
@@ -381,6 +383,7 @@ type TranscriptSegment struct {
 	Speaker               string   `json:"speaker"`
 	SpeakerRole           string   `json:"speaker_role"`
 	SpeakerProfileID      string   `json:"speaker_profile_id,omitempty"`
+	PersonProfileID       string   `json:"person_profile_id,omitempty"`
 	SpeakerName           string   `json:"speaker_name,omitempty"`
 	SpeakerRelationship   string   `json:"speaker_relationship,omitempty"`
 	SpeakerIdentityStatus string   `json:"speaker_identity_status,omitempty"`
@@ -421,6 +424,7 @@ type SpeakerIdentificationInput struct {
 
 type SpeakerProfile struct {
 	ID                   string          `json:"id"`
+	PersonProfileID      string          `json:"person_profile_id,omitempty"`
 	Status               string          `json:"status"`
 	DisplayName          string          `json:"display_name"`
 	RelationshipCategory string          `json:"relationship_category"`
@@ -579,6 +583,7 @@ type EpisodeSegment struct {
 	Speaker               string   `json:"speaker"`
 	SpeakerRole           string   `json:"speaker_role"`
 	SpeakerProfileID      string   `json:"speaker_profile_id,omitempty"`
+	PersonProfileID       string   `json:"person_profile_id,omitempty"`
 	SpeakerName           string   `json:"speaker_name,omitempty"`
 	SpeakerRelationship   string   `json:"speaker_relationship,omitempty"`
 	SpeakerIdentityStatus string   `json:"speaker_identity_status,omitempty"`
