@@ -33,6 +33,9 @@ func (r *personRepositoryCapture) MatchFace(_ context.Context, input MatchFacePr
 	r.match = input
 	return FaceMatch{Matched: true, PersonProfileID: "person-1", Reasons: []string{}}, nil
 }
+func (*personRepositoryCapture) SavePersonTrack(context.Context, SavePersonTrackInput) error {
+	return nil
+}
 func (*personRepositoryCapture) ListPeople(context.Context, string) ([]PersonProfile, error) {
 	return nil, nil
 }
@@ -51,7 +54,8 @@ func usableFaceRecognition() FaceRecognition {
 	return FaceRecognition{
 		Provider: "opencv", Detector: "yunet", Model: "sface", Dimensions: 2,
 		Faces: []DetectedFace{{
-			DetectionScore: .99, Quality: FaceQuality{Usable: true, Reasons: []string{}},
+			DetectionScore: .99, Quality: FaceQuality{Usable: true, Reasons: []string{}, Score: .9},
+			Pose:      FacePose{Bucket: "frontal"},
 			Embedding: []float64{.6, .8},
 		}},
 	}

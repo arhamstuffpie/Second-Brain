@@ -500,7 +500,7 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 		return s.finishFailedVideoBatch(ctx, job, batch, duration, err)
 	}
 	groundVisualObservations(&analysis, frames, job.ProcessingVersion)
-	s.identifyVisualFaces(ctx, job.OwnerUserID, &analysis, frames)
+	s.identifyVisualFaces(ctx, job.OwnerUserID, job.RecordingID, job.ProcessingVersion, &analysis, frames)
 	s.storeImportantEvidenceFrames(ctx, &analysis, frames)
 	analysis.Provider, analysis.Model = s.analyzer.Provider(), s.analyzer.Model()
 	analysis.ProcessingVersion = job.ProcessingVersion
@@ -515,7 +515,8 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 
 func (s *videoService) identifyVisualFaces(
 	ctx context.Context,
-	ownerUserID string,
+	ownerUserID, recordingID string,
+	processingVersion int,
 	analysis *VisualAnalysis,
 	frames []VideoFrame,
 ) {
@@ -535,7 +536,7 @@ func (s *videoService) identifyVisualFaces(
 	if len(eligible) == 0 {
 		return
 	}
-	identities, err := s.faceIdentifier.Identify(ctx, ownerUserID, eligible)
+	identities, err := s.faceIdentifier.Identify(ctx, ownerUserID, recordingID, processingVersion, eligible)
 	if err != nil {
 		analysis.Warning = appendTranscriptWarning(
 			analysis.Warning, "face identification was unavailable for some video frames",

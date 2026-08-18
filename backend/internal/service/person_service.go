@@ -8,6 +8,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/arham/ai-second-brain/internal/config"
 )
@@ -68,6 +69,7 @@ func (s *personService) EnrollFace(ctx context.Context, input FaceEnrollmentInpu
 		Embedding: face.Embedding, FileName: input.FileName, FilePath: stored.Path,
 		MediaType: input.MediaType, SizeBytes: stored.SizeBytes,
 		DetectionScore: face.DetectionScore, Quality: face.Quality,
+		Pose: face.Pose, ObservedAt: time.Now().UTC(),
 		ProvisionalTTL: s.config.ProvisionalTTL,
 	})
 	if err != nil {
@@ -106,6 +108,7 @@ func (s *personService) RecognizeFace(ctx context.Context, input FaceRecognition
 	match, err := s.repository.MatchFace(ctx, MatchFaceProfileInput{
 		OwnerUserID: input.OwnerUserID, Provider: result.Provider,
 		EmbeddingModel: result.Model, Embedding: face.Embedding,
+		PoseBucket:     face.Pose.Bucket,
 		MatchThreshold: s.config.MatchThreshold, AmbiguousMargin: s.config.AmbiguousMargin,
 	})
 	match.Quality = face.Quality

@@ -84,6 +84,7 @@ func (stubPersonRepository) EnrollFace(context.Context, EnrollFaceProfileInput) 
 func (stubPersonRepository) MatchFace(context.Context, MatchFaceProfileInput) (FaceMatch, error) {
 	return FaceMatch{}, nil
 }
+func (stubPersonRepository) SavePersonTrack(context.Context, SavePersonTrackInput) error { return nil }
 func (stubPersonRepository) ListPeople(context.Context, string) ([]PersonProfile, error) {
 	return []PersonProfile{}, nil
 }

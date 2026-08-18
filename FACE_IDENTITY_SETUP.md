@@ -107,7 +107,8 @@ It should return:
       "box": {"x": 121, "y": 64, "width": 190, "height": 190},
       "landmarks": [[171, 121], [258, 119], [217, 163], [178, 208], [252, 207]],
       "detection_score": 0.98,
-      "quality": {"usable": true, "reasons": []},
+      "quality": {"usable": true, "reasons": [], "score": 0.91},
+      "pose": {"yaw": -48.2, "pitch": 1.4, "roll": 0.8, "bucket": "left_profile"},
       "embedding": [0.012, -0.034]
     }
   ]
@@ -120,8 +121,9 @@ faces. It should L2-normalize every vector. A bounded request timeout and bearer
 key must be supported exactly as in `speaker-embedder`.
 
 Quality gating should reject, rather than try to recognize, faces that are too
-small, strongly blurred, badly exposed, severely turned away, heavily
-occluded, or missing reliable landmarks. Store the reasons with the evidence.
+small, strongly blurred, badly exposed, heavily occluded, or missing reliable
+landmarks. Usable turned faces are assigned a coarse pose bucket and retained
+in a compact embedding-only gallery; store pose and quality with the evidence.
 
 ## Model installation
 

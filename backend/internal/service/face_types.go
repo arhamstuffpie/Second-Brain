@@ -26,6 +26,14 @@ type FaceBox struct {
 type FaceQuality struct {
 	Usable  bool     `json:"usable"`
 	Reasons []string `json:"reasons"`
+	Score   float64  `json:"score"`
+}
+
+type FacePose struct {
+	Yaw    float64 `json:"yaw"`
+	Pitch  float64 `json:"pitch"`
+	Roll   float64 `json:"roll"`
+	Bucket string  `json:"bucket"`
 }
 
 type DetectedFace struct {
@@ -33,6 +41,7 @@ type DetectedFace struct {
 	Landmarks      [][]float64 `json:"landmarks"`
 	DetectionScore float64     `json:"detection_score"`
 	Quality        FaceQuality `json:"quality"`
+	Pose           FacePose    `json:"pose"`
 	Embedding      []float64   `json:"embedding,omitempty"`
 }
 

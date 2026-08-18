@@ -99,6 +99,7 @@ type SpeakerProfileRepository interface {
 type PersonRepository interface {
 	EnrollFace(ctx context.Context, input EnrollFaceProfileInput) (PersonProfile, error)
 	MatchFace(ctx context.Context, input MatchFaceProfileInput) (FaceMatch, error)
+	SavePersonTrack(ctx context.Context, input SavePersonTrackInput) error
 	ListPeople(ctx context.Context, ownerUserID string) ([]PersonProfile, error)
 	UpdatePerson(ctx context.Context, input UpdatePersonInput) (PersonProfile, error)
 	ConfirmIdentity(ctx context.Context, input ConfirmPersonIdentityInput) (PersonProfile, error)

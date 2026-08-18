@@ -54,7 +54,8 @@ func TestHTTPRecognizer(t *testing.T) {
 			"faces": []any{map[string]any{
 				"box":             map[string]any{"x": 1, "y": 2, "width": 10, "height": 10},
 				"landmarks":       [][]float64{{1, 1}, {2, 1}, {1.5, 2}, {1, 3}, {2, 3}},
-				"detection_score": .99, "quality": map[string]any{"usable": true, "reasons": []string{}},
+				"detection_score": .99, "quality": map[string]any{"usable": true, "reasons": []string{}, "score": .9},
+				"pose":      map[string]any{"yaw": 0, "pitch": 0, "roll": 0, "bucket": "frontal"},
 				"embedding": []float64{.6, .8},
 			}},
 		}), nil

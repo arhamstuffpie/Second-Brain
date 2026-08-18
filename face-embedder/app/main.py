@@ -69,6 +69,14 @@ class Box(BaseModel):
 class Quality(BaseModel):
     usable: bool
     reasons: list[str]
+    score: float
+
+
+class Pose(BaseModel):
+    yaw: float
+    pitch: float
+    roll: float
+    bucket: str
 
 
 class Face(BaseModel):
@@ -76,6 +84,7 @@ class Face(BaseModel):
     landmarks: list[list[float]]
     detection_score: float
     quality: Quality
+    pose: Pose
     embedding: list[float] | None = None
 
 
@@ -142,6 +151,8 @@ class Embedder:
         landmarks = np.asarray(row[4:14], dtype=np.float64).reshape(5, 2)
         score = float(row[14])
         reasons = self._quality_reasons(image, x, y, width, height, landmarks, score)
+        pose = self._pose(landmarks)
+        quality_score = self._quality_score(image, x, y, width, height, score)
         embedding: list[float] | None = None
         if not reasons:
             aligned = self.recognizer.alignCrop(image, row)
@@ -153,8 +164,41 @@ class Embedder:
         return Face(
             box=Box(x=max(0, x), y=max(0, y), width=max(0, width), height=max(0, height)),
             landmarks=landmarks.tolist(), detection_score=score,
-            quality=Quality(usable=not reasons, reasons=reasons), embedding=embedding,
+            quality=Quality(usable=not reasons, reasons=reasons, score=quality_score),
+            pose=pose, embedding=embedding,
         )
+
+    @staticmethod
+    def _pose(landmarks: np.ndarray) -> Pose:
+        left_eye, right_eye, nose, left_mouth, right_mouth = landmarks
+        eye_midpoint = (left_eye + right_eye) / 2
+        mouth_midpoint = (left_mouth + right_mouth) / 2
+        eye_distance = max(float(np.linalg.norm(right_eye - left_eye)), 1.0)
+        face_height = max(float(np.linalg.norm(mouth_midpoint - eye_midpoint)), 1.0)
+        yaw_ratio = float(np.clip((nose[0] - eye_midpoint[0]) / (eye_distance / 2), -1, 1))
+        yaw = float(np.degrees(np.arcsin(yaw_ratio)))
+        pitch = float(np.clip(((nose[1] - eye_midpoint[1]) / face_height - 0.55) * 90, -90, 90))
+        eye_delta = right_eye - left_eye
+        roll = float(np.degrees(np.arctan2(eye_delta[1], eye_delta[0])))
+        absolute_yaw = abs(yaw)
+        if absolute_yaw < 20:
+            bucket = "frontal"
+        elif absolute_yaw < 45:
+            bucket = "right_three_quarter" if yaw > 0 else "left_three_quarter"
+        else:
+            bucket = "right_profile" if yaw > 0 else "left_profile"
+        return Pose(yaw=round(yaw, 2), pitch=round(pitch, 2), roll=round(roll, 2), bucket=bucket)
+
+    @staticmethod
+    def _quality_score(image: np.ndarray, x: int, y: int, width: int, height: int, score: float) -> float:
+        image_height, image_width = image.shape[:2]
+        crop = image[max(0, y):min(image_height, y + height), max(0, x):min(image_width, x + width)]
+        if crop.size == 0:
+            return 0.0
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        sharpness = min(float(cv2.Laplacian(gray, cv2.CV_64F).var()) / 200.0, 1.0)
+        exposure = max(0.0, 1.0 - abs(float(gray.mean()) - 127.5) / 127.5)
+        return round(float(np.clip(score * 0.5 + sharpness * 0.3 + exposure * 0.2, 0, 1)), 4)
 
     def _quality_reasons(
         self, image: np.ndarray, x: int, y: int, width: int, height: int,
@@ -188,9 +232,6 @@ class Embedder:
             eye_angle = abs(float(np.degrees(np.arctan2(eye_delta[1], eye_delta[0]))))
             if eye_angle > 30:
                 reasons.append("severe_roll")
-            eye_midpoint = (landmarks[0] + landmarks[1]) / 2
-            if abs(float(landmarks[2, 0] - eye_midpoint[0])) > eye_distance * 0.45:
-                reasons.append("severe_yaw")
         return reasons
 
 

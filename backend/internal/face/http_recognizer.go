@@ -159,6 +159,9 @@ func (r *HTTPRecognizer) Recognize(ctx context.Context, input service.FaceRecogn
 		if detected.Box.Width <= 0 || detected.Box.Height <= 0 || detected.DetectionScore < 0 || detected.DetectionScore > 1 || len(detected.Landmarks) != 5 {
 			return service.FaceRecognition{}, permanent(fmt.Errorf("face recognition response contains invalid detection data"))
 		}
+		if detected.Quality.Score < 0 || detected.Quality.Score > 1 || !validPose(detected.Pose) {
+			return service.FaceRecognition{}, permanent(fmt.Errorf("face recognition response contains invalid quality or pose data"))
+		}
 		if detected.Quality.Usable {
 			if len(detected.Embedding) != decoded.Dimensions {
 				return service.FaceRecognition{}, permanent(fmt.Errorf("face recognition response has invalid embedding dimensions"))
@@ -181,6 +184,21 @@ func (r *HTTPRecognizer) Recognize(ctx context.Context, input service.FaceRecogn
 		Provider: decoded.Provider, Detector: decoded.Detector, Model: decoded.Model,
 		Dimensions: decoded.Dimensions, Faces: decoded.Faces,
 	}, nil
+}
+
+func validPose(pose service.FacePose) bool {
+	if math.IsNaN(pose.Yaw) || math.IsNaN(pose.Pitch) || math.IsNaN(pose.Roll) ||
+		math.IsInf(pose.Yaw, 0) || math.IsInf(pose.Pitch, 0) || math.IsInf(pose.Roll, 0) ||
+		pose.Yaw < -90 || pose.Yaw > 90 || pose.Pitch < -90 || pose.Pitch > 90 ||
+		pose.Roll < -180 || pose.Roll > 180 {
+		return false
+	}
+	switch pose.Bucket {
+	case "frontal", "left_three_quarter", "left_profile", "right_three_quarter", "right_profile":
+		return true
+	default:
+		return false
+	}
 }
 
 func readBounded(body io.Reader) ([]byte, error) {

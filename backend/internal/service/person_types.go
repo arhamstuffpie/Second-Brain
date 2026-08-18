@@ -41,6 +41,10 @@ type EnrollFaceProfileInput struct {
 	SizeBytes            int64
 	DetectionScore       float64
 	Quality              FaceQuality
+	Pose                 FacePose
+	SourceRecordingID    string
+	SourceTrackID        string
+	ObservedAt           time.Time
 	ProvisionalTTL       time.Duration
 }
 
@@ -49,8 +53,22 @@ type MatchFaceProfileInput struct {
 	Provider        string
 	EmbeddingModel  string
 	Embedding       []float64
+	PoseBucket      string
 	MatchThreshold  float64
 	AmbiguousMargin float64
+}
+
+type SavePersonTrackInput struct {
+	ID                      string
+	OwnerUserID             string
+	RecordingID             string
+	StartTime               float64
+	EndTime                 float64
+	TemporaryVisualLabel    string
+	ResolvedPersonProfileID string
+	TrackingConfidence      float64
+	EvidenceFrameIDs        []string
+	ProcessingVersion       int
 }
 
 type UpdatePersonInput struct {

@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, StyleSheet, Switch, Text, View } from 'react-native';
+import {
+  Alert,
+  Animated,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 
 import {
   Body,
@@ -28,6 +38,20 @@ type TranscriptionModelDraft = {
   model: string;
   apiKey: string;
 };
+
+type SettingsSection = 'voice' | 'transcription' | 'connections' | 'capture' | 'account';
+
+const settingsSections: Array<{
+  key: SettingsSection;
+  label: string;
+  description: string;
+}> = [
+  { key: 'voice', label: 'Voice & speakers', description: 'Recognition and labels' },
+  { key: 'transcription', label: 'Transcription', description: 'Provider and model' },
+  { key: 'connections', label: 'Connections', description: 'Backend and memory' },
+  { key: 'capture', label: 'Capture', description: 'Quality and efficiency' },
+  { key: 'account', label: 'Account', description: 'Privacy and sign out' },
+];
 
 function ToggleRow({
   label,
@@ -63,6 +87,7 @@ function ToggleRow({
 
 export function SettingsScreen() {
   const theme = useTheme();
+  const { width } = useWindowDimensions();
   const {
     settings,
     auth,
@@ -83,6 +108,7 @@ export function SettingsScreen() {
     showError,
   } = useApp();
   const [draft, setDraft] = useState<AppSettings>(settings);
+  const [activeSection, setActiveSection] = useState<SettingsSection>('voice');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [health, setHealth] = useState<'idle' | 'checking' | 'healthy' | 'failed'>('idle');
@@ -283,6 +309,43 @@ export function SettingsScreen() {
     transcriptionModel.profile?.source === 'account' &&
     transcriptionModel.profile.provider === modelProvider &&
     transcriptionModel.profile.api_key_configured;
+  const wideNavigation = width >= 700;
+
+  const sectionNavigation = settingsSections.map((section) => {
+    const selected = section.key === activeSection;
+    return (
+      <Pressable
+        key={section.key}
+        accessibilityRole="tab"
+        accessibilityState={{ selected }}
+        accessibilityLabel={section.label}
+        accessibilityHint={`Shows ${section.description.toLowerCase()} settings`}
+        onPress={() => setActiveSection(section.key)}
+        style={({ pressed }) => [
+          styles.sectionNavItem,
+          wideNavigation && styles.sectionNavItemWide,
+          {
+            backgroundColor: selected ? theme.backgroundSelected : 'transparent',
+            borderColor: selected ? theme.border : 'transparent',
+          },
+          pressed && { opacity: 0.7 },
+        ]}>
+        <Text
+          numberOfLines={wideNavigation ? 2 : 1}
+          style={[
+            styles.sectionNavLabel,
+            { color: selected ? theme.text : theme.textSecondary },
+          ]}>
+          {section.label}
+        </Text>
+        {wideNavigation ? (
+          <Text style={[styles.sectionNavDescription, { color: theme.textSecondary }]}>
+            {section.description}
+          </Text>
+        ) : null}
+      </Pressable>
+    );
+  });
 
   return (
     <View style={styles.root}>
@@ -299,6 +362,25 @@ export function SettingsScreen() {
         }
       />
 
+      <View style={[styles.settingsLayout, wideNavigation && styles.settingsLayoutWide]}>
+        {wideNavigation ? (
+          <View accessibilityRole="tablist" style={styles.sectionNavRail}>
+            {sectionNavigation}
+          </View>
+        ) : (
+          <ScrollView
+            horizontal
+            accessibilityRole="tablist"
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.sectionNavBar}>
+            {sectionNavigation}
+          </ScrollView>
+        )}
+
+        <View style={styles.settingsPanel}>
+
+      {activeSection === 'voice' ? (
+        <>
       <Card>
         <View style={styles.voiceHeader}>
           <View style={styles.voiceHeaderCopy}>
@@ -410,7 +492,10 @@ export function SettingsScreen() {
       </Card>
 
       <SpeakerProfilesCard />
+        </>
+      ) : null}
 
+      {activeSection === 'transcription' ? (
       <Card>
         <View style={styles.voiceHeader}>
           <View style={styles.voiceHeaderCopy}>
@@ -538,7 +623,10 @@ export function SettingsScreen() {
           </>
         )}
       </Card>
+      ) : null}
 
+      {activeSection === 'connections' ? (
+        <>
       <Card>
         <SectionLabel>Backend</SectionLabel>
         <Field
@@ -606,7 +694,13 @@ export function SettingsScreen() {
           placeholder="Studio, office, home…"
         />
       </Card>
+      {saveError ? <ErrorNotice title="Preferences were not saved" message={saveError} /> : null}
+      <Button label="Save preferences" onPress={() => void save()} loading={saving} />
+        </>
+      ) : null}
 
+      {activeSection === 'capture' ? (
+        <>
       <Card>
         <SectionLabel>Capture quality</SectionLabel>
         <Body muted>Video quality</Body>
@@ -668,7 +762,10 @@ export function SettingsScreen() {
 
       {saveError ? <ErrorNotice title="Preferences were not saved" message={saveError} /> : null}
       <Button label="Save preferences" onPress={() => void save()} loading={saving} />
+        </>
+      ) : null}
 
+      {activeSection === 'account' ? (
       <Card>
         <SectionLabel>Account & privacy</SectionLabel>
         <Body>{auth?.user.email}</Body>
@@ -687,6 +784,9 @@ export function SettingsScreen() {
           }
         />
       </Card>
+      ) : null}
+        </View>
+      </View>
       </Screen>
       {snackbarVisible && (
         <Animated.View
@@ -711,6 +811,22 @@ export function SettingsScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   screen: { paddingBottom: 96 },
+  settingsLayout: { gap: Spacing.lg },
+  settingsLayoutWide: { flexDirection: 'row', alignItems: 'flex-start' },
+  settingsPanel: { flex: 1, minWidth: 0, gap: Spacing.lg },
+  sectionNavBar: { gap: Spacing.sm, paddingRight: Spacing.lg },
+  sectionNavRail: { width: 164, gap: Spacing.xs },
+  sectionNavItem: {
+    minHeight: 44,
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Radius.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  sectionNavItemWide: { minHeight: 58 },
+  sectionNavLabel: { fontSize: 14, fontWeight: '800' },
+  sectionNavDescription: { marginTop: 2, fontSize: 11, lineHeight: 15 },
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.lg },
   toggleCopy: { flex: 1, gap: Spacing.xs },
   toggleLabel: { fontSize: 15, fontWeight: '800' },

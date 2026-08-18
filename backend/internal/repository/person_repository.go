@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/arham/ai-second-brain/internal/service"
 )
@@ -20,6 +21,12 @@ type personRepository struct{ *base }
 func newPersonRepository(base *base) *personRepository { return &personRepository{base: base} }
 
 func (r *personRepository) EnrollFace(ctx context.Context, input service.EnrollFaceProfileInput) (service.PersonProfile, error) {
+	if input.Pose.Bucket == "" {
+		input.Pose.Bucket = "frontal"
+	}
+	if input.ObservedAt.IsZero() {
+		input.ObservedAt = time.Now().UTC()
+	}
 	quality, err := json.Marshal(input.Quality)
 	if err != nil {
 		return service.PersonProfile{}, fmt.Errorf("encode face quality: %w", err)
@@ -69,17 +76,32 @@ WITH account_lock AS MATERIALIZED (
 ), inserted_sample AS (
     INSERT INTO face_profile_samples (
         owner_user_id, face_profile_id, file_name, file_path, media_type,
-        size_bytes, embedding, detection_score, quality
+        size_bytes, embedding, detection_score, quality, pose_bucket, yaw, pitch, roll,
+        quality_score, source_recording_id, source_track_id, observed_at
     )
-    SELECT $1, f.id, $10, $11, $12, $13, $9::double precision[], $14, $15::jsonb
-    FROM selected_face f RETURNING id
+    SELECT $1, f.id, NULLIF($10,''), NULLIF($11,''), NULLIF($12,''), NULLIF($13,0),
+           $9::double precision[], $14, $15::jsonb, $18, $19, $20, $21, $22,
+           NULLIF($23,''), NULLIF($24,''), $25
+    FROM selected_face f
+    WHERE (SELECT COUNT(*) FROM face_profile_samples existing
+           WHERE existing.owner_user_id=$1 AND existing.face_profile_id=f.id
+             AND existing.pose_bucket=$18) < 5
+      AND NOT EXISTS (
+          SELECT 1 FROM face_profile_samples existing
+          WHERE existing.owner_user_id=$1 AND existing.face_profile_id=f.id
+            AND existing.pose_bucket=$18
+            AND (SELECT SUM(pair.x * pair.y) /
+                        NULLIF(SQRT(SUM(pair.x * pair.x)) * SQRT(SUM(pair.y * pair.y)), 0)
+                 FROM unnest(existing.embedding, $9::double precision[]) AS pair(x,y)) >= 0.995
+      )
+    RETURNING id
 ), updated_existing_person AS (
     UPDATE person_profiles p SET last_seen_at=NOW(), updated_at=NOW(),
         consent_state=CASE WHEN $17='granted' THEN 'granted' ELSE p.consent_state END
-    FROM existing_person selected, inserted_sample
+    FROM existing_person selected
     WHERE p.id=selected.id AND p.owner_user_id=$1 RETURNING p.*
 ), final_person AS MATERIALIZED (
-    SELECT created.* FROM created_person created, inserted_sample
+    SELECT created.* FROM created_person created
     UNION ALL SELECT * FROM updated_existing_person
 )
 SELECT p.id, p.status, p.display_name, p.relationship_category, p.relationship_label,
@@ -96,6 +118,8 @@ FROM final_person p`
 		input.DetectorModel, input.EmbeddingModel, input.Embedding, input.FileName,
 		input.FilePath, input.MediaType, input.SizeBytes, input.DetectionScore, quality,
 		postgresInterval(input.ProvisionalTTL), input.ConsentState,
+		input.Pose.Bucket, input.Pose.Yaw, input.Pose.Pitch, input.Pose.Roll,
+		input.Quality.Score, input.SourceRecordingID, input.SourceTrackID, input.ObservedAt,
 	).Scan(
 		&person.ID, &person.Status, &person.DisplayName, &person.RelationshipCategory,
 		&person.RelationshipLabel, &person.ConsentState, &person.FirstSeenAt,
@@ -116,30 +140,40 @@ FROM final_person p`
 
 func (r *personRepository) MatchFace(ctx context.Context, input service.MatchFaceProfileInput) (service.FaceMatch, error) {
 	const query = `
-WITH candidates AS MATERIALIZED (
-    SELECT f.person_profile_id,
+WITH sample_scores AS MATERIALIZED (
+    SELECT f.person_profile_id, s.pose_bucket,
            (SELECT SUM(pair.x * pair.y) /
                           NULLIF(SQRT(SUM(pair.x * pair.x)) * SQRT(SUM(pair.y * pair.y)), 0)
-            FROM unnest(f.centroid, $4::double precision[]) AS pair(x, y)) AS score
-    FROM face_profiles f
+            FROM unnest(s.embedding, $4::double precision[]) AS pair(x, y)) AS score
+    FROM face_profiles f JOIN face_profile_samples s
+      ON s.owner_user_id=f.owner_user_id AND s.face_profile_id=f.id
     WHERE f.owner_user_id=$1 AND f.provider=$2 AND f.embedding_model=$3
       AND f.embedding_dimensions=cardinality($4::double precision[])
       AND f.person_profile_id IS NOT NULL AND f.status NOT IN ('rejected','archived')
       AND (f.expires_at IS NULL OR f.expires_at > NOW())
+), candidates AS MATERIALIZED (
+    SELECT DISTINCT ON (person_profile_id) person_profile_id, score
+    FROM sample_scores
+    ORDER BY person_profile_id,
+      score + CASE
+        WHEN pose_bucket=$5 THEN 0.02
+        WHEN split_part(pose_bucket,'_',1)=split_part($5,'_',1) THEN 0.01
+        ELSE 0
+      END DESC NULLS LAST
 ), ranked AS MATERIALIZED (
     SELECT person_profile_id, score, ROW_NUMBER() OVER (ORDER BY score DESC NULLS LAST, person_profile_id) rank
     FROM candidates
 )
 SELECT p.id, p.display_name, p.status, best.score,
        (SELECT score FROM ranked WHERE rank=2),
-       best.score >= $5 AND best.score - COALESCE((SELECT score FROM ranked WHERE rank=2), -1) >= $6
+       best.score >= $6 AND best.score - COALESCE((SELECT score FROM ranked WHERE rank=2), -1) >= $7
 FROM ranked best JOIN person_profiles p ON p.owner_user_id=$1 AND p.id=best.person_profile_id
 WHERE best.rank=1`
 	var match service.FaceMatch
 	var accepted bool
 	err := r.db.QueryRowContext(
 		ctx, query, input.OwnerUserID, input.Provider, input.EmbeddingModel,
-		input.Embedding, input.MatchThreshold, input.AmbiguousMargin,
+		input.Embedding, input.PoseBucket, input.MatchThreshold, input.AmbiguousMargin,
 	).Scan(
 		&match.PersonProfileID, &match.DisplayName, &match.IdentityStatus,
 		&match.Similarity, &match.RunnerUpSimilarity, &accepted,
@@ -157,6 +191,32 @@ WHERE best.rank=1`
 		match.Reasons = []string{"match_threshold_or_runner_up_margin_not_met"}
 	}
 	return match, nil
+}
+
+func (r *personRepository) SavePersonTrack(ctx context.Context, input service.SavePersonTrackInput) error {
+	evidence, err := json.Marshal(input.EvidenceFrameIDs)
+	if err != nil {
+		return fmt.Errorf("encode person track evidence: %w", err)
+	}
+	const query = `
+INSERT INTO person_tracks (
+    id,owner_user_id,recording_id,start_time,end_time,face_track_provider_ref,
+    temporary_visual_label,resolved_person_profile_id,tracking_confidence,
+    evidence_frame_ids,processing_version
+) VALUES ($1,$2,$3,$4,$5,'local-face-gallery-v1',$6,NULLIF($7,''),$8,$9::jsonb,$10)
+ON CONFLICT (id) DO UPDATE SET
+    end_time=GREATEST(person_tracks.end_time,EXCLUDED.end_time),
+    resolved_person_profile_id=COALESCE(person_tracks.resolved_person_profile_id,EXCLUDED.resolved_person_profile_id),
+    tracking_confidence=LEAST(person_tracks.tracking_confidence,EXCLUDED.tracking_confidence),
+    evidence_frame_ids=EXCLUDED.evidence_frame_ids,updated_at=NOW()`
+	if _, err := r.db.ExecContext(
+		ctx, query, input.ID, input.OwnerUserID, input.RecordingID, input.StartTime,
+		input.EndTime, input.TemporaryVisualLabel, input.ResolvedPersonProfileID,
+		input.TrackingConfidence, evidence, input.ProcessingVersion,
+	); err != nil {
+		return fmt.Errorf("save person track: %w", err)
+	}
+	return nil
 }
 
 func (r *personRepository) ConfirmIdentity(

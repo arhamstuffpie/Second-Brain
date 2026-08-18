@@ -24,7 +24,7 @@ type videoFaceIdentifierStub struct {
 }
 
 func (s *videoFaceIdentifierStub) Identify(
-	_ context.Context, _ string, frames []VideoFrame,
+	_ context.Context, _, _ string, _ int, frames []VideoFrame,
 ) (map[string]VideoFaceIdentity, error) {
 	s.frames = append([]VideoFrame(nil), frames...)
 	return s.identities, s.err
@@ -44,7 +44,7 @@ func TestIdentifyVisualFacesEnrichesOnlyOnePhysicalVisiblePersonAndFailsOpen(t *
 		{FrameID: "frame-3", People: []VisualPerson{{PhysicalPresence: true, FaceVisible: true}, {PhysicalPresence: true, FaceVisible: true}}},
 	}}
 	frames := []VideoFrame{{FrameID: "frame-1"}, {FrameID: "frame-2"}, {FrameID: "frame-3"}}
-	video.identifyVisualFaces(context.Background(), "owner-1", &analysis, frames)
+	video.identifyVisualFaces(context.Background(), "owner-1", "recording-1", 1, &analysis, frames)
 	person := analysis.Observations[0].People[0]
 	if len(identifier.frames) != 1 || identifier.frames[0].FrameID != "frame-1" ||
 		person.PersonProfileID != "person-1" || person.PersonName != "Mark" ||

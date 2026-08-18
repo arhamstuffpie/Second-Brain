@@ -1,12 +1,7 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"image"
-	"image/color"
-	"image/jpeg"
-	"io"
 	"testing"
 	"time"
 
@@ -15,45 +10,35 @@ import (
 
 type videoFaceRepository struct {
 	personRepositoryCapture
-	matchResult FaceMatch
-	enrollments int
+	matchResult  FaceMatch
+	matchResults []FaceMatch
+	matches      int
+	enrollments  int
+	tracks       []SavePersonTrackInput
 }
 
 func (r *videoFaceRepository) MatchFace(_ context.Context, input MatchFaceProfileInput) (FaceMatch, error) {
 	r.match = input
+	if r.matches < len(r.matchResults) {
+		result := r.matchResults[r.matches]
+		r.matches++
+		return result, nil
+	}
 	return r.matchResult, nil
 }
 
 func (r *videoFaceRepository) EnrollFace(_ context.Context, input EnrollFaceProfileInput) (PersonProfile, error) {
 	r.enrollment = input
 	r.enrollments++
+	if input.PersonProfileID != "" {
+		return PersonProfile{ID: input.PersonProfileID, Status: "provisional"}, nil
+	}
 	return PersonProfile{ID: "new-person", Status: "provisional"}, nil
 }
 
-type faceSampleStore struct {
-	payload []byte
-}
-
-func (s *faceSampleStore) Save(_ context.Context, _ string, input io.Reader) (StoredAudio, error) {
-	s.payload, _ = io.ReadAll(input)
-	return StoredAudio{Path: "face-sample.jpg", SizeBytes: int64(len(s.payload))}, nil
-}
-func (*faceSampleStore) Open(context.Context, string) (io.ReadCloser, error) { return nil, nil }
-func (*faceSampleStore) Delete(context.Context, string) error                { return nil }
-
-func faceTestJPEG(t *testing.T) []byte {
-	t.Helper()
-	value := image.NewRGBA(image.Rect(0, 0, 20, 20))
-	for y := 0; y < 20; y++ {
-		for x := 0; x < 20; x++ {
-			value.Set(x, y, color.RGBA{R: 180, G: 120, B: 90, A: 255})
-		}
-	}
-	var payload bytes.Buffer
-	if err := jpeg.Encode(&payload, value, nil); err != nil {
-		t.Fatal(err)
-	}
-	return payload.Bytes()
+func (r *videoFaceRepository) SavePersonTrack(_ context.Context, input SavePersonTrackInput) error {
+	r.tracks = append(r.tracks, input)
+	return nil
 }
 
 func TestVideoFaceIdentifierReusesCanonicalPersonAcrossSessions(t *testing.T) {
@@ -63,39 +48,59 @@ func TestVideoFaceIdentifierReusesCanonicalPersonAcrossSessions(t *testing.T) {
 	recognition := usableFaceRecognition()
 	recognition.Faces[0].Box = FaceBox{X: 2, Y: 2, Width: 10, Height: 10}
 	identifier := NewVideoFaceIdentifier(
-		repository, faceRecognizerStub{result: recognition}, &faceSampleStore{},
+		repository, faceRecognizerStub{result: recognition},
 		config.FaceRecognitionConfig{MatchThreshold: .5, AmbiguousMargin: .1},
 	)
 	for _, frameID := range []string{"session-1-frame", "session-2-frame"} {
-		identities, err := identifier.Identify(context.Background(), "owner-1", []VideoFrame{{
-			FrameID: frameID, MediaType: "image/jpeg", Image: faceTestJPEG(t),
+		identities, err := identifier.Identify(context.Background(), "owner-1", "recording-1", 1, []VideoFrame{{
+			FrameID: frameID, MediaType: "image/jpeg", Image: []byte("image"),
 		}})
 		if err != nil || identities[frameID].PersonProfileID != "person-1" || identities[frameID].DisplayName != "Mark" {
 			t.Fatalf("frame %s identities = %+v, error = %v", frameID, identities, err)
 		}
 	}
-	if repository.enrollments != 0 {
-		t.Fatalf("canonical match created %d new profiles", repository.enrollments)
+	if repository.enrollments != 2 || repository.enrollment.PersonProfileID != "person-1" {
+		t.Fatalf("canonical gallery additions = %d, last = %+v", repository.enrollments, repository.enrollment)
 	}
 }
 
-func TestVideoFaceIdentifierCreatesConsentPendingCroppedProfile(t *testing.T) {
+func TestVideoFaceIdentifierCreatesConsentPendingEmbeddingOnlyProfile(t *testing.T) {
 	repository := &videoFaceRepository{matchResult: FaceMatch{Reasons: []string{"no_compatible_face_profiles"}}}
-	store := &faceSampleStore{}
 	recognition := usableFaceRecognition()
 	recognition.Faces[0].Box = FaceBox{X: 2, Y: 2, Width: 10, Height: 10}
 	identifier := NewVideoFaceIdentifier(
-		repository, faceRecognizerStub{result: recognition}, store,
+		repository, faceRecognizerStub{result: recognition},
 		config.FaceRecognitionConfig{MatchThreshold: .5, AmbiguousMargin: .1, ProvisionalTTL: 30 * 24 * time.Hour},
 	)
-	identities, err := identifier.Identify(context.Background(), "owner-1", []VideoFrame{{
-		FrameID: "frame-1", MediaType: "image/jpeg", Image: faceTestJPEG(t),
+	identities, err := identifier.Identify(context.Background(), "owner-1", "recording-1", 1, []VideoFrame{{
+		FrameID: "frame-1", MediaType: "image/jpeg", Image: []byte("image"),
 	}})
 	if err != nil || identities["frame-1"].PersonProfileID != "new-person" {
 		t.Fatalf("identities = %+v, error = %v", identities, err)
 	}
 	if repository.enrollments != 1 || repository.enrollment.ConsentState != "pending" ||
-		repository.enrollment.DisplayName != "" || len(store.payload) == 0 {
-		t.Fatalf("enrollment = %+v, stored bytes = %d", repository.enrollment, len(store.payload))
+		repository.enrollment.FilePath != "" || repository.enrollment.SourceTrackID == "" || len(repository.tracks) != 1 {
+		t.Fatalf("enrollment = %+v, tracks = %+v", repository.enrollment, repository.tracks)
+	}
+}
+
+func TestVideoFaceIdentifierKeepsAmbiguousProfileInContinuousTrack(t *testing.T) {
+	repository := &videoFaceRepository{matchResults: []FaceMatch{
+		{Reasons: []string{"no_compatible_face_profiles"}},
+		{Ambiguous: true, Reasons: []string{"match_threshold_or_runner_up_margin_not_met"}},
+	}}
+	recognition := usableFaceRecognition()
+	recognition.Faces[0].Box = FaceBox{X: 2, Y: 2, Width: 10, Height: 10}
+	identifier := NewVideoFaceIdentifier(repository, faceRecognizerStub{result: recognition}, config.FaceRecognitionConfig{
+		MatchThreshold: .5, AmbiguousMargin: .1, ProvisionalTTL: 30 * 24 * time.Hour,
+	})
+	identities, err := identifier.Identify(context.Background(), "owner-1", "recording-1", 1, []VideoFrame{
+		{FrameID: "frame-1", Timestamp: 0, Image: []byte("image")},
+		{FrameID: "frame-2", Timestamp: 5, Image: []byte("image")},
+	})
+	if err != nil || identities["frame-1"].PersonProfileID != "new-person" ||
+		identities["frame-2"].PersonProfileID != "new-person" ||
+		identities["frame-1"].TrackID != identities["frame-2"].TrackID {
+		t.Fatalf("identities = %+v, error = %v", identities, err)
 	}
 }

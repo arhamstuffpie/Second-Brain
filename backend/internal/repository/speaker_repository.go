@@ -250,7 +250,7 @@ WITH updated_profile AS (
     WHERE id=$1 AND owner_user_id=$2 AND status <> 'archived'
       AND (expires_at IS NULL OR expires_at > NOW())
     RETURNING id, owner_user_id, status, display_name, relationship_category,
-              relationship_label, embedding_model, embedding_dimensions,
+              relationship_label, person_profile_id, embedding_model, embedding_dimensions,
               sample_count, first_seen_at, last_seen_at, expires_at
 ), updated_voice_recordings AS (
     UPDATE voice_recordings r
