@@ -7,32 +7,34 @@ import (
 )
 
 type Dependencies struct {
-	HealthRepository  HealthRepository
-	UserRepository    UserRepository
-	ModelProfiles     ModelProfileRepository
-	CredentialCipher  CredentialCipher
-	JWT               config.JWTConfig
-	STTConfig         config.STTConfig
-	VoiceRepository   VoiceRepository
-	SpeakerProfiles   SpeakerProfileRepository
-	SpeakerIdentifier SpeakerIdentifier
-	PersonRepository  PersonRepository
-	FaceRecognizer    FaceRecognizer
-	FaceStore         AudioStore
-	VideoRepository   VideoRepository
-	Transcriber       Transcriber
-	SpeakerAttributor SpeakerAttributor
-	AudioStore        AudioStore
-	EnrollmentStore   AudioStore
-	AudioInspector    AudioInspector
-	VideoStore        VideoStore
-	MediaExtractor    MediaExtractor
-	VisualAnalyzer    VisualAnalyzer
-	Memograph         MemographClient
-	VoiceConfig       config.VoiceConfig
-	VideoConfig       config.VideoConfig
-	FaceConfig        config.FaceRecognitionConfig
-	WorkerConfig      config.WorkerConfig
+	HealthRepository    HealthRepository
+	UserRepository      UserRepository
+	ModelProfiles       ModelProfileRepository
+	CredentialCipher    CredentialCipher
+	JWT                 config.JWTConfig
+	STTConfig           config.STTConfig
+	VoiceRepository     VoiceRepository
+	SpeakerProfiles     SpeakerProfileRepository
+	SpeakerIdentifier   SpeakerIdentifier
+	PersonRepository    PersonRepository
+	FaceRecognizer      FaceRecognizer
+	ActiveSpeaker       ActiveSpeakerDetector
+	FaceStore           AudioStore
+	VideoRepository     VideoRepository
+	Transcriber         Transcriber
+	SpeakerAttributor   SpeakerAttributor
+	AudioStore          AudioStore
+	EnrollmentStore     AudioStore
+	AudioInspector      AudioInspector
+	VideoStore          VideoStore
+	MediaExtractor      MediaExtractor
+	VisualAnalyzer      VisualAnalyzer
+	Memograph           MemographClient
+	VoiceConfig         config.VoiceConfig
+	VideoConfig         config.VideoConfig
+	FaceConfig          config.FaceRecognitionConfig
+	ActiveSpeakerConfig config.ActiveSpeakerConfig
+	WorkerConfig        config.WorkerConfig
 }
 
 type Container struct {
@@ -88,6 +90,10 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	video.faceIdentifier = NewVideoFaceIdentifier(
 		deps.PersonRepository, deps.FaceRecognizer, deps.FaceConfig,
 	)
+	video.personRepository = deps.PersonRepository
+	video.activeSpeaker = deps.ActiveSpeaker
+	video.faceConfig = deps.FaceConfig
+	video.activeSpeakerConfig = deps.ActiveSpeakerConfig
 
 	container := &Container{
 		Health: newHealthService(deps.HealthRepository),

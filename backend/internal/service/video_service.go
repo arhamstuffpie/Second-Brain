@@ -20,22 +20,26 @@ import (
 )
 
 type videoService struct {
-	repository        VideoRepository
-	enrollments       VoiceRepository
-	transcriber       Transcriber
-	attributor        SpeakerAttributor
-	speakerProfiles   SpeakerProfileRepository
-	speakerIdentifier SpeakerIdentifier
-	faceIdentifier    VideoFaceIdentifier
-	enrollmentStore   AudioStore
-	store             VideoStore
-	extractor         MediaExtractor
-	analyzer          VisualAnalyzer
-	memograph         MemographClient
-	episodeDuration   time.Duration
-	frameInterval     time.Duration
-	maxFrames         int
-	maxAttempts       int
+	repository          VideoRepository
+	enrollments         VoiceRepository
+	transcriber         Transcriber
+	attributor          SpeakerAttributor
+	speakerProfiles     SpeakerProfileRepository
+	speakerIdentifier   SpeakerIdentifier
+	faceIdentifier      VideoFaceIdentifier
+	personRepository    PersonRepository
+	activeSpeaker       ActiveSpeakerDetector
+	enrollmentStore     AudioStore
+	store               VideoStore
+	extractor           MediaExtractor
+	analyzer            VisualAnalyzer
+	memograph           MemographClient
+	episodeDuration     time.Duration
+	frameInterval       time.Duration
+	maxFrames           int
+	maxAttempts         int
+	faceConfig          config.FaceRecognitionConfig
+	activeSpeakerConfig config.ActiveSpeakerConfig
 }
 
 func newVideoService(
@@ -59,6 +63,7 @@ func newVideoService(
 		frameInterval:   videoConfig.FrameInterval,
 		maxFrames:       videoConfig.MaxFrames,
 		maxAttempts:     workerConfig.MaxAttempts,
+		faceConfig:      config.FaceRecognitionConfig{},
 	}
 }
 
@@ -358,6 +363,25 @@ func (s *videoService) ProcessNextVideoJob(ctx context.Context) (bool, error) {
 		time.Now().UTC().Add(retryDelayForError(err, job.Attempts)), dead,
 	); retryErr != nil {
 		return true, fmt.Errorf("%v; persist video retry: %w", err, retryErr)
+	}
+	return true, err
+}
+
+func (s *videoService) ProcessNextIdentityJob(ctx context.Context) (bool, error) {
+	job, found, err := s.repository.ClaimIdentityJob(ctx)
+	if err != nil || !found {
+		return found, err
+	}
+	err = s.autoResolveVideoIdentities(ctx, &job)
+	if err == nil {
+		return true, s.repository.CompleteIdentityJob(ctx, job, "")
+	}
+	dead := job.Attempts >= job.MaxAttempts
+	retryErr := s.repository.RetryIdentityJob(
+		ctx, job, err.Error(), time.Now().UTC().Add(retryDelayForError(err, job.Attempts)), dead,
+	)
+	if retryErr != nil {
+		return true, fmt.Errorf("%v; persist identity retry: %w", err, retryErr)
 	}
 	return true, err
 }

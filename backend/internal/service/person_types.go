@@ -87,6 +87,35 @@ type ConfirmPersonIdentityInput struct {
 	Confirmed             bool     `json:"confirmed"`
 }
 
+type AutomaticIdentityEvidenceInput struct {
+	OwnerUserID              string
+	RecordingID              string
+	PersonTrackID            string
+	VoiceSpeakerProfileID    string
+	SegmentIDs               []string
+	ActiveSpeakerScore       float64
+	VisibleMouthCoverage     float64
+	TemporalCoverage         float64
+	OverlappingConflict      bool
+	Decision                 string
+	FaceProvider             string
+	FaceModel                string
+	ActiveSpeakerProvider    string
+	ActiveSpeakerModel       string
+	ProcessingVersion        int
+	AutoMerge                bool
+	MergeEvidenceRequirement int
+}
+
+type AutomaticIdentityResolution struct {
+	PersonTrackID         string
+	VoiceSpeakerProfileID string
+	PersonProfileID       string
+	DisplayName           string
+	MergedFromProfileID   string
+	Decision              string
+}
+
 type PersonProfile struct {
 	ID                   string     `json:"id"`
 	Status               string     `json:"status"`

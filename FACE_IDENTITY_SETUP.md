@@ -345,6 +345,36 @@ exactly one visible person. Dense multi-face tracking and a normalized aggregate
 track vector require person bounding boxes/track assignments from the visual
 pipeline and are not inferred from label order.
 
+## Automatic face and voice resolution
+
+The durable temporal job now sends the original video, resolved face tracks,
+and diarized segments to a configured active-speaker service. The service uses
+multipart `POST /v1/active-speakers` with `file`, `model`, and JSON `metadata`
+fields and returns track/segment evidence with active-speaker score, visible-mouth
+coverage, overlap conflicts, and evidence frame IDs.
+
+```dotenv
+APP_ACTIVE_SPEAKER_PROVIDER=local
+APP_ACTIVE_SPEAKER_BASE_URL=http://127.0.0.1:8093
+APP_ACTIVE_SPEAKER_API_KEY=
+APP_ACTIVE_SPEAKER_MODEL=active-speaker-v1
+APP_ACTIVE_SPEAKER_AUTO_LINK=false
+APP_PERSON_AUTO_MERGE=false
+APP_ACTIVE_SPEAKER_SCORE_THRESHOLD=0.85
+APP_ACTIVE_SPEAKER_MIN_MOUTH_COVERAGE=0.75
+APP_ACTIVE_SPEAKER_MIN_TEMPORAL_COVERAGE=0.75
+APP_ACTIVE_SPEAKER_MIN_UTTERANCES=2
+APP_PERSON_MERGE_EVIDENCE_COUNT=3
+```
+
+Automatic linking and merging are deliberately off by default. When enabled,
+an accepted face/voice conflict creates a merge candidate. Evidence is counted
+once per recording; after the configured number of independent recordings, the
+lower-priority profile becomes an alias of the confirmed/named canonical person.
+The old profile is archived, not deleted, and affected graph episodes are
+requeued. Face samples remain historically attached to the alias, while future
+matching resolves them to the canonical person.
+
 OpenCV reports a cosine threshold of `0.363` on LFW for its published SFace
 verification example. That is a benchmark reference, **not** a safe production
 1:N identification threshold. Keep auto-confirmation disabled until false
@@ -394,8 +424,7 @@ Before enabling automatic recognition:
 
 This setup covers production-shaped server-side detection, alignment,
 enrollment embeddings, account-scoped matching, canonical identity persistence,
-and deterministic temporal/identity validation. It does not claim calibrated
-POV-video accuracy or liveness. The `TemporalActivityAnalyzer` and
-`ActiveSpeakerDetector` boundaries currently ship with deterministic mocks; a
-licensed production provider must be configured and evaluated before temporal
-jobs can create action facts or face/voice suggestions automatically.
+and durable active-speaker identity resolution. It does not claim calibrated
+POV-video accuracy or liveness. The repository provides the production HTTP
+adapter and worker but does not bundle active-speaker model weights; configure
+and evaluate a licensed provider before enabling automatic links or merges.

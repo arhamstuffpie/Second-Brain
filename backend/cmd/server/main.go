@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	active_speaker "github.com/arham/ai-second-brain/internal/active_speaker"
 	"github.com/arham/ai-second-brain/internal/audio"
 	"github.com/arham/ai-second-brain/internal/config"
 	internaldb "github.com/arham/ai-second-brain/internal/db"
@@ -163,6 +164,19 @@ func run() error {
 			return fmt.Errorf("validate face recognizer: %w", err)
 		}
 	}
+	var activeSpeaker service.ActiveSpeakerDetector
+	if cfg.ActiveSpeaker.Provider != "disabled" {
+		activeSpeaker, err = active_speaker.NewHTTPDetector(cfg.ActiveSpeaker)
+		if err != nil {
+			return fmt.Errorf("construct active-speaker detector: %w", err)
+		}
+		validationCtx, cancel := context.WithTimeout(rootCtx, cfg.ActiveSpeaker.Timeout)
+		_, err = activeSpeaker.Validate(validationCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("validate active-speaker detector: %w", err)
+		}
+	}
 	appLogger.Info().
 		Str("stt_provider", transcriber.Provider()).
 		Str("stt_model", transcriber.Model()).
@@ -170,37 +184,41 @@ func run() error {
 		Str("speaker_embedding_model", cfg.Speaker.Model).
 		Str("face_recognition_provider", cfg.Face.Provider).
 		Str("face_recognition_model", cfg.Face.Model).
+		Str("active_speaker_provider", cfg.ActiveSpeaker.Provider).
+		Str("active_speaker_model", cfg.ActiveSpeaker.Model).
 		Str("vision_provider", visualAnalyzer.Provider()).
 		Str("vision_model", visualAnalyzer.Model()).
 		Msg("media analysis providers configured")
 	memographClient := memograph.NewClient(cfg.Memograph)
 	services, err := service.NewContainer(service.Dependencies{
-		HealthRepository:  repositories.Health,
-		UserRepository:    repositories.User,
-		ModelProfiles:     repositories.Models,
-		CredentialCipher:  credentialCipher,
-		STTConfig:         cfg.STT,
-		VoiceRepository:   repositories.Voice,
-		SpeakerProfiles:   repositories.Speakers,
-		SpeakerIdentifier: speakerIdentifier,
-		PersonRepository:  repositories.People,
-		FaceRecognizer:    faceRecognizer,
-		FaceStore:         faceStore,
-		VideoRepository:   repositories.Video,
-		Transcriber:       transcriber,
-		SpeakerAttributor: stt.NewReferenceAttributor(),
-		AudioStore:        audioStore,
-		EnrollmentStore:   enrollmentStore,
-		AudioInspector:    audioInspector,
-		VideoStore:        videoStore,
-		MediaExtractor:    mediaExtractor,
-		VisualAnalyzer:    visualAnalyzer,
-		Memograph:         memographClient,
-		VoiceConfig:       cfg.Voice,
-		VideoConfig:       cfg.Video,
-		FaceConfig:        cfg.Face,
-		WorkerConfig:      cfg.Worker,
-		JWT:               cfg.JWT,
+		HealthRepository:    repositories.Health,
+		UserRepository:      repositories.User,
+		ModelProfiles:       repositories.Models,
+		CredentialCipher:    credentialCipher,
+		STTConfig:           cfg.STT,
+		VoiceRepository:     repositories.Voice,
+		SpeakerProfiles:     repositories.Speakers,
+		SpeakerIdentifier:   speakerIdentifier,
+		PersonRepository:    repositories.People,
+		FaceRecognizer:      faceRecognizer,
+		ActiveSpeaker:       activeSpeaker,
+		FaceStore:           faceStore,
+		VideoRepository:     repositories.Video,
+		Transcriber:         transcriber,
+		SpeakerAttributor:   stt.NewReferenceAttributor(),
+		AudioStore:          audioStore,
+		EnrollmentStore:     enrollmentStore,
+		AudioInspector:      audioInspector,
+		VideoStore:          videoStore,
+		MediaExtractor:      mediaExtractor,
+		VisualAnalyzer:      visualAnalyzer,
+		Memograph:           memographClient,
+		VoiceConfig:         cfg.Voice,
+		VideoConfig:         cfg.Video,
+		FaceConfig:          cfg.Face,
+		ActiveSpeakerConfig: cfg.ActiveSpeaker,
+		WorkerConfig:        cfg.Worker,
+		JWT:                 cfg.JWT,
 	})
 	if err != nil {
 		return fmt.Errorf("construct services: %w", err)

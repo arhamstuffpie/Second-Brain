@@ -86,6 +86,9 @@ func TestLoadUsesFallbackValues(t *testing.T) {
 	if cfg.Vision.Provider != "mock" || cfg.Vision.Model != "gpt-4.1-mini" {
 		t.Fatalf("Vision defaults = %+v", cfg.Vision)
 	}
+	if cfg.ActiveSpeaker.Provider != "disabled" || cfg.ActiveSpeaker.AutoLink || cfg.ActiveSpeaker.AutoMerge {
+		t.Fatalf("Active-speaker defaults = %+v", cfg.ActiveSpeaker)
+	}
 	if cfg.Memograph.MaxConcurrentWrites != 1 {
 		t.Fatalf("Memograph.MaxConcurrentWrites = %d, want 1", cfg.Memograph.MaxConcurrentWrites)
 	}

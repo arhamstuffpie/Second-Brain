@@ -203,3 +203,71 @@ SELECT (SELECT COUNT(*) FROM video_jobs j JOIN video_episodes e ON e.id=j.episod
 		t.Fatalf("future speaker resolution = %+v, error = %v", resolution, err)
 	}
 }
+
+func TestPersonRepositoryAutomaticallyMergesRepeatedCanonicalConflict(t *testing.T) {
+	databaseURL := os.Getenv("APP_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("APP_TEST_DATABASE_URL is not set")
+	}
+	database, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	const ownerID = "automatic-merge-owner"
+	if _, err := database.ExecContext(ctx, `
+INSERT INTO users (id,email,password_hash) VALUES ($1,'automatic-merge@example.com','unused');
+INSERT INTO person_profiles (id,owner_user_id,status,display_name)
+VALUES ('canonical-p1',$1,'confirmed','Mark');
+INSERT INTO person_profiles (id,owner_user_id,status,expires_at)
+VALUES ('duplicate-p2',$1,'provisional',NOW()+INTERVAL '30 days');
+INSERT INTO voice_speaker_profiles (
+    id,owner_user_id,status,display_name,person_profile_id,embedding_model,embedding_dimensions,centroid
+) VALUES ('speaker-p2',$1,'confirmed','Mark','duplicate-p2','test-model',2,ARRAY[0.6,0.8]);
+INSERT INTO video_recordings (
+    id,owner_user_id,session_id,group_id,memory_id,file_name,file_path,media_type,size_bytes,
+    status,audio_status,visual_status,merge_status,processing_version,transcript,visual_analysis
+) VALUES (
+    'automatic-recording',$1,'session-1','group-1','memory-1','mark.mp4','mark.mp4','video/mp4',100,
+    'completed','completed','completed','completed',2,
+    '{"segments":[{"id":"segment-1","speaker_profile_id":"speaker-p2","person_profile_id":"duplicate-p2","start_time":0,"end_time":2}]}'::jsonb,
+    '{"observations":[{"start_time":0,"end_time":2,"people":[{"visual_label":"person-1","person_track_id":"track-p1","person_profile_id":"canonical-p1"}]}]}'::jsonb
+);
+INSERT INTO person_tracks (
+    id,owner_user_id,recording_id,start_time,end_time,temporary_visual_label,
+    resolved_person_profile_id,tracking_confidence,evidence_frame_ids,processing_version
+) VALUES ('track-p1',$1,'automatic-recording',0,2,'person-1','canonical-p1',.99,'[]'::jsonb,2)`, ownerID); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, ownerID) }()
+	base, err := newBase(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := newPersonRepository(base).ResolveAutomaticIdentity(ctx, service.AutomaticIdentityEvidenceInput{
+		OwnerUserID: ownerID, RecordingID: "automatic-recording", PersonTrackID: "track-p1",
+		VoiceSpeakerProfileID: "speaker-p2", SegmentIDs: []string{"segment-1", "segment-2"},
+		ActiveSpeakerScore: .98, VisibleMouthCoverage: .9, TemporalCoverage: .95,
+		Decision: "accepted", FaceProvider: "face-gallery", FaceModel: "sface",
+		ActiveSpeakerProvider: "talknet", ActiveSpeakerModel: "talknet-v1",
+		ProcessingVersion: 2, AutoMerge: true, MergeEvidenceRequirement: 1,
+	})
+	if err != nil || resolution.PersonProfileID != "canonical-p1" || resolution.MergedFromProfileID != "duplicate-p2" {
+		t.Fatalf("resolution = %+v, error = %v", resolution, err)
+	}
+	var canonicalID, speakerPersonID, duplicateStatus string
+	if err := database.QueryRowContext(ctx, `
+SELECT alias.canonical_person_profile_id,speaker.person_profile_id,duplicate.status
+FROM person_profile_aliases alias
+JOIN voice_speaker_profiles speaker ON speaker.id='speaker-p2'
+JOIN person_profiles duplicate ON duplicate.id='duplicate-p2'
+WHERE alias.owner_user_id=$1 AND alias.alias_person_profile_id='duplicate-p2'`, ownerID).Scan(
+		&canonicalID, &speakerPersonID, &duplicateStatus,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalID != "canonical-p1" || speakerPersonID != "canonical-p1" || duplicateStatus != "archived" {
+		t.Fatalf("canonical/speaker/status = %q/%q/%q", canonicalID, speakerPersonID, duplicateStatus)
+	}
+}

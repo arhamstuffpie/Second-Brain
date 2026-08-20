@@ -9,22 +9,23 @@ import (
 )
 
 type Config struct {
-	Environment string
-	HTTP        HTTPConfig
-	Database    DatabaseConfig
-	JWT         JWTConfig
-	CORS        CORSConfig
-	Log         LogConfig
-	Voice       VoiceConfig
-	Video       VideoConfig
-	STT         STTConfig
-	Speaker     SpeakerEmbeddingConfig
-	Face        FaceRecognitionConfig
-	Vision      VisionConfig
-	Models      ModelConfig
-	Memograph   MemographConfig
-	Worker      WorkerConfig
-	Storage     StorageConfig
+	Environment   string
+	HTTP          HTTPConfig
+	Database      DatabaseConfig
+	JWT           JWTConfig
+	CORS          CORSConfig
+	Log           LogConfig
+	Voice         VoiceConfig
+	Video         VideoConfig
+	STT           STTConfig
+	Speaker       SpeakerEmbeddingConfig
+	Face          FaceRecognitionConfig
+	ActiveSpeaker ActiveSpeakerConfig
+	Vision        VisionConfig
+	Models        ModelConfig
+	Memograph     MemographConfig
+	Worker        WorkerConfig
+	Storage       StorageConfig
 }
 
 type HTTPConfig struct {
@@ -132,6 +133,21 @@ type FaceRecognitionConfig struct {
 	AmbiguousMargin float64
 	ProvisionalTTL  time.Duration
 	AutoConfirm     bool
+}
+
+type ActiveSpeakerConfig struct {
+	Provider                   string
+	BaseURL                    string
+	APIKey                     string
+	Model                      string
+	Timeout                    time.Duration
+	AutoLink                   bool
+	AutoMerge                  bool
+	ScoreThreshold             float64
+	MinimumMouthCoverage       float64
+	MinimumTemporalCoverage    float64
+	MinimumSeparatedUtterances int
+	MergeEvidenceCount         int
 }
 
 type VisionConfig struct {
@@ -260,6 +276,20 @@ func Load() (Config, error) {
 			AmbiguousMargin: getEnvFloat("APP_FACE_AMBIGUOUS_MARGIN", 0.10),
 			ProvisionalTTL:  getEnvDuration("APP_FACE_PROVISIONAL_TTL", 30*24*time.Hour),
 			AutoConfirm:     GetEnvBool("APP_FACE_AUTO_CONFIRM", false),
+		},
+		ActiveSpeaker: ActiveSpeakerConfig{
+			Provider:                   strings.ToLower(strings.TrimSpace(GetEnv("APP_ACTIVE_SPEAKER_PROVIDER", "disabled"))),
+			BaseURL:                    strings.TrimRight(GetEnv("APP_ACTIVE_SPEAKER_BASE_URL", "http://127.0.0.1:8093"), "/"),
+			APIKey:                     GetEnv("APP_ACTIVE_SPEAKER_API_KEY", ""),
+			Model:                      GetEnv("APP_ACTIVE_SPEAKER_MODEL", "active-speaker-v1"),
+			Timeout:                    getEnvDuration("APP_ACTIVE_SPEAKER_TIMEOUT", 2*time.Minute),
+			AutoLink:                   GetEnvBool("APP_ACTIVE_SPEAKER_AUTO_LINK", false),
+			AutoMerge:                  GetEnvBool("APP_PERSON_AUTO_MERGE", false),
+			ScoreThreshold:             getEnvFloat("APP_ACTIVE_SPEAKER_SCORE_THRESHOLD", 0.85),
+			MinimumMouthCoverage:       getEnvFloat("APP_ACTIVE_SPEAKER_MIN_MOUTH_COVERAGE", 0.75),
+			MinimumTemporalCoverage:    getEnvFloat("APP_ACTIVE_SPEAKER_MIN_TEMPORAL_COVERAGE", 0.75),
+			MinimumSeparatedUtterances: GetEnvInt("APP_ACTIVE_SPEAKER_MIN_UTTERANCES", 2),
+			MergeEvidenceCount:         GetEnvInt("APP_PERSON_MERGE_EVIDENCE_COUNT", 3),
 		},
 		Vision: VisionConfig{
 			Provider: GetEnv("APP_VISION_PROVIDER", "mock"),
@@ -426,6 +456,24 @@ func (c Config) Validate() error {
 		if c.Face.MatchThreshold <= 0 || c.Face.MatchThreshold > 1 ||
 			c.Face.AmbiguousMargin < 0 || c.Face.AmbiguousMargin >= 1 || c.Face.ProvisionalTTL <= 0 {
 			return fmt.Errorf("face matching threshold, margin, and provisional TTL are invalid")
+		}
+	}
+	if c.ActiveSpeaker.Provider != "disabled" && c.ActiveSpeaker.Provider != "local" && c.ActiveSpeaker.Provider != "external" {
+		return fmt.Errorf("APP_ACTIVE_SPEAKER_PROVIDER must be disabled, local, or external")
+	}
+	if c.ActiveSpeaker.Provider != "disabled" {
+		if strings.TrimSpace(c.ActiveSpeaker.BaseURL) == "" || strings.TrimSpace(c.ActiveSpeaker.Model) == "" ||
+			c.ActiveSpeaker.Timeout <= 0 {
+			return fmt.Errorf("valid active-speaker configuration is required")
+		}
+		if c.ActiveSpeaker.Provider == "external" && strings.TrimSpace(c.ActiveSpeaker.APIKey) == "" {
+			return fmt.Errorf("APP_ACTIVE_SPEAKER_API_KEY is required for the external provider")
+		}
+		if c.ActiveSpeaker.ScoreThreshold <= 0 || c.ActiveSpeaker.ScoreThreshold > 1 ||
+			c.ActiveSpeaker.MinimumMouthCoverage <= 0 || c.ActiveSpeaker.MinimumMouthCoverage > 1 ||
+			c.ActiveSpeaker.MinimumTemporalCoverage <= 0 || c.ActiveSpeaker.MinimumTemporalCoverage > 1 ||
+			c.ActiveSpeaker.MinimumSeparatedUtterances < 2 || c.ActiveSpeaker.MergeEvidenceCount < 2 {
+			return fmt.Errorf("active-speaker identity thresholds are invalid")
 		}
 	}
 	if c.Vision.Provider != "openai" && c.Vision.Provider != "mock" {

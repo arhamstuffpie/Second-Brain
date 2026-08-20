@@ -36,7 +36,10 @@ WITH account_lock AS MATERIALIZED (
     SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
 ), existing_person AS MATERIALIZED (
     SELECT p.* FROM person_profiles p, account_lock
-    WHERE p.owner_user_id=$1 AND p.id=NULLIF($2, '')
+    WHERE p.owner_user_id=$1 AND p.id=COALESCE((
+        SELECT canonical_person_profile_id FROM person_profile_aliases
+        WHERE owner_user_id=$1 AND alias_person_profile_id=NULLIF($2,'')
+    ),NULLIF($2, ''))
       AND p.status NOT IN ('rejected','archived')
 ), created_person AS (
     INSERT INTO person_profiles (
@@ -106,7 +109,9 @@ WITH account_lock AS MATERIALIZED (
 )
 SELECT p.id, p.status, p.display_name, p.relationship_category, p.relationship_label,
        p.consent_state, p.first_seen_at, p.last_seen_at, p.expires_at, p.created_at, p.updated_at,
-       (SELECT COUNT(*) FROM face_profiles f WHERE f.owner_user_id=$1 AND f.person_profile_id=p.id),
+       (SELECT COUNT(*) FROM face_profiles f
+        LEFT JOIN person_profile_aliases a ON a.owner_user_id=f.owner_user_id AND a.alias_person_profile_id=f.person_profile_id
+        WHERE f.owner_user_id=$1 AND COALESCE(a.canonical_person_profile_id,f.person_profile_id)=p.id),
        COALESCE((SELECT jsonb_agg(v.id ORDER BY v.id) FROM voice_speaker_profiles v
                  WHERE v.owner_user_id=$1 AND v.person_profile_id=p.id), '[]'::jsonb)
 FROM final_person p`
@@ -141,12 +146,14 @@ FROM final_person p`
 func (r *personRepository) MatchFace(ctx context.Context, input service.MatchFaceProfileInput) (service.FaceMatch, error) {
 	const query = `
 WITH sample_scores AS MATERIALIZED (
-    SELECT f.person_profile_id, s.pose_bucket,
+    SELECT COALESCE(alias.canonical_person_profile_id,f.person_profile_id) AS person_profile_id, s.pose_bucket,
            (SELECT SUM(pair.x * pair.y) /
                           NULLIF(SQRT(SUM(pair.x * pair.x)) * SQRT(SUM(pair.y * pair.y)), 0)
             FROM unnest(s.embedding, $4::double precision[]) AS pair(x, y)) AS score
     FROM face_profiles f JOIN face_profile_samples s
       ON s.owner_user_id=f.owner_user_id AND s.face_profile_id=f.id
+    LEFT JOIN person_profile_aliases alias
+      ON alias.owner_user_id=f.owner_user_id AND alias.alias_person_profile_id=f.person_profile_id
     WHERE f.owner_user_id=$1 AND f.provider=$2 AND f.embedding_model=$3
       AND f.embedding_dimensions=cardinality($4::double precision[])
       AND f.person_profile_id IS NOT NULL AND f.status NOT IN ('rejected','archived')
@@ -365,7 +372,9 @@ WITH speaker AS MATERIALIZED (
 )
 SELECT p.id,p.status,p.display_name,p.relationship_category,p.relationship_label,
        p.consent_state,p.first_seen_at,p.last_seen_at,p.expires_at,p.created_at,p.updated_at,
-       (SELECT COUNT(*) FROM face_profiles f WHERE f.owner_user_id=$1 AND f.person_profile_id=p.id),
+       (SELECT COUNT(*) FROM face_profiles f
+        LEFT JOIN person_profile_aliases a ON a.owner_user_id=f.owner_user_id AND a.alias_person_profile_id=f.person_profile_id
+        WHERE f.owner_user_id=$1 AND COALESCE(a.canonical_person_profile_id,f.person_profile_id)=p.id),
        COALESCE((SELECT jsonb_agg(v.id ORDER BY v.id) FROM voice_speaker_profiles v,linked_speaker
                  WHERE v.owner_user_id=$1 AND v.person_profile_id=p.id),'[]'::jsonb)
 FROM selected_person p`
@@ -627,7 +636,9 @@ func (r *personRepository) ListPeople(ctx context.Context, ownerUserID string) (
 	rows, err := r.db.QueryContext(ctx, `
 SELECT p.id, p.status, p.display_name, p.relationship_category, p.relationship_label,
        p.consent_state, p.first_seen_at, p.last_seen_at, p.expires_at, p.created_at, p.updated_at,
-       (SELECT COUNT(*) FROM face_profiles f WHERE f.owner_user_id=$1 AND f.person_profile_id=p.id
+       (SELECT COUNT(*) FROM face_profiles f
+        LEFT JOIN person_profile_aliases a ON a.owner_user_id=f.owner_user_id AND a.alias_person_profile_id=f.person_profile_id
+        WHERE f.owner_user_id=$1 AND COALESCE(a.canonical_person_profile_id,f.person_profile_id)=p.id
           AND f.status NOT IN ('rejected','archived')),
        COALESCE((SELECT jsonb_agg(v.id ORDER BY v.id) FROM voice_speaker_profiles v
                  WHERE v.owner_user_id=$1 AND v.person_profile_id=p.id AND v.status <> 'archived'), '[]'::jsonb)
@@ -668,7 +679,9 @@ WITH updated AS (
 )
 SELECT p.id, p.status, p.display_name, p.relationship_category, p.relationship_label,
        p.consent_state, p.first_seen_at, p.last_seen_at, p.expires_at, p.created_at, p.updated_at,
-       (SELECT COUNT(*) FROM face_profiles f WHERE f.owner_user_id=$2 AND f.person_profile_id=p.id),
+       (SELECT COUNT(*) FROM face_profiles f
+        LEFT JOIN person_profile_aliases a ON a.owner_user_id=f.owner_user_id AND a.alias_person_profile_id=f.person_profile_id
+        WHERE f.owner_user_id=$2 AND COALESCE(a.canonical_person_profile_id,f.person_profile_id)=p.id),
        COALESCE((SELECT jsonb_agg(v.id ORDER BY v.id) FROM voice_speaker_profiles v
                  WHERE v.owner_user_id=$2 AND v.person_profile_id=p.id), '[]'::jsonb)
 FROM updated p`
@@ -695,13 +708,25 @@ FROM updated p`
 
 func (r *personRepository) DeletePerson(ctx context.Context, id, ownerUserID string) ([]string, error) {
 	const query = `
-WITH paths AS MATERIALIZED (
+WITH canonical AS MATERIALIZED (
+    SELECT COALESCE(alias.canonical_person_profile_id,person.id) id
+    FROM person_profiles person
+    LEFT JOIN person_profile_aliases alias
+      ON alias.owner_user_id=person.owner_user_id AND alias.alias_person_profile_id=person.id
+    WHERE person.id=$1 AND person.owner_user_id=$2
+), targets AS MATERIALIZED (
+    SELECT id FROM canonical
+    UNION
+    SELECT alias_person_profile_id FROM person_profile_aliases alias,canonical
+    WHERE alias.owner_user_id=$2 AND alias.canonical_person_profile_id=canonical.id
+), paths AS MATERIALIZED (
     SELECT COALESCE(jsonb_agg(s.file_path), '[]'::jsonb) value
     FROM face_profile_samples s JOIN face_profiles f
       ON f.owner_user_id=s.owner_user_id AND f.id=s.face_profile_id
-    WHERE f.owner_user_id=$2 AND f.person_profile_id=$1
+    WHERE f.owner_user_id=$2 AND f.person_profile_id IN (SELECT id FROM targets)
+      AND s.file_path IS NOT NULL
 ), deleted AS (
-    DELETE FROM person_profiles WHERE id=$1 AND owner_user_id=$2 RETURNING id
+    DELETE FROM person_profiles WHERE owner_user_id=$2 AND id IN (SELECT id FROM targets) RETURNING id
 )
 SELECT paths.value FROM paths, deleted`
 	var payload []byte

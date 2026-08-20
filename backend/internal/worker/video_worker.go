@@ -52,6 +52,10 @@ func (w *VideoWorker) runOne(ctx context.Context, workerID int) {
 		case <-timer.C:
 		}
 		processed, err := w.service.ProcessNextVideoJob(ctx)
+		if err == nil && !processed {
+			// ponytail: identity jobs share this worker; split the queue only if sustained video traffic causes starvation.
+			processed, err = w.service.ProcessNextIdentityJob(ctx)
+		}
 		if err != nil && ctx.Err() == nil {
 			w.logger.Warn().Err(err).Int("worker_id", workerID).
 				Msg("video job failed; retry state updated")

@@ -103,6 +103,7 @@ type PersonRepository interface {
 	ListPeople(ctx context.Context, ownerUserID string) ([]PersonProfile, error)
 	UpdatePerson(ctx context.Context, input UpdatePersonInput) (PersonProfile, error)
 	ConfirmIdentity(ctx context.Context, input ConfirmPersonIdentityInput) (PersonProfile, error)
+	ResolveAutomaticIdentity(ctx context.Context, input AutomaticIdentityEvidenceInput) (AutomaticIdentityResolution, error)
 	DeletePerson(ctx context.Context, id, ownerUserID string) ([]string, error)
 }
 
@@ -139,6 +140,9 @@ type VideoRepository interface {
 	QueueVideoReprocessing(ctx context.Context, id, ownerUserID string) (VideoRecording, error)
 	GetVideoSourceObject(ctx context.Context, id, ownerUserID string) (string, StoredObject, error)
 	ClaimVideoJob(ctx context.Context) (VideoJob, bool, error)
+	ClaimIdentityJob(ctx context.Context) (VideoJob, bool, error)
+	CompleteIdentityJob(ctx context.Context, job VideoJob, warning string) error
+	RetryIdentityJob(ctx context.Context, job VideoJob, cause string, runAt time.Time, dead bool) error
 	CreateVideoAnalysisBatches(ctx context.Context, job VideoJob, durationSeconds float64, frames []VideoFrame) error
 	ClaimVideoAnalysisBatch(ctx context.Context, job VideoJob) (VideoAnalysisBatch, bool, error)
 	CompleteVideoAnalysisBatch(ctx context.Context, job VideoJob, batch VideoAnalysisBatch, analysis VisualAnalysis) error
@@ -204,6 +208,7 @@ type VideoService interface {
 	ReprocessVideo(ctx context.Context, id, ownerUserID string) (VideoRecording, error)
 	GetVideoEvidenceURL(ctx context.Context, id, ownerUserID string, timestamp float64) (EvidencePlayback, error)
 	ProcessNextVideoJob(ctx context.Context) (bool, error)
+	ProcessNextIdentityJob(ctx context.Context) (bool, error)
 }
 
 type PersonService interface {

@@ -596,6 +596,73 @@ LEFT JOIN video_episodes e ON e.id = target.episode_id`
 	return job, true, nil
 }
 
+func (r *videoRepository) ClaimIdentityJob(ctx context.Context) (service.VideoJob, bool, error) {
+	const query = `
+WITH candidate AS (
+    SELECT id FROM temporal_jobs
+    WHERE (status='queued' AND run_at<=NOW())
+       OR (status='processing' AND locked_at<NOW()-INTERVAL '10 minutes')
+    ORDER BY run_at,id FOR UPDATE SKIP LOCKED LIMIT 1
+), claimed AS (
+    UPDATE temporal_jobs job SET status='processing',attempts=attempts+1,
+        locked_at=NOW(),updated_at=NOW()
+    FROM candidate WHERE job.id=candidate.id RETURNING job.*
+)
+SELECT claimed.id,claimed.recording_id,recording.owner_user_id,
+       claimed.attempts,claimed.max_attempts,recording.file_path,recording.file_name,
+       recording.media_type,recording.processing_version,recording.transcript,recording.visual_analysis
+FROM claimed JOIN video_recordings recording ON recording.id=claimed.recording_id`
+	var job service.VideoJob
+	var transcriptJSON, visualJSON []byte
+	err := r.db.QueryRowContext(ctx, query).Scan(
+		&job.ID, &job.RecordingID, &job.OwnerUserID, &job.Attempts, &job.MaxAttempts,
+		&job.FilePath, &job.FileName, &job.MediaType, &job.ProcessingVersion,
+		&transcriptJSON, &visualJSON,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.VideoJob{}, false, nil
+	}
+	if err != nil {
+		return service.VideoJob{}, false, fmt.Errorf("claim identity job: %w", err)
+	}
+	if err := json.Unmarshal(transcriptJSON, &job.Transcript); err != nil {
+		return service.VideoJob{}, false, fmt.Errorf("decode identity transcript: %w", err)
+	}
+	if err := json.Unmarshal(visualJSON, &job.VisualAnalysis); err != nil {
+		return service.VideoJob{}, false, fmt.Errorf("decode identity visual analysis: %w", err)
+	}
+	return job, true, nil
+}
+
+func (r *videoRepository) CompleteIdentityJob(ctx context.Context, job service.VideoJob, warning string) error {
+	result, err := r.db.ExecContext(ctx, `
+UPDATE temporal_jobs SET status='completed',locked_at=NULL,last_error='',warning=$2,updated_at=NOW()
+WHERE id=$1`, job.ID, warning)
+	if err != nil {
+		return fmt.Errorf("complete identity job: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return service.ErrNotFound
+	}
+	return nil
+}
+
+func (r *videoRepository) RetryIdentityJob(
+	ctx context.Context, job service.VideoJob, cause string, runAt time.Time, dead bool,
+) error {
+	status := "queued"
+	if dead {
+		status = "dead"
+	}
+	_, err := r.db.ExecContext(ctx, `
+UPDATE temporal_jobs SET status=$2,run_at=$3,locked_at=NULL,last_error=$4,updated_at=NOW()
+WHERE id=$1`, job.ID, status, runAt, cause)
+	if err != nil {
+		return fmt.Errorf("retry identity job: %w", err)
+	}
+	return nil
+}
+
 func (r *videoRepository) CreateVideoAnalysisBatches(
 	ctx context.Context,
 	job service.VideoJob,
@@ -808,11 +875,16 @@ WITH updated AS (
 	    status = CASE WHEN visual_status = 'completed' THEN 'merging' ELSE 'processing' END,
 	    last_error = '', updated_at = NOW()
 	WHERE id = $1
-	RETURNING id, visual_status
+	RETURNING id,owner_user_id,processing_version,visual_status
 ), merge_job AS (
 	INSERT INTO video_jobs (kind, recording_id, max_attempts)
 	SELECT 'merge', id, $6 FROM updated WHERE visual_status = 'completed'
 	ON CONFLICT (recording_id, kind) WHERE recording_id IS NOT NULL DO NOTHING
+), identity_job AS (
+	INSERT INTO temporal_jobs (owner_user_id,recording_id,max_attempts,processing_version)
+	SELECT owner_user_id,id,$6,processing_version FROM updated WHERE visual_status='completed'
+	ON CONFLICT (recording_id,processing_version) DO UPDATE SET
+		status='queued',attempts=0,run_at=NOW(),locked_at=NULL,last_error='',warning='',updated_at=NOW()
 )
 UPDATE video_jobs SET status = 'completed', locked_at = NULL, updated_at = NOW()
 WHERE id = $7`
@@ -846,7 +918,7 @@ WITH updated AS (
 	    status = CASE WHEN audio_status = 'completed' THEN 'merging' ELSE 'processing' END,
 	    last_error = '', updated_at = NOW()
 	WHERE id = $1
-	RETURNING id, audio_status, media_asset_id
+	RETURNING id,owner_user_id,processing_version,audio_status,media_asset_id
 ), updated_asset AS (
 	UPDATE media_assets a
 	SET actual_duration_seconds = $7, updated_at = NOW()
@@ -857,6 +929,11 @@ WITH updated AS (
 	ON CONFLICT (recording_id, kind) WHERE recording_id IS NOT NULL DO UPDATE
 	SET status = 'queued', attempts = 0, run_at = NOW(), locked_at = NULL,
 	    last_error = '', updated_at = NOW()
+), identity_job AS (
+	INSERT INTO temporal_jobs (owner_user_id,recording_id,max_attempts,processing_version)
+	SELECT owner_user_id,id,$5,processing_version FROM updated WHERE audio_status='completed'
+	ON CONFLICT (recording_id,processing_version) DO UPDATE SET
+		status='queued',attempts=0,run_at=NOW(),locked_at=NULL,last_error='',warning='',updated_at=NOW()
 )
 UPDATE video_jobs SET status = 'completed', locked_at = NULL, updated_at = NOW()
 WHERE id = $6`

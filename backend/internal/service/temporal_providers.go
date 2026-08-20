@@ -59,7 +59,9 @@ type TemporalAnalysis struct {
 
 type ActiveSpeakerInput struct {
 	RecordingID  string                `json:"recording_id"`
-	Frames       []VideoFrame          `json:"frames"`
+	VideoPath    string                `json:"-"`
+	FileName     string                `json:"-"`
+	MediaType    string                `json:"-"`
 	PersonTracks []TemporalPersonTrack `json:"person_tracks"`
 	Segments     []TranscriptSegment   `json:"segments"`
 }

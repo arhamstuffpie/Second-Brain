@@ -46,6 +46,9 @@ func (r *personRepositoryCapture) ConfirmIdentity(_ context.Context, input Confi
 	r.confirmed = input
 	return PersonProfile{ID: "person-1"}, nil
 }
+func (*personRepositoryCapture) ResolveAutomaticIdentity(context.Context, AutomaticIdentityEvidenceInput) (AutomaticIdentityResolution, error) {
+	return AutomaticIdentityResolution{}, nil
+}
 func (*personRepositoryCapture) DeletePerson(context.Context, string, string) ([]string, error) {
 	return nil, nil
 }

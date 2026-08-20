@@ -94,6 +94,9 @@ func (stubPersonRepository) UpdatePerson(context.Context, UpdatePersonInput) (Pe
 func (stubPersonRepository) ConfirmIdentity(context.Context, ConfirmPersonIdentityInput) (PersonProfile, error) {
 	return PersonProfile{}, nil
 }
+func (stubPersonRepository) ResolveAutomaticIdentity(context.Context, AutomaticIdentityEvidenceInput) (AutomaticIdentityResolution, error) {
+	return AutomaticIdentityResolution{}, nil
+}
 func (stubPersonRepository) DeletePerson(context.Context, string, string) ([]string, error) {
 	return []string{}, nil
 }
@@ -185,6 +188,13 @@ func (stubVideoRepository) StopVideoRealtimeSession(context.Context, string, str
 }
 func (stubVideoRepository) ClaimVideoJob(context.Context) (VideoJob, bool, error) {
 	return VideoJob{}, false, nil
+}
+func (stubVideoRepository) ClaimIdentityJob(context.Context) (VideoJob, bool, error) {
+	return VideoJob{}, false, nil
+}
+func (stubVideoRepository) CompleteIdentityJob(context.Context, VideoJob, string) error { return nil }
+func (stubVideoRepository) RetryIdentityJob(context.Context, VideoJob, string, time.Time, bool) error {
+	return nil
 }
 func (stubVideoRepository) CreateVideoAnalysisBatches(context.Context, VideoJob, float64, []VideoFrame) error {
 	return nil

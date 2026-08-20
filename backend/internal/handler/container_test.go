@@ -118,7 +118,8 @@ func (stubVideoService) GetVideoRealtimeSession(context.Context, string, string)
 func (stubVideoService) StopVideoRealtimeSession(context.Context, string, string) (service.RealtimeVideoSession, error) {
 	return service.RealtimeVideoSession{}, nil
 }
-func (stubVideoService) ProcessNextVideoJob(context.Context) (bool, error) { return false, nil }
+func (stubVideoService) ProcessNextVideoJob(context.Context) (bool, error)    { return false, nil }
+func (stubVideoService) ProcessNextIdentityJob(context.Context) (bool, error) { return false, nil }
 
 type stubPersonService struct{}
 

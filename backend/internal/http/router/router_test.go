@@ -136,7 +136,8 @@ func (fakeVideoService) GetVideoRealtimeSession(context.Context, string, string)
 func (fakeVideoService) StopVideoRealtimeSession(context.Context, string, string) (service.RealtimeVideoSession, error) {
 	return service.RealtimeVideoSession{}, nil
 }
-func (fakeVideoService) ProcessNextVideoJob(context.Context) (bool, error) { return false, nil }
+func (fakeVideoService) ProcessNextVideoJob(context.Context) (bool, error)    { return false, nil }
+func (fakeVideoService) ProcessNextIdentityJob(context.Context) (bool, error) { return false, nil }
 
 type fakePersonService struct{}
 
