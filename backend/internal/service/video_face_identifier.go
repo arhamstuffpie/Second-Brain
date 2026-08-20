@@ -15,6 +15,7 @@ import (
 type VideoFaceIdentity struct {
 	PersonProfileID string
 	IdentityStatus  string
+	Outcome         string
 	DisplayName     string
 	TrackID         string
 	Pose            FacePose
@@ -38,7 +39,15 @@ type localFaceTrack struct {
 	lastFace   DetectedFace
 	identity   VideoFaceIdentity
 	evidence   []string
+	observed   []trackedFaceObservation
 	confidence float64
+}
+
+type trackedFaceObservation struct {
+	frame           VideoFrame
+	result          FaceRecognition
+	face            DetectedFace
+	galleryEligible bool
 }
 
 func NewVideoFaceIdentifier(repository PersonRepository, recognizer FaceRecognizer, cfg config.FaceRecognitionConfig) VideoFaceIdentifier {
@@ -95,57 +104,81 @@ func (s *videoFaceIdentifier) Identify(
 			continue
 		}
 
-		identity := VideoFaceIdentity{Pose: face.Pose}
-		if match.Matched {
-			if continuing && track.identity.PersonProfileID != match.PersonProfileID {
-				track = nil
-				continue
-			}
-			identity = VideoFaceIdentity{
-				PersonProfileID: match.PersonProfileID, IdentityStatus: match.IdentityStatus,
-				DisplayName: match.DisplayName, Pose: face.Pose, Similarity: match.Similarity,
-			}
-		} else if continuing {
-			identity = track.identity
-			identity.Pose = face.Pose
-			identity.Similarity = &trackScore
-		} else if match.Ambiguous {
-			continue
-		}
-
 		if track == nil {
 			track = &localFaceTrack{
 				id: faceTrackID(recordingID, frame.FrameID, processingVersion), start: frame.Timestamp,
 				end: frame.Timestamp, confidence: face.DetectionScore,
 			}
 		}
-		identity.TrackID = track.id
-		if identity.PersonProfileID == "" {
+		identity := VideoFaceIdentity{TrackID: track.id, Pose: face.Pose, Outcome: "ambiguous"}
+		if match.Matched {
+			if continuing && track.identity.PersonProfileID != "" && track.identity.PersonProfileID != match.PersonProfileID {
+				track = nil
+				continue
+			}
+			identity = VideoFaceIdentity{
+				PersonProfileID: match.PersonProfileID, IdentityStatus: match.IdentityStatus,
+				Outcome: "attached", DisplayName: match.DisplayName, TrackID: track.id,
+				Pose: face.Pose, Similarity: match.Similarity,
+			}
+		} else if continuing && track.identity.PersonProfileID != "" {
+			identity = track.identity
+			identity.Outcome = "attached"
+			identity.TrackID = track.id
+			identity.Pose = face.Pose
+			identity.Similarity = &trackScore
+		}
+
+		track.end = frame.Timestamp
+		track.lastFace = face
+		track.evidence = append(track.evidence, frame.FrameID)
+		track.observed = append(track.observed, trackedFaceObservation{
+			frame: frame, result: result, face: face, galleryEligible: !match.Ambiguous,
+		})
+		if continuing {
+			track.confidence = math.Min(track.confidence, trackScore)
+		}
+
+		if identity.PersonProfileID == "" && !match.Ambiguous && galleryEvidenceCount(track.observed) >= 2 {
 			profile, enrollErr := s.remember(ctx, ownerUserID, recordingID, track.id, result, face, "")
 			if enrollErr != nil {
 				failures = append(failures, fmt.Errorf("create provisional face in %s: %w", frame.FrameID, enrollErr))
-				continue
+			} else {
+				identity.PersonProfileID, identity.IdentityStatus, identity.DisplayName = profile.ID, profile.Status, profile.DisplayName
+				identity.Outcome = "provisional"
+				track.identity = identity
+				for _, observation := range track.observed[:len(track.observed)-1] {
+					if !observation.galleryEligible {
+						continue
+					}
+					if _, rememberErr := s.remember(
+						ctx, ownerUserID, recordingID, track.id, observation.result, observation.face, profile.ID,
+					); rememberErr != nil {
+						failures = append(failures, fmt.Errorf("extend provisional face gallery from %s: %w", observation.frame.FrameID, rememberErr))
+					}
+				}
+				for _, observation := range track.observed {
+					identities[observation.frame.FrameID] = VideoFaceIdentity{
+						PersonProfileID: profile.ID, IdentityStatus: profile.Status, DisplayName: profile.DisplayName,
+						Outcome: "provisional", TrackID: track.id, Pose: observation.face.Pose,
+					}
+				}
 			}
-			identity.PersonProfileID, identity.IdentityStatus, identity.DisplayName = profile.ID, profile.Status, profile.DisplayName
-		} else {
+		} else if identity.PersonProfileID != "" && !match.Ambiguous {
 			if _, rememberErr := s.remember(ctx, ownerUserID, recordingID, track.id, result, face, identity.PersonProfileID); rememberErr != nil {
 				failures = append(failures, fmt.Errorf("extend face gallery in %s: %w", frame.FrameID, rememberErr))
 			}
 		}
 
-		track.end = frame.Timestamp
-		track.lastFace = face
-		track.identity = identity
-		track.evidence = append(track.evidence, frame.FrameID)
-		if continuing {
-			track.confidence = math.Min(track.confidence, trackScore)
+		if identity.PersonProfileID != "" {
+			track.identity = identity
 		}
 		identities[frame.FrameID] = identity
 		if recordingID != "" {
 			if saveErr := s.repository.SavePersonTrack(ctx, SavePersonTrackInput{
 				ID: track.id, OwnerUserID: ownerUserID, RecordingID: recordingID,
 				StartTime: track.start, EndTime: track.end,
-				TemporaryVisualLabel:    anonymousFaceLabel(identity.PersonProfileID),
+				TemporaryVisualLabel:    temporaryFaceLabel(track.id),
 				ResolvedPersonProfileID: identity.PersonProfileID,
 				TrackingConfidence:      track.confidence, EvidenceFrameIDs: track.evidence,
 				ProcessingVersion: processingVersion,
@@ -214,11 +247,21 @@ func faceTrackID(recordingID, frameID string, processingVersion int) string {
 	return fmt.Sprintf("face-track:%x", digest[:16])
 }
 
-func anonymousFaceLabel(personProfileID string) string {
-	if len(personProfileID) > 8 {
-		personProfileID = personProfileID[:8]
+func temporaryFaceLabel(trackID string) string {
+	if len(trackID) > 19 {
+		trackID = trackID[len(trackID)-8:]
 	}
-	return "Person " + personProfileID
+	return "visual-track-" + trackID
+}
+
+func galleryEvidenceCount(observations []trackedFaceObservation) int {
+	count := 0
+	for _, observation := range observations {
+		if observation.galleryEligible {
+			count++
+		}
+	}
+	return count
 }
 
 var _ VideoFaceIdentifier = (*videoFaceIdentifier)(nil)

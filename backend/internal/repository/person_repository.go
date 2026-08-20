@@ -235,7 +235,18 @@ func (r *personRepository) ConfirmIdentity(
 	}
 	defer tx.Rollback()
 
-	person, err := linkSpeakerToPerson(ctx, tx, input)
+	visualPersonID, speakerPersonID, err := identityTargets(ctx, tx, input)
+	if err != nil {
+		return service.PersonProfile{}, err
+	}
+	if visualPersonID != "" && speakerPersonID != "" && visualPersonID != speakerPersonID {
+		return service.PersonProfile{}, fmt.Errorf("%w: visual and voice evidence already resolve to different people", service.ErrConflict)
+	}
+	targetPersonID := visualPersonID
+	if targetPersonID == "" {
+		targetPersonID = speakerPersonID
+	}
+	person, err := linkSpeakerToPerson(ctx, tx, input, targetPersonID)
 	if err != nil {
 		return service.PersonProfile{}, err
 	}
@@ -261,10 +272,63 @@ func (r *personRepository) ConfirmIdentity(
 	return person, nil
 }
 
+func identityTargets(
+	ctx context.Context,
+	tx *sql.Tx,
+	input service.ConfirmPersonIdentityInput,
+) (string, string, error) {
+	const speakerQuery = `
+SELECT COALESCE(person_profile_id,'')
+FROM voice_speaker_profiles
+WHERE id=$2 AND owner_user_id=$1 AND status='confirmed' AND display_name<>''
+FOR UPDATE`
+	var speakerPersonID string
+	if err := tx.QueryRowContext(ctx, speakerQuery, input.OwnerUserID, input.VoiceSpeakerProfileID).Scan(&speakerPersonID); errors.Is(err, sql.ErrNoRows) {
+		return "", "", service.ErrNotFound
+	} else if err != nil {
+		return "", "", fmt.Errorf("find linked speaker person: %w", err)
+	}
+
+	const visualQuery = `
+SELECT DISTINCT visual->>'person_profile_id'
+FROM video_recordings recording
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(recording.visual_analysis->'observations','[]'::jsonb)) observation
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(observation->'people','[]'::jsonb)) visual
+JOIN person_profiles person
+  ON person.owner_user_id=recording.owner_user_id AND person.id=visual->>'person_profile_id'
+WHERE recording.owner_user_id=$1 AND recording.id=ANY($2::text[])
+  AND visual->>'visual_label'=$3 AND COALESCE(visual->>'person_profile_id','')<>''
+  AND person.status NOT IN ('rejected','archived')`
+	rows, err := tx.QueryContext(ctx, visualQuery, input.OwnerUserID, input.RecordingIDs, input.VisualLabel)
+	if err != nil {
+		return "", "", fmt.Errorf("find visual person: %w", err)
+	}
+	defer rows.Close()
+	var visualPersonIDs []string
+	for rows.Next() {
+		var personID string
+		if err := rows.Scan(&personID); err != nil {
+			return "", "", fmt.Errorf("scan visual person: %w", err)
+		}
+		visualPersonIDs = append(visualPersonIDs, personID)
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", fmt.Errorf("list visual people: %w", err)
+	}
+	if len(visualPersonIDs) > 1 {
+		return "", "", fmt.Errorf("%w: selected visual evidence resolves to multiple people", service.ErrConflict)
+	}
+	if len(visualPersonIDs) == 1 {
+		return visualPersonIDs[0], speakerPersonID, nil
+	}
+	return "", speakerPersonID, nil
+}
+
 func linkSpeakerToPerson(
 	ctx context.Context,
 	tx *sql.Tx,
 	input service.ConfirmPersonIdentityInput,
+	targetPersonID string,
 ) (service.PersonProfile, error) {
 	const query = `
 WITH speaker AS MATERIALIZED (
@@ -272,20 +336,32 @@ WITH speaker AS MATERIALIZED (
     WHERE id=$2 AND owner_user_id=$1 AND status='confirmed' AND display_name<>''
     FOR UPDATE
 ), existing_person AS MATERIALIZED (
-    SELECT p.* FROM person_profiles p JOIN speaker s ON s.person_profile_id=p.id
-    WHERE p.owner_user_id=$1 AND p.status NOT IN ('rejected','archived')
+	SELECT p.* FROM person_profiles p, speaker s
+	WHERE p.owner_user_id=$1 AND p.id=NULLIF($3,'')
+	  AND p.status NOT IN ('rejected','archived')
+	FOR UPDATE
+), updated_person AS (
+	UPDATE person_profiles p SET
+		status='confirmed',display_name=s.display_name,
+		relationship_category=s.relationship_category,
+		relationship_label=s.relationship_label,expires_at=NULL,updated_at=NOW()
+	FROM existing_person existing, speaker s WHERE p.id=existing.id
+	RETURNING p.*
 ), created_person AS (
     INSERT INTO person_profiles (
         owner_user_id,status,display_name,relationship_category,relationship_label,consent_state
     )
     SELECT $1,'confirmed',s.display_name,s.relationship_category,s.relationship_label,'pending'
-    FROM speaker s WHERE s.person_profile_id IS NULL
-    RETURNING *
+	FROM speaker s WHERE NOT EXISTS (SELECT 1 FROM updated_person)
+	RETURNING *
 ), selected_person AS MATERIALIZED (
-    SELECT * FROM existing_person UNION ALL SELECT * FROM created_person
+	SELECT * FROM updated_person UNION ALL SELECT * FROM created_person
 ), linked_speaker AS (
-    UPDATE voice_speaker_profiles s SET person_profile_id=p.id,updated_at=NOW()
-    FROM selected_person p WHERE s.id=$2 AND s.owner_user_id=$1 RETURNING s.id
+	UPDATE voice_speaker_profiles s SET person_profile_id=p.id,updated_at=NOW()
+	FROM selected_person p WHERE s.id=$2 AND s.owner_user_id=$1 RETURNING s.id
+), confirmed_faces AS (
+	UPDATE face_profiles f SET status='confirmed',expires_at=NULL,updated_at=NOW()
+	FROM selected_person p WHERE f.owner_user_id=$1 AND f.person_profile_id=p.id RETURNING f.id
 )
 SELECT p.id,p.status,p.display_name,p.relationship_category,p.relationship_label,
        p.consent_state,p.first_seen_at,p.last_seen_at,p.expires_at,p.created_at,p.updated_at,
@@ -295,7 +371,7 @@ SELECT p.id,p.status,p.display_name,p.relationship_category,p.relationship_label
 FROM selected_person p`
 	var person service.PersonProfile
 	var voiceIDs []byte
-	err := tx.QueryRowContext(ctx, query, input.OwnerUserID, input.VoiceSpeakerProfileID).Scan(
+	err := tx.QueryRowContext(ctx, query, input.OwnerUserID, input.VoiceSpeakerProfileID, targetPersonID).Scan(
 		&person.ID, &person.Status, &person.DisplayName, &person.RelationshipCategory,
 		&person.RelationshipLabel, &person.ConsentState, &person.FirstSeenAt,
 		&person.LastSeenAt, &person.ExpiresAt, &person.CreatedAt, &person.UpdatedAt,

@@ -201,10 +201,13 @@ func TestStructuredVisualEvidenceUsesObservationLocalIDs(t *testing.T) {
 	}
 	evidence := findStructuredEntity(graph.Entities, "visual-evidence:window-1")
 	owner := findStructuredEntity(graph.Entities, "account-owner:user-1")
-	person := findStructuredEntity(graph.Entities, "asset-1:obs-1:person-1")
+	person := findStructuredEntity(graph.Entities, "visual-track:asset-1:obs-1:person-1")
 	document := findStructuredEntity(graph.Entities, "asset-1:obs-1:document-1")
 	if evidence == nil || evidence.Name != "Visual evidence" || owner == nil || person == nil || document == nil {
 		t.Fatalf("visual entities = %+v", graph.Entities)
+	}
+	if person.Type != "VisualOccurrence" {
+		t.Fatalf("unresolved visual entity type = %q, want VisualOccurrence", person.Type)
 	}
 	if strings.Contains(evidence.Name, "0") || strings.Contains(evidence.CanonicalID, "0-5") ||
 		!hasStructuredRelation(graph.Relations, owner.CanonicalID, "HAS_VISUAL_CONTEXT", evidence.CanonicalID) ||
@@ -250,6 +253,28 @@ func TestStructuredVisualEvidenceReusesResolvedPersonAcrossSessions(t *testing.T
 	secondPerson := findStructuredEntity(second.Entities, "person-profile:person-42")
 	if firstPerson == nil || secondPerson == nil || firstPerson.Name != "Mark" || secondPerson.Name != "Mark" {
 		t.Fatalf("resolved people = %+v / %+v", first.Entities, second.Entities)
+	}
+}
+
+func TestStructuredVisualEvidenceReusesOneTemporaryEntityForOneTrack(t *testing.T) {
+	graph := structuredVisualEvidence(VideoJob{
+		SourceIdentity: "window-1", MediaAssetID: "asset-1",
+		EpisodeVisual: []VideoObservation{
+			{ObservationID: "obs-1", People: []VisualPerson{{VisualLabel: "person-1", PersonTrackID: "track-1"}}},
+			{ObservationID: "obs-2", People: []VisualPerson{{VisualLabel: "person-1", PersonTrackID: "track-1"}}},
+		},
+	})
+	if graph == nil {
+		t.Fatal("visual graph is nil")
+	}
+	count := 0
+	for _, entity := range graph.Entities {
+		if entity.CanonicalID == "visual-track:track-1" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("temporary track entity count = %d, entities = %+v", count, graph.Entities)
 	}
 }
 

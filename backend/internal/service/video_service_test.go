@@ -33,7 +33,8 @@ func (s *videoFaceIdentifierStub) Identify(
 func TestIdentifyVisualFacesEnrichesOnlyOnePhysicalVisiblePersonAndFailsOpen(t *testing.T) {
 	identifier := &videoFaceIdentifierStub{
 		identities: map[string]VideoFaceIdentity{"frame-1": {
-			PersonProfileID: "person-1", IdentityStatus: "confirmed", DisplayName: "Mark",
+			PersonProfileID: "person-1", IdentityStatus: "confirmed", Outcome: "attached",
+			DisplayName: "Mark", TrackID: "face-track-1",
 		}},
 		err: errors.New("one later frame failed"),
 	}
@@ -48,6 +49,7 @@ func TestIdentifyVisualFacesEnrichesOnlyOnePhysicalVisiblePersonAndFailsOpen(t *
 	person := analysis.Observations[0].People[0]
 	if len(identifier.frames) != 1 || identifier.frames[0].FrameID != "frame-1" ||
 		person.PersonProfileID != "person-1" || person.PersonName != "Mark" ||
+		person.PersonTrackID != "face-track-1" || person.FaceIdentityOutcome != "attached" ||
 		!strings.Contains(analysis.Warning, "face identification was unavailable") {
 		t.Fatalf("eligible = %+v, person = %+v, warning = %q", identifier.frames, person, analysis.Warning)
 	}

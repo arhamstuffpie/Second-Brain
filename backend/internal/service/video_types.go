@@ -200,6 +200,8 @@ type VisualScene struct {
 
 type VisualPerson struct {
 	VisualLabel          string   `json:"visual_label"`
+	PersonTrackID        string   `json:"person_track_id,omitempty"`
+	FaceIdentityOutcome  string   `json:"face_identity_outcome,omitempty"`
 	Appearance           string   `json:"appearance"`
 	Position             string   `json:"position"`
 	Action               string   `json:"action"`

@@ -306,10 +306,20 @@ scores and reject an outlier or a mixed-identity enrollment for human review.
 The recording worker now runs this path automatically after visual analysis. It
 only sends frames containing exactly one visually verified, physically present,
 face-visible person to YuNet/SFace. A known match receives the existing
-`person_profile_id`. A new unambiguous face creates a 30-day, consent-pending
-provisional profile and retains only the cropped face review sample. Ambiguous
-matches remain unidentified. Face-service failures add a batch warning and do
-not fail speech or visual memory processing.
+`person_profile_id`. The first unknown frame remains an unresolved recording-local
+track. A 30-day, consent-pending provisional profile is created only after a
+second consistent, quality-approved frame continues that track; later samples
+extend its pose-aware, embedding-only gallery. Ambiguous matches remain track
+evidence and do not create another person. Face-service failures add a batch
+warning and do not fail speech or visual memory processing.
+
+Unresolved visual tracks are written to Memograph as `VisualOccurrence`
+entities with `visual-track:<track-id>` IDs, never as permanent `Person` nodes.
+Only a backend `person_profile_id` produces a graph `Person`. Explicitly linking
+a named voice to a visual label reuses that visual profile when it already
+exists, confirms its face gallery, and requeues affected graph episodes. The
+operation fails safely if the selected voice and visual evidence already point
+to different canonical people.
 
 Memograph uses `person-profile:<id>` for a resolved face, so the same face keeps
 one node across recording sessions. Naming a voice profile does not by itself
@@ -326,8 +336,14 @@ Recognition should happen per temporal face track, not per isolated frame:
    model ID, and dimension.
 6. Accept a known-person suggestion only if the top cosine score clears a
    calibrated threshold and beats the runner-up by a calibrated margin.
-7. Require repeated agreement across separated frames before confirming a
-   track. Otherwise keep the person unknown or create a review suggestion.
+7. Require repeated agreement across separated frames before creating a
+   provisional track identity. Otherwise keep the person unknown or create a
+   review suggestion.
+
+The current worker implements this conservatively for sampled frames that have
+exactly one visible person. Dense multi-face tracking and a normalized aggregate
+track vector require person bounding boxes/track assignments from the visual
+pipeline and are not inferred from label order.
 
 OpenCV reports a cosine threshold of `0.363` on LFW for its published SFace
 verification example. That is a benchmark reference, **not** a safe production

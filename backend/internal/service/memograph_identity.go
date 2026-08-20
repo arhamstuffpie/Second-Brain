@@ -122,12 +122,20 @@ func structuredVisualEvidence(job VideoJob) *StructuredGraph {
 			if label == "" {
 				continue
 			}
-			id := strings.Join([]string{job.MediaAssetID, observation.ObservationID, label}, ":")
-			name := "Unidentified " + strings.ReplaceAll(label, "-", " ")
+			trackID := strings.TrimSpace(person.PersonTrackID)
+			if trackID == "" {
+				trackID = strings.Join([]string{job.MediaAssetID, observation.ObservationID, label}, ":")
+			}
+			id := "visual-track:" + trackID
+			name := "Unverified visual track"
+			entityType := "VisualOccurrence"
 			if personProfileID := strings.TrimSpace(person.PersonProfileID); personProfileID != "" {
 				id = "person-profile:" + personProfileID
+				entityType = "Person"
 				if resolvedName := strings.TrimSpace(person.PersonName); resolvedName != "" {
 					name = resolvedName
+				} else {
+					name = "Unidentified person"
 				}
 			}
 			labels[label] = entityRef{id: id, name: name}
@@ -135,7 +143,7 @@ func structuredVisualEvidence(job VideoJob) *StructuredGraph {
 				seen[id] = true
 				graph.Entities = append(graph.Entities, StructuredEntity{
 					CanonicalID: id, Name: name,
-					Type: "Person", Confidence: person.Confidence,
+					Type: entityType, Confidence: person.Confidence,
 				})
 				fact := "Visual evidence shows " + name + "."
 				if action := strings.TrimSpace(person.Action); action != "" {

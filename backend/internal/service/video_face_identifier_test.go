@@ -14,6 +14,7 @@ type videoFaceRepository struct {
 	matchResults []FaceMatch
 	matches      int
 	enrollments  int
+	newProfiles  int
 	tracks       []SavePersonTrackInput
 }
 
@@ -33,6 +34,7 @@ func (r *videoFaceRepository) EnrollFace(_ context.Context, input EnrollFaceProf
 	if input.PersonProfileID != "" {
 		return PersonProfile{ID: input.PersonProfileID, Status: "provisional"}, nil
 	}
+	r.newProfiles++
 	return PersonProfile{ID: "new-person", Status: "provisional"}, nil
 }
 
@@ -64,7 +66,7 @@ func TestVideoFaceIdentifierReusesCanonicalPersonAcrossSessions(t *testing.T) {
 	}
 }
 
-func TestVideoFaceIdentifierCreatesConsentPendingEmbeddingOnlyProfile(t *testing.T) {
+func TestVideoFaceIdentifierKeepsFirstUnknownFrameAsUnresolvedTrack(t *testing.T) {
 	repository := &videoFaceRepository{matchResult: FaceMatch{Reasons: []string{"no_compatible_face_profiles"}}}
 	recognition := usableFaceRecognition()
 	recognition.Faces[0].Box = FaceBox{X: 2, Y: 2, Width: 10, Height: 10}
@@ -75,16 +77,17 @@ func TestVideoFaceIdentifierCreatesConsentPendingEmbeddingOnlyProfile(t *testing
 	identities, err := identifier.Identify(context.Background(), "owner-1", "recording-1", 1, []VideoFrame{{
 		FrameID: "frame-1", MediaType: "image/jpeg", Image: []byte("image"),
 	}})
-	if err != nil || identities["frame-1"].PersonProfileID != "new-person" {
+	if err != nil || identities["frame-1"].PersonProfileID != "" || identities["frame-1"].TrackID == "" ||
+		identities["frame-1"].Outcome != "ambiguous" {
 		t.Fatalf("identities = %+v, error = %v", identities, err)
 	}
-	if repository.enrollments != 1 || repository.enrollment.ConsentState != "pending" ||
-		repository.enrollment.FilePath != "" || repository.enrollment.SourceTrackID == "" || len(repository.tracks) != 1 {
+	if repository.enrollments != 0 || len(repository.tracks) != 1 ||
+		repository.tracks[0].ResolvedPersonProfileID != "" {
 		t.Fatalf("enrollment = %+v, tracks = %+v", repository.enrollment, repository.tracks)
 	}
 }
 
-func TestVideoFaceIdentifierKeepsAmbiguousProfileInContinuousTrack(t *testing.T) {
+func TestVideoFaceIdentifierDoesNotCreateProfileFromAmbiguousTrack(t *testing.T) {
 	repository := &videoFaceRepository{matchResults: []FaceMatch{
 		{Reasons: []string{"no_compatible_face_profiles"}},
 		{Ambiguous: true, Reasons: []string{"match_threshold_or_runner_up_margin_not_met"}},
@@ -98,9 +101,36 @@ func TestVideoFaceIdentifierKeepsAmbiguousProfileInContinuousTrack(t *testing.T)
 		{FrameID: "frame-1", Timestamp: 0, Image: []byte("image")},
 		{FrameID: "frame-2", Timestamp: 5, Image: []byte("image")},
 	})
-	if err != nil || identities["frame-1"].PersonProfileID != "new-person" ||
-		identities["frame-2"].PersonProfileID != "new-person" ||
+	if err != nil || identities["frame-1"].PersonProfileID != "" ||
+		identities["frame-2"].PersonProfileID != "" || repository.enrollments != 0 ||
 		identities["frame-1"].TrackID != identities["frame-2"].TrackID {
 		t.Fatalf("identities = %+v, error = %v", identities, err)
+	}
+}
+
+func TestVideoFaceIdentifierCreatesOneProvisionalProfilePerUnknownTrack(t *testing.T) {
+	repository := &videoFaceRepository{matchResult: FaceMatch{Reasons: []string{"no_compatible_face_profiles"}}}
+	recognition := usableFaceRecognition()
+	recognition.Faces[0].Box = FaceBox{X: 2, Y: 2, Width: 10, Height: 10}
+	identifier := NewVideoFaceIdentifier(repository, faceRecognizerStub{result: recognition}, config.FaceRecognitionConfig{
+		MatchThreshold: .5, AmbiguousMargin: .1, ProvisionalTTL: 30 * 24 * time.Hour,
+	})
+	identities, err := identifier.Identify(context.Background(), "owner-1", "recording-1", 1, []VideoFrame{
+		{FrameID: "frame-1", Timestamp: 0, Image: []byte("image")},
+		{FrameID: "frame-2", Timestamp: 5, Image: []byte("image")},
+		{FrameID: "frame-3", Timestamp: 10, Image: []byte("image")},
+	})
+	if err != nil || repository.enrollments != 3 || repository.newProfiles != 1 {
+		t.Fatalf("enrollments/new profiles = %d/%d, identities = %+v, error = %v", repository.enrollments, repository.newProfiles, identities, err)
+	}
+	for _, frameID := range []string{"frame-1", "frame-2", "frame-3"} {
+		if identities[frameID].PersonProfileID != "new-person" ||
+			identities[frameID].TrackID != identities["frame-1"].TrackID {
+			t.Fatalf("identities = %+v", identities)
+		}
+	}
+	if identities["frame-1"].Outcome != "provisional" || identities["frame-2"].Outcome != "provisional" ||
+		identities["frame-3"].Outcome != "attached" {
+		t.Fatalf("identity outcomes = %+v", identities)
 	}
 }

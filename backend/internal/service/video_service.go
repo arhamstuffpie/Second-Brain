@@ -552,6 +552,8 @@ func (s *videoService) identifyVisualFaces(
 			continue
 		}
 		person := &observation.People[0]
+		person.PersonTrackID = identity.TrackID
+		person.FaceIdentityOutcome = identity.Outcome
 		person.PersonProfileID = identity.PersonProfileID
 		person.PersonIdentityStatus = identity.IdentityStatus
 		person.PersonName = identity.DisplayName

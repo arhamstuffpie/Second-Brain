@@ -90,6 +90,18 @@ func TestPersonRepositoryConfirmsVoiceAndVisualAsOnePerson(t *testing.T) {
 	}
 	defer func() { _, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, ownerID) }()
 	if _, err := database.ExecContext(ctx, `
+INSERT INTO person_profiles (id,owner_user_id,status,expires_at)
+VALUES ('face-person-mark',$1,'provisional',NOW()+INTERVAL '30 days');
+INSERT INTO face_profiles (
+    id,owner_user_id,person_profile_id,status,provider,detector_model,
+    embedding_model,embedding_dimensions,centroid,expires_at
+) VALUES (
+    'face-profile-mark',$1,'face-person-mark','provisional','opencv','yunet',
+    'sface',2,ARRAY[0.6,0.8],NOW()+INTERVAL '30 days'
+)`, ownerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
 INSERT INTO voice_speaker_profiles (
     id,owner_user_id,status,display_name,embedding_model,embedding_dimensions,centroid
 ) VALUES ('speaker-mark',$1,'confirmed','Mark','test-model',2,ARRAY[0.6,0.8])`, ownerID); err != nil {
@@ -103,7 +115,7 @@ INSERT INTO video_recordings (
     'recording-mark',$1,'session-1','group-1','memory-1','mark.mp4','mark.mp4','video/mp4',100,
     'completed','completed','completed','completed',2,
     '{"segments":[{"id":"segment-1","speaker":"A","speaker_profile_id":"speaker-mark","speaker_name":"Mark","start_time":0,"end_time":2,"text":"Hello"}]}'::jsonb,
-    '{"observations":[{"observation_id":"observation-1","frame_id":"frame-1","start_time":0,"end_time":2,"people":[{"visual_label":"person-1"}]}]}'::jsonb
+    '{"observations":[{"observation_id":"observation-1","frame_id":"frame-1","start_time":0,"end_time":2,"people":[{"visual_label":"person-1","person_track_id":"face-track-mark","person_profile_id":"face-person-mark","person_identity_status":"provisional"}]}]}'::jsonb
 )`, ownerID); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +145,7 @@ VALUES ('memograph','visual-episode','completed',3,'visual'),
 		OwnerUserID: ownerID, RecordingIDs: []string{"recording-mark"},
 		VisualLabel: "person-1", VoiceSpeakerProfileID: "speaker-mark", Confirmed: true,
 	})
-	if err != nil || profile.ID == "" || profile.DisplayName != "Mark" {
+	if err != nil || profile.ID != "face-person-mark" || profile.DisplayName != "Mark" {
 		t.Fatalf("profile = %+v, error = %v", profile, err)
 	}
 	var speakerPersonID, transcriptPersonID, visualPersonID string
@@ -149,6 +161,13 @@ WHERE s.id='speaker-mark' AND r.id='recording-mark'`).Scan(
 	}
 	if speakerPersonID != profile.ID || transcriptPersonID != profile.ID || visualPersonID != profile.ID {
 		t.Fatalf("canonical IDs = %q / %q / %q, want %q", speakerPersonID, transcriptPersonID, visualPersonID, profile.ID)
+	}
+	var faceStatus string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM face_profiles WHERE id='face-profile-mark'`).Scan(&faceStatus); err != nil {
+		t.Fatal(err)
+	}
+	if faceStatus != "confirmed" {
+		t.Fatalf("face status = %q, want confirmed", faceStatus)
 	}
 	var tracks, acceptedLinks int
 	if err := database.QueryRowContext(ctx, `
