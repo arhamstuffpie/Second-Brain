@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/arham/ai-second-brain/internal/config"
+	"github.com/rs/zerolog"
 )
 
 type Dependencies struct {
@@ -35,6 +36,7 @@ type Dependencies struct {
 	FaceConfig          config.FaceRecognitionConfig
 	ActiveSpeakerConfig config.ActiveSpeakerConfig
 	WorkerConfig        config.WorkerConfig
+	Logger              *zerolog.Logger
 }
 
 type Container struct {
@@ -94,6 +96,10 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	video.activeSpeaker = deps.ActiveSpeaker
 	video.faceConfig = deps.FaceConfig
 	video.activeSpeakerConfig = deps.ActiveSpeakerConfig
+	video.logger = deps.Logger
+	if identifier, ok := video.faceIdentifier.(*videoFaceIdentifier); ok {
+		identifier.logger = deps.Logger
+	}
 
 	container := &Container{
 		Health: newHealthService(deps.HealthRepository),

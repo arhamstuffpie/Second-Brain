@@ -218,6 +218,7 @@ func run() error {
 		FaceConfig:          cfg.Face,
 		ActiveSpeakerConfig: cfg.ActiveSpeaker,
 		WorkerConfig:        cfg.Worker,
+		Logger:              &appLogger,
 		JWT:                 cfg.JWT,
 	})
 	if err != nil {

@@ -9,16 +9,21 @@ import (
 )
 
 func (s *videoService) autoResolveVideoIdentities(ctx context.Context, job *VideoJob) error {
+	s.debug().Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Msg("capture function called")
 	if s.activeSpeaker == nil || s.personRepository == nil {
+		s.debug().Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Msg("identity resolution skipped: dependencies unavailable")
 		return nil
 	}
 	tracks := identityPersonTracks(job.VisualAnalysis)
 	segments := identifiableSegments(job.Transcript.Segments)
 	if len(tracks) == 0 || len(segments) == 0 {
+		s.debug().Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Int("person_tracks", len(tracks)).Int("speaker_segments", len(segments)).Msg("identity resolution skipped: insufficient evidence")
 		return nil
 	}
+	s.debug().Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Int("person_tracks", len(tracks)).Int("speaker_segments", len(segments)).Msg("active-speaker analysis started")
 	path, cleanup, err := materializeObject(ctx, s.store, job.FilePath, job.FileName)
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Msg("identity media materialization failed")
 		return err
 	}
 	defer cleanup()
@@ -27,8 +32,10 @@ func (s *videoService) autoResolveVideoIdentities(ctx context.Context, job *Vide
 		MediaType: job.MediaType, PersonTracks: tracks, Segments: segments,
 	})
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Msg("active-speaker analysis failed")
 		return fmt.Errorf("detect active speakers: %w", err)
 	}
+	s.debug().Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Int("evidence_items", len(analysis.Evidence)).Msg("active-speaker analysis completed")
 	trackByID := make(map[string]TemporalPersonTrack, len(tracks))
 	for _, track := range tracks {
 		trackByID[track.ID] = track
@@ -47,10 +54,12 @@ func (s *videoService) autoResolveVideoIdentities(ctx context.Context, job *Vide
 	for _, evidence := range analysis.Evidence {
 		track, ok := trackByID[evidence.PersonTrackID]
 		if !ok {
+			s.debug().Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Str("person_track_id", evidence.PersonTrackID).Msg("identity evidence skipped: track not found")
 			continue
 		}
 		speakerID, linkedSegments, ok := oneSpeakerProfile(evidence.SegmentIDs, segmentByID)
 		if !ok {
+			s.debug().Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Str("person_track_id", evidence.PersonTrackID).Msg("identity evidence skipped: segments do not resolve to one speaker")
 			continue
 		}
 		coverage := trackSegmentCoverage(track, linkedSegments)
@@ -61,6 +70,7 @@ func (s *videoService) autoResolveVideoIdentities(ctx context.Context, job *Vide
 			VisibleMouthCoverage: evidence.VisibleMouthCoverage, TemporalCoverage: coverage,
 			SeparatedUtterances: separatedUtteranceCount(linkedSegments),
 		}, policy)
+		s.debug().Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Str("person_track_id", evidence.PersonTrackID).Str("voice_profile_id", speakerID).Str("decision", decision.Decision).Strs("decision_reasons", decision.Reasons).Float64("active_speaker_score", evidence.Score).Float64("temporal_coverage", coverage).Msg("identity link evaluated")
 		mergeEvidenceCount := s.activeSpeakerConfig.MergeEvidenceCount
 		if mergeEvidenceCount < 2 {
 			mergeEvidenceCount = 3
@@ -77,12 +87,15 @@ func (s *videoService) autoResolveVideoIdentities(ctx context.Context, job *Vide
 			MergeEvidenceRequirement: mergeEvidenceCount,
 		})
 		if err != nil {
+			s.warn().Err(err).Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Str("person_track_id", evidence.PersonTrackID).Str("voice_profile_id", speakerID).Msg("identity resolution persistence failed")
 			return err
 		}
+		s.debug().Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Str("person_track_id", evidence.PersonTrackID).Str("person_profile_id", resolution.PersonProfileID).Str("resolution", resolution.Decision).Str("merged_from_profile_id", resolution.MergedFromProfileID).Msg("identity evidence resolved")
 		if resolution.Decision == "accepted" {
 			applyAutomaticIdentityResolution(job, resolution)
 		}
 	}
+	s.debug().Str("capture_function", "autoResolveVideoIdentities").Str("recording_id", job.RecordingID).Msg("capture function completed")
 	return nil
 }
 

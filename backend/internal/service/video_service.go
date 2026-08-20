@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/arham/ai-second-brain/internal/config"
+	"github.com/rs/zerolog"
 )
 
 type videoService struct {
@@ -40,6 +41,7 @@ type videoService struct {
 	maxAttempts         int
 	faceConfig          config.FaceRecognitionConfig
 	activeSpeakerConfig config.ActiveSpeakerConfig
+	logger              *zerolog.Logger
 }
 
 func newVideoService(
@@ -79,6 +81,7 @@ func (s *videoService) IngestVideo(
 	input.Location = strings.TrimSpace(input.Location)
 	input.FileName = filepath.Base(strings.TrimSpace(input.FileName))
 	input.MediaType = strings.TrimSpace(input.MediaType)
+	s.debug().Str("capture_function", "IngestVideo").Str("session_id", input.SessionID).Str("memory_id", input.MemoryID).Str("file_name", input.FileName).Msg("capture function called")
 	if input.OwnerUserID == "" {
 		return VideoRecording{}, validation("owner_user_id", "is required")
 	}
@@ -109,8 +112,10 @@ func (s *videoService) IngestVideo(
 
 	stored, err := s.store.Save(ctx, input.FileName, input.Content)
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "IngestVideo").Str("session_id", input.SessionID).Msg("capture media storage failed")
 		return VideoRecording{}, validation("file", err.Error())
 	}
+	s.debug().Str("capture_function", "IngestVideo").Str("session_id", input.SessionID).Str("object_key", stored.Path).Int64("size_bytes", stored.SizeBytes).Msg("capture media stored")
 	result, err := s.repository.CreateVideoRecording(ctx, CreateVideoRecordingInput{
 		OwnerUserID: input.OwnerUserID, SessionID: input.SessionID,
 		GroupID: input.GroupID, MemoryID: input.MemoryID, DeviceID: input.DeviceID,
@@ -121,8 +126,10 @@ func (s *videoService) IngestVideo(
 	}, s.maxAttempts)
 	if err != nil {
 		_ = s.store.Delete(context.Background(), stored.Path)
+		s.warn().Err(err).Str("capture_function", "IngestVideo").Str("session_id", input.SessionID).Msg("capture recording persistence failed")
 		return VideoRecording{}, fmt.Errorf("persist video ingestion: %w", err)
 	}
+	s.debug().Str("capture_function", "IngestVideo").Str("session_id", input.SessionID).Str("recording_id", result.ID).Msg("capture function completed")
 	return result, nil
 }
 
@@ -193,6 +200,7 @@ func (s *videoService) StartVideoRealtimeSession(
 	input.GroupID = strings.TrimSpace(input.GroupID)
 	input.DeviceID = strings.TrimSpace(input.DeviceID)
 	input.Location = strings.TrimSpace(input.Location)
+	s.debug().Str("capture_function", "StartVideoRealtimeSession").Str("memory_id", input.MemoryID).Str("group_id", input.GroupID).Msg("capture function called")
 	if input.OwnerUserID == "" {
 		return RealtimeVideoSession{}, validation("owner_user_id", "is required")
 	}
@@ -220,7 +228,13 @@ func (s *videoService) StartVideoRealtimeSession(
 			"must be between 1 and 60 and no greater than chunk_duration_seconds",
 		)
 	}
-	return s.repository.CreateVideoRealtimeSession(ctx, input)
+	result, err := s.repository.CreateVideoRealtimeSession(ctx, input)
+	if err != nil {
+		s.warn().Err(err).Str("capture_function", "StartVideoRealtimeSession").Str("memory_id", input.MemoryID).Msg("capture session creation failed")
+		return RealtimeVideoSession{}, err
+	}
+	s.debug().Str("capture_function", "StartVideoRealtimeSession").Str("session_id", result.ID).Str("memory_id", result.MemoryID).Msg("capture function completed")
+	return result, nil
 }
 
 func (s *videoService) IngestVideoRealtimeChunk(
@@ -232,6 +246,7 @@ func (s *videoService) IngestVideoRealtimeChunk(
 	input.ClientChunkID = strings.ToLower(strings.TrimSpace(input.ClientChunkID))
 	input.FileName = filepath.Base(strings.TrimSpace(input.FileName))
 	input.MediaType = strings.TrimSpace(input.MediaType)
+	s.debug().Str("capture_function", "IngestVideoRealtimeChunk").Str("session_id", input.SessionID).Str("chunk_id", input.ClientChunkID).Bool("is_final", input.IsFinal).Str("file_name", input.FileName).Msg("capture function called")
 	if input.OwnerUserID == "" || input.SessionID == "" {
 		return VideoRecording{}, validation(
 			"session_id", "session_id and authenticated owner are required",
@@ -245,6 +260,7 @@ func (s *videoService) IngestVideoRealtimeChunk(
 	); err != nil {
 		return VideoRecording{}, err
 	} else if found {
+		s.debug().Str("capture_function", "IngestVideoRealtimeChunk").Str("session_id", input.SessionID).Str("chunk_id", input.ClientChunkID).Str("recording_id", existing.ID).Msg("duplicate capture chunk reused")
 		if input.IsFinal {
 			if _, stopErr := s.repository.StopVideoRealtimeSession(
 				ctx, input.SessionID, input.OwnerUserID,
@@ -258,8 +274,10 @@ func (s *videoService) IngestVideoRealtimeChunk(
 		ctx, input.SessionID, input.OwnerUserID,
 	)
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "IngestVideoRealtimeChunk").Str("session_id", input.SessionID).Msg("capture session lookup failed")
 		return VideoRecording{}, err
 	}
+	s.debug().Str("capture_function", "IngestVideoRealtimeChunk").Str("session_id", input.SessionID).Str("session_status", session.Status).Msg("capture session loaded")
 	if session.Status != "active" {
 		return VideoRecording{}, fmt.Errorf("%w: realtime video session is stopped", ErrConflict)
 	}
@@ -278,8 +296,10 @@ func (s *videoService) IngestVideoRealtimeChunk(
 
 	stored, err := s.store.Save(ctx, input.FileName, input.Content)
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "IngestVideoRealtimeChunk").Str("session_id", input.SessionID).Str("chunk_id", input.ClientChunkID).Msg("capture chunk storage failed")
 		return VideoRecording{}, validation("file", err.Error())
 	}
+	s.debug().Str("capture_function", "IngestVideoRealtimeChunk").Str("session_id", input.SessionID).Str("chunk_id", input.ClientChunkID).Str("object_key", stored.Path).Int64("size_bytes", stored.SizeBytes).Msg("capture chunk stored")
 	result, err := s.repository.CreateRealtimeVideoChunk(
 		ctx,
 		CreateRealtimeVideoChunkInput{
@@ -296,18 +316,22 @@ func (s *videoService) IngestVideoRealtimeChunk(
 		)
 		if findErr == nil && found {
 			_ = s.store.Delete(context.Background(), stored.Path)
+			s.debug().Str("capture_function", "IngestVideoRealtimeChunk").Str("session_id", input.SessionID).Str("chunk_id", input.ClientChunkID).Str("recording_id", existing.ID).Msg("concurrent duplicate capture chunk reused")
 			return existing, nil
 		}
 		_ = s.store.Delete(context.Background(), stored.Path)
+		s.warn().Err(err).Str("capture_function", "IngestVideoRealtimeChunk").Str("session_id", input.SessionID).Str("chunk_id", input.ClientChunkID).Msg("capture chunk persistence failed")
 		return VideoRecording{}, fmt.Errorf("persist realtime video chunk: %w", err)
 	}
 	if input.IsFinal {
 		if _, stopErr := s.repository.StopVideoRealtimeSession(
 			ctx, input.SessionID, input.OwnerUserID,
 		); stopErr != nil {
+			s.warn().Err(stopErr).Str("capture_function", "IngestVideoRealtimeChunk").Str("session_id", input.SessionID).Msg("automatic capture session stop failed")
 			return VideoRecording{}, stopErr
 		}
 	}
+	s.debug().Str("capture_function", "IngestVideoRealtimeChunk").Str("session_id", input.SessionID).Str("chunk_id", input.ClientChunkID).Str("recording_id", result.ID).Bool("is_final", input.IsFinal).Msg("capture function completed")
 	return result, nil
 }
 
@@ -328,14 +352,26 @@ func (s *videoService) StopVideoRealtimeSession(
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerUserID) == "" {
 		return RealtimeVideoSession{}, validation("session_id", "is required")
 	}
-	return s.repository.StopVideoRealtimeSession(ctx, id, ownerUserID)
+	s.debug().Str("capture_function", "StopVideoRealtimeSession").Str("session_id", id).Msg("capture function called")
+	result, err := s.repository.StopVideoRealtimeSession(ctx, id, ownerUserID)
+	if err != nil {
+		s.warn().Err(err).Str("capture_function", "StopVideoRealtimeSession").Str("session_id", id).Msg("capture session stop failed")
+		return RealtimeVideoSession{}, err
+	}
+	s.debug().Str("capture_function", "StopVideoRealtimeSession").Str("session_id", id).Str("session_status", result.Status).Msg("capture function completed")
+	return result, nil
 }
 
 func (s *videoService) ProcessNextVideoJob(ctx context.Context) (bool, error) {
 	job, found, err := s.repository.ClaimVideoJob(ctx)
-	if err != nil || !found {
+	if err != nil {
+		s.warn().Err(err).Str("capture_function", "ProcessNextVideoJob").Msg("capture job claim failed")
+		return false, err
+	}
+	if !found {
 		return found, err
 	}
+	s.debug().Str("capture_function", "ProcessNextVideoJob").Int64("job_id", job.ID).Str("job_kind", job.Kind).Str("recording_id", job.RecordingID).Str("episode_id", job.EpisodeID).Int("attempt", job.Attempts).Msg("capture job claimed")
 	switch job.Kind {
 	case "audio":
 		err = s.processVideoAudio(ctx, job)
@@ -349,8 +385,10 @@ func (s *videoService) ProcessNextVideoJob(ctx context.Context) (bool, error) {
 		err = fmt.Errorf("unsupported video job kind %q", job.Kind)
 	}
 	if err == nil {
+		s.debug().Str("capture_function", "ProcessNextVideoJob").Int64("job_id", job.ID).Str("job_kind", job.Kind).Str("recording_id", job.RecordingID).Msg("capture job completed")
 		return true, nil
 	}
+	s.warn().Err(err).Str("capture_function", "ProcessNextVideoJob").Int64("job_id", job.ID).Str("job_kind", job.Kind).Str("recording_id", job.RecordingID).Msg("capture job failed")
 	dead := job.Attempts >= job.MaxAttempts
 	retryCtx := ctx
 	var cancel context.CancelFunc
@@ -362,38 +400,57 @@ func (s *videoService) ProcessNextVideoJob(ctx context.Context) (bool, error) {
 		retryCtx, job, err.Error(),
 		time.Now().UTC().Add(retryDelayForError(err, job.Attempts)), dead,
 	); retryErr != nil {
+		s.warn().Err(retryErr).Str("capture_function", "ProcessNextVideoJob").Int64("job_id", job.ID).Msg("capture job retry persistence failed")
 		return true, fmt.Errorf("%v; persist video retry: %w", err, retryErr)
 	}
+	s.debug().Str("capture_function", "ProcessNextVideoJob").Int64("job_id", job.ID).Bool("dead", dead).Msg("capture job retry state saved")
 	return true, err
 }
 
 func (s *videoService) ProcessNextIdentityJob(ctx context.Context) (bool, error) {
 	job, found, err := s.repository.ClaimIdentityJob(ctx)
-	if err != nil || !found {
+	if err != nil {
+		s.warn().Err(err).Str("capture_function", "ProcessNextIdentityJob").Msg("identity job claim failed")
+		return false, err
+	}
+	if !found {
 		return found, err
 	}
+	s.debug().Str("capture_function", "ProcessNextIdentityJob").Int64("job_id", job.ID).Str("recording_id", job.RecordingID).Int("attempt", job.Attempts).Msg("identity job claimed")
 	err = s.autoResolveVideoIdentities(ctx, &job)
 	if err == nil {
-		return true, s.repository.CompleteIdentityJob(ctx, job, "")
+		completeErr := s.repository.CompleteIdentityJob(ctx, job, "")
+		if completeErr != nil {
+			s.warn().Err(completeErr).Str("capture_function", "ProcessNextIdentityJob").Int64("job_id", job.ID).Str("recording_id", job.RecordingID).Msg("identity job completion persistence failed")
+			return true, completeErr
+		}
+		s.debug().Str("capture_function", "ProcessNextIdentityJob").Int64("job_id", job.ID).Str("recording_id", job.RecordingID).Msg("identity job completed")
+		return true, nil
 	}
+	s.warn().Err(err).Str("capture_function", "ProcessNextIdentityJob").Int64("job_id", job.ID).Str("recording_id", job.RecordingID).Msg("identity job failed")
 	dead := job.Attempts >= job.MaxAttempts
 	retryErr := s.repository.RetryIdentityJob(
 		ctx, job, err.Error(), time.Now().UTC().Add(retryDelayForError(err, job.Attempts)), dead,
 	)
 	if retryErr != nil {
+		s.warn().Err(retryErr).Str("capture_function", "ProcessNextIdentityJob").Int64("job_id", job.ID).Msg("identity job retry persistence failed")
 		return true, fmt.Errorf("%v; persist identity retry: %w", err, retryErr)
 	}
+	s.debug().Str("capture_function", "ProcessNextIdentityJob").Int64("job_id", job.ID).Bool("dead", dead).Msg("identity job retry state saved")
 	return true, err
 }
 
 func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) error {
+	s.debug().Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("capture function called")
 	path, cleanup, err := materializeObject(ctx, s.store, job.FilePath, job.FileName)
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("capture media materialization failed")
 		return err
 	}
 	defer cleanup()
 	extracted, err := s.extractor.ExtractAudio(ctx, path)
 	if errors.Is(err, ErrNoAudioTrack) {
+		s.debug().Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("capture contains no audio track")
 		audioTrackPresent := false
 		return s.repository.SaveVideoTranscript(
 			ctx, job, Transcript{
@@ -405,29 +462,37 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 		)
 	}
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("audio extraction failed")
 		return err
 	}
+	s.debug().Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Str("audio_file", extracted.FileName).Msg("audio extracted")
 	defer extracted.Audio.Close()
 	references, err := loadOwnerSpeakerReferences(
 		ctx, s.enrollments, s.enrollmentStore, job.OwnerUserID,
 	)
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("speaker references loading failed")
 		return err
 	}
+	s.debug().Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Int("speaker_references", len(references)).Msg("speaker references loaded")
 	transcript, err := s.transcriber.Transcribe(ctx, TranscriptionInput{
 		OwnerUserID: job.OwnerUserID,
 		FileName:    extracted.FileName, MediaType: extracted.MediaType, Audio: extracted.Audio,
 		KnownSpeakers: references,
 	})
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("transcription failed")
 		return err
 	}
+	s.debug().Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Int("segments", len(transcript.Segments)).Msg("transcription completed")
 	transcript, err = s.attributor.Attribute(ctx, SpeakerAttributionInput{
 		Transcript: transcript, References: references,
 	})
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("speaker attribution failed")
 		return fmt.Errorf("attribute video transcript speakers: %w", err)
 	}
+	s.debug().Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("speaker attribution completed")
 	if s.speakerIdentifier != nil {
 		identified, identifyErr := s.speakerIdentifier.Identify(ctx, SpeakerIdentificationInput{
 			OwnerUserID: job.OwnerUserID, SourceKind: "video",
@@ -436,7 +501,10 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 		})
 		transcript = identified
 		if identifyErr != nil {
+			s.warn().Err(identifyErr).Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("persistent speaker identification failed")
 			transcript.Warning = appendTranscriptWarning(transcript.Warning, "persistent speaker identification was unavailable")
+		} else {
+			s.debug().Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("persistent speaker identification completed")
 		}
 	}
 	if transcript.Segments == nil {
@@ -447,11 +515,17 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 	if strings.TrimSpace(transcript.Text) == "" && len(transcript.Segments) == 0 {
 		transcript.Warning = "audio track was present, but no speech was detected"
 	}
-	return s.repository.SaveVideoTranscript(
+	err = s.repository.SaveVideoTranscript(
 		ctx, job, transcript, speakerReferenceIDs(references),
 		transcriptionProvider(transcript, s.transcriber),
 		transcriptionModel(transcript, s.transcriber), s.maxAttempts,
 	)
+	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Msg("transcript persistence failed")
+		return err
+	}
+	s.debug().Str("capture_function", "processVideoAudio").Str("recording_id", job.RecordingID).Int("segments", len(transcript.Segments)).Msg("capture function completed")
+	return nil
 }
 
 func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) error {
@@ -459,20 +533,31 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 	if interval <= 0 {
 		interval = s.frameInterval
 	}
+	s.debug().Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Dur("frame_interval", interval).Msg("capture function called")
 	batch, found, err := s.repository.ClaimVideoAnalysisBatch(ctx, job)
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Msg("visual batch claim failed")
 		return err
+	}
+	if found {
+		s.debug().Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Str("batch_id", batch.ID).Int("batch_index", batch.BatchIndex).Int("batch_frames", len(batch.Frames)).Msg("visual batch claimed")
 	}
 	if !found {
 		completed, err := s.repository.FinishVideoAnalysis(
 			ctx, job, job.ActualDuration, s.analyzer.Provider(), s.analyzer.Model(), s.maxAttempts,
 		)
 		if err != nil || completed {
+			if err != nil {
+				s.warn().Err(err).Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Msg("visual completion check failed")
+			} else {
+				s.debug().Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Msg("visual analysis already completed")
+			}
 			return err
 		}
 	}
 	path, cleanup, err := materializeObject(ctx, s.store, job.FilePath, job.FileName)
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Msg("capture media materialization failed")
 		return err
 	}
 	defer cleanup()
@@ -483,8 +568,10 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 		}
 		extraction, extractErr := s.extractor.ExtractFrames(ctx, path, interval, s.maxFrames)
 		if extractErr != nil {
+			s.warn().Err(extractErr).Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Msg("frame selection failed")
 			return extractErr
 		}
+		s.debug().Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Int("selected_frames", len(extraction.Frames)).Float64("duration_seconds", extraction.DurationSeconds).Msg("frames selected")
 		duration = extraction.DurationSeconds
 		for index := range extraction.Frames {
 			frame := &extraction.Frames[index]
@@ -503,10 +590,13 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 			frame.Image = nil
 		}
 		if err := s.repository.CreateVideoAnalysisBatches(ctx, job, duration, extraction.Frames); err != nil {
+			s.warn().Err(err).Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Msg("visual batch creation failed")
 			return err
 		}
+		s.debug().Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Msg("visual batches created")
 		batch, found, err = s.repository.ClaimVideoAnalysisBatch(ctx, job)
 		if err != nil {
+			s.warn().Err(err).Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Msg("created visual batch claim failed")
 			return err
 		}
 		if !found {
@@ -515,26 +605,37 @@ func (s *videoService) processVideoVisual(ctx context.Context, job VideoJob) err
 	}
 	frames, err := s.extractor.ExtractFramesAt(ctx, path, batch.Frames)
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Str("batch_id", batch.ID).Msg("visual frame extraction failed")
 		return s.finishFailedVideoBatch(ctx, job, batch, duration, err)
 	}
+	s.debug().Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Str("batch_id", batch.ID).Int("frames", len(frames)).Msg("visual frames extracted")
 	analysis, err := s.analyzer.Analyze(ctx, VisualAnalysisInput{
 		Frames: frames, WindowDuration: interval.Seconds(),
 	})
 	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Str("batch_id", batch.ID).Msg("vision analysis failed")
 		return s.finishFailedVideoBatch(ctx, job, batch, duration, err)
 	}
+	s.debug().Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Str("batch_id", batch.ID).Int("observations", len(analysis.Observations)).Msg("vision analysis completed")
 	groundVisualObservations(&analysis, frames, job.ProcessingVersion)
 	s.identifyVisualFaces(ctx, job.OwnerUserID, job.RecordingID, job.ProcessingVersion, &analysis, frames)
 	s.storeImportantEvidenceFrames(ctx, &analysis, frames)
 	analysis.Provider, analysis.Model = s.analyzer.Provider(), s.analyzer.Model()
 	analysis.ProcessingVersion = job.ProcessingVersion
 	if err := s.repository.CompleteVideoAnalysisBatch(ctx, job, batch, analysis); err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Str("batch_id", batch.ID).Msg("visual batch persistence failed")
 		return err
 	}
-	_, err = s.repository.FinishVideoAnalysis(
+	s.debug().Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Str("batch_id", batch.ID).Msg("visual batch persisted")
+	completed, err := s.repository.FinishVideoAnalysis(
 		ctx, job, duration, s.analyzer.Provider(), s.analyzer.Model(), s.maxAttempts,
 	)
-	return err
+	if err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Msg("visual analysis finalization failed")
+		return err
+	}
+	s.debug().Str("capture_function", "processVideoVisual").Str("recording_id", job.RecordingID).Bool("all_batches_completed", completed).Msg("capture function completed")
+	return nil
 }
 
 func (s *videoService) identifyVisualFaces(
@@ -545,6 +646,7 @@ func (s *videoService) identifyVisualFaces(
 	frames []VideoFrame,
 ) {
 	if s.faceIdentifier == nil {
+		s.debug().Str("recording_id", recordingID).Msg("face identification skipped: recognizer is not configured")
 		return
 	}
 	eligible := make([]VideoFrame, 0, len(frames))
@@ -558,10 +660,13 @@ func (s *videoService) identifyVisualFaces(
 		}
 	}
 	if len(eligible) == 0 {
+		s.debug().Str("recording_id", recordingID).Int("observations", len(analysis.Observations)).Msg("face identification skipped: no eligible frames")
 		return
 	}
+	s.debug().Str("recording_id", recordingID).Int("eligible_frames", len(eligible)).Msg("face identification started")
 	identities, err := s.faceIdentifier.Identify(ctx, ownerUserID, recordingID, processingVersion, eligible)
 	if err != nil {
+		s.warn().Err(err).Str("recording_id", recordingID).Int("eligible_frames", len(eligible)).Msg("face identification completed with errors")
 		analysis.Warning = appendTranscriptWarning(
 			analysis.Warning, "face identification was unavailable for some video frames",
 		)
@@ -583,6 +688,7 @@ func (s *videoService) identifyVisualFaces(
 		person.PersonName = identity.DisplayName
 		person.FaceMatchConfidence = identity.Similarity
 	}
+	s.debug().Str("recording_id", recordingID).Int("identified_frames", len(identities)).Msg("face identification completed")
 }
 
 func (s *videoService) storeImportantEvidenceFrames(
@@ -590,6 +696,8 @@ func (s *videoService) storeImportantEvidenceFrames(
 	analysis *VisualAnalysis,
 	frames []VideoFrame,
 ) {
+	s.debug().Str("capture_function", "storeImportantEvidenceFrames").Int("observations", len(analysis.Observations)).Msg("capture function called")
+	storedCount := 0
 	for index := range analysis.Observations {
 		if index >= len(frames) {
 			break
@@ -602,13 +710,17 @@ func (s *videoService) storeImportantEvidenceFrames(
 			ctx, observation.FrameID+".jpg", bytes.NewReader(frames[index].Image),
 		)
 		if err != nil {
+			s.warn().Err(err).Str("capture_function", "storeImportantEvidenceFrames").Str("frame_id", observation.FrameID).Msg("important evidence frame storage failed")
 			analysis.Warning = appendTranscriptWarning(
 				analysis.Warning, "important evidence frame storage failed for "+observation.FrameID,
 			)
 			continue
 		}
 		observation.DerivedObjectKey = stored.Key
+		storedCount++
+		s.debug().Str("capture_function", "storeImportantEvidenceFrames").Str("frame_id", observation.FrameID).Str("object_key", stored.Key).Msg("important evidence frame stored")
 	}
+	s.debug().Str("capture_function", "storeImportantEvidenceFrames").Int("stored_frames", storedCount).Msg("capture function completed")
 }
 
 func importantVisualEvidence(observation VideoObservation) bool {
@@ -632,6 +744,7 @@ func (s *videoService) finishFailedVideoBatch(
 	cause error,
 ) error {
 	dead := batch.Attempts >= s.maxAttempts
+	s.warn().Err(cause).Str("capture_function", "finishFailedVideoBatch").Str("recording_id", job.RecordingID).Str("batch_id", batch.ID).Bool("dead", dead).Msg("visual batch failed")
 	if err := s.repository.RetryVideoAnalysisBatch(ctx, job, batch, cause.Error(), dead); err != nil {
 		return err
 	}
@@ -686,17 +799,22 @@ func materializeObject(ctx context.Context, store AudioStore, key, filename stri
 }
 
 func (s *videoService) processVideoMerge(ctx context.Context, job VideoJob) error {
+	s.debug().Str("capture_function", "processVideoMerge").Str("recording_id", job.RecordingID).Int("transcript_segments", len(job.Transcript.Segments)).Int("visual_observations", len(job.VisualAnalysis.Observations)).Msg("capture function called")
 	episodes := BuildEvidenceEpisodes(
 		job.Transcript, job.VisualAnalysis, s.episodeDuration,
 		job.StartOffset, job.SessionID, job.Location, job.RecordingID,
 		job.MediaAssetID, job.ProcessingVersion,
 	)
 	if len(episodes) == 0 {
+		s.warn().Str("capture_function", "processVideoMerge").Str("recording_id", job.RecordingID).Msg("capture merge produced no episodes")
 		return fmt.Errorf("audio and visual processing produced no episodes")
 	}
+	s.debug().Str("capture_function", "processVideoMerge").Str("recording_id", job.RecordingID).Int("episodes", len(episodes)).Msg("capture evidence episodes built")
 	if err := s.repository.SaveVideoEpisodes(ctx, job, episodes, s.maxAttempts); err != nil {
+		s.warn().Err(err).Str("capture_function", "processVideoMerge").Str("recording_id", job.RecordingID).Msg("capture evidence episode persistence failed")
 		return err
 	}
+	s.debug().Str("capture_function", "processVideoMerge").Str("recording_id", job.RecordingID).Int("episodes", len(episodes)).Msg("capture function completed")
 	return nil
 }
 
@@ -827,6 +945,7 @@ func visualEvidenceDescription(
 }
 
 func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) error {
+	s.debug().Str("capture_function", "processVideoMemograph").Str("recording_id", job.RecordingID).Str("episode_id", job.EpisodeID).Str("source", job.MemographSource).Msg("capture function called")
 	if s.speakerProfiles != nil && (job.MemographSource == "speech" || job.MemographSource == "legacy") {
 		profiles, err := s.speakerProfiles.ListSpeakerProfiles(ctx, job.OwnerUserID)
 		if err != nil {
@@ -932,15 +1051,43 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 		job.MemoryID, identity, source, int64(job.ProcessingVersion),
 	)
 	baseMeta["idempotency_key"] = idempotencyKey
-	response, err := s.memograph.InsertEpisode(ctx, job.MemoryID, EpisodeInsertRequest{
+	request := EpisodeInsertRequest{
 		Data: data, Meta: baseMeta, StructuredGraph: structuredGraph,
 		CustomFields:   custom,
 		IdempotencyKey: idempotencyKey,
-	})
+	}
+	s.debug().
+		Str("recording_id", job.RecordingID).
+		Str("episode_id", job.EpisodeID).
+		Str("memory_id", job.MemoryID).
+		Str("source", source).
+		Str("memograph_data", data).
+		Interface("memograph_meta", baseMeta).
+		Interface("memograph_structured_graph", structuredGraph).
+		Msg("sending Memograph episode payload")
+	response, err := s.memograph.InsertEpisode(ctx, job.MemoryID, request)
 	if err != nil {
+		s.warn().Err(err).Str("recording_id", job.RecordingID).Str("episode_id", job.EpisodeID).Str("source", source).Msg("Memograph episode write failed")
 		return fmt.Errorf("write video %s episode: %w", source, err)
 	}
+	s.debug().Str("recording_id", job.RecordingID).Str("episode_id", job.EpisodeID).Str("source", source).Msg("Memograph episode write completed")
 	return s.repository.CompleteVideoMemographBranch(ctx, job, response)
+}
+
+func (s *videoService) debug() *zerolog.Event {
+	if s.logger == nil {
+		logger := zerolog.Nop()
+		return logger.Debug()
+	}
+	return s.logger.Debug()
+}
+
+func (s *videoService) warn() *zerolog.Event {
+	if s.logger == nil {
+		logger := zerolog.Nop()
+		return logger.Warn()
+	}
+	return s.logger.Warn()
 }
 
 func legacyVideoMemographData(description string) (string, string) {

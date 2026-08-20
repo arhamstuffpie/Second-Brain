@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/arham/ai-second-brain/internal/config"
+	"github.com/rs/zerolog"
 )
 
 type VideoFaceIdentity struct {
@@ -30,6 +31,7 @@ type videoFaceIdentifier struct {
 	repository PersonRepository
 	recognizer FaceRecognizer
 	config     config.FaceRecognitionConfig
+	logger     *zerolog.Logger
 }
 
 type localFaceTrack struct {
@@ -63,6 +65,7 @@ func (s *videoFaceIdentifier) Identify(
 	processingVersion int,
 	frames []VideoFrame,
 ) (map[string]VideoFaceIdentity, error) {
+	s.debug().Str("recording_id", recordingID).Int("frames", len(frames)).Msg("face gallery identification started")
 	ordered := append([]VideoFrame(nil), frames...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Timestamp < ordered[j].Timestamp })
 	identities := make(map[string]VideoFaceIdentity)
@@ -74,15 +77,25 @@ func (s *videoFaceIdentifier) Identify(
 			Image: frame.Image, SingleFace: false,
 		})
 		if err != nil {
+			s.warn().Err(err).Str("recording_id", recordingID).Str("frame_id", frame.FrameID).Msg("face recognition request failed")
 			failures = append(failures, fmt.Errorf("recognize face in %s: %w", frame.FrameID, err))
 			continue
 		}
 		if len(result.Faces) != 1 {
+			s.debug().Str("recording_id", recordingID).Str("frame_id", frame.FrameID).Int("face_count", len(result.Faces)).Msg("face frame rejected: expected exactly one face")
 			track = nil
 			continue
 		}
 		face := result.Faces[0]
 		if !face.Quality.Usable || len(face.Embedding) == 0 || len(face.Embedding) != result.Dimensions {
+			s.debug().
+				Str("recording_id", recordingID).
+				Str("frame_id", frame.FrameID).
+				Bool("usable", face.Quality.Usable).
+				Strs("quality_reasons", face.Quality.Reasons).
+				Float64("quality_score", face.Quality.Score).
+				Int("embedding_dimensions", len(face.Embedding)).
+				Msg("face frame rejected by gallery quality gate")
 			continue
 		}
 
@@ -100,16 +113,25 @@ func (s *videoFaceIdentifier) Identify(
 			AmbiguousMargin: s.config.AmbiguousMargin,
 		})
 		if err != nil {
+			s.warn().Err(err).Str("recording_id", recordingID).Str("frame_id", frame.FrameID).Msg("face gallery match failed")
 			failures = append(failures, fmt.Errorf("match face in %s: %w", frame.FrameID, err))
 			continue
 		}
-
 		if track == nil {
 			track = &localFaceTrack{
 				id: faceTrackID(recordingID, frame.FrameID, processingVersion), start: frame.Timestamp,
 				end: frame.Timestamp, confidence: face.DetectionScore,
 			}
 		}
+		s.debug().
+			Str("recording_id", recordingID).
+			Str("frame_id", frame.FrameID).
+			Str("track_id", track.id).
+			Bool("matched", match.Matched).
+			Bool("ambiguous", match.Ambiguous).
+			Str("person_profile_id", match.PersonProfileID).
+			Strs("match_reasons", match.Reasons).
+			Msg("face gallery match evaluated")
 		identity := VideoFaceIdentity{TrackID: track.id, Pose: face.Pose, Outcome: "ambiguous"}
 		if match.Matched {
 			if continuing && track.identity.PersonProfileID != "" && track.identity.PersonProfileID != match.PersonProfileID {
@@ -140,10 +162,13 @@ func (s *videoFaceIdentifier) Identify(
 		}
 
 		if identity.PersonProfileID == "" && !match.Ambiguous && galleryEvidenceCount(track.observed) >= 2 {
+			s.debug().Str("recording_id", recordingID).Str("track_id", track.id).Int("usable_samples", galleryEvidenceCount(track.observed)).Msg("creating provisional face gallery")
 			profile, enrollErr := s.remember(ctx, ownerUserID, recordingID, track.id, result, face, "")
 			if enrollErr != nil {
+				s.warn().Err(enrollErr).Str("recording_id", recordingID).Str("track_id", track.id).Msg("create provisional face gallery failed")
 				failures = append(failures, fmt.Errorf("create provisional face in %s: %w", frame.FrameID, enrollErr))
 			} else {
+				s.debug().Str("recording_id", recordingID).Str("track_id", track.id).Str("person_profile_id", profile.ID).Msg("provisional face gallery created")
 				identity.PersonProfileID, identity.IdentityStatus, identity.DisplayName = profile.ID, profile.Status, profile.DisplayName
 				identity.Outcome = "provisional"
 				track.identity = identity
@@ -155,6 +180,8 @@ func (s *videoFaceIdentifier) Identify(
 						ctx, ownerUserID, recordingID, track.id, observation.result, observation.face, profile.ID,
 					); rememberErr != nil {
 						failures = append(failures, fmt.Errorf("extend provisional face gallery from %s: %w", observation.frame.FrameID, rememberErr))
+					} else {
+						s.debug().Str("recording_id", recordingID).Str("track_id", track.id).Str("person_profile_id", profile.ID).Str("frame_id", observation.frame.FrameID).Msg("face gallery sample saved")
 					}
 				}
 				for _, observation := range track.observed {
@@ -166,7 +193,10 @@ func (s *videoFaceIdentifier) Identify(
 			}
 		} else if identity.PersonProfileID != "" && !match.Ambiguous {
 			if _, rememberErr := s.remember(ctx, ownerUserID, recordingID, track.id, result, face, identity.PersonProfileID); rememberErr != nil {
+				s.warn().Err(rememberErr).Str("recording_id", recordingID).Str("track_id", track.id).Str("person_profile_id", identity.PersonProfileID).Msg("extend face gallery failed")
 				failures = append(failures, fmt.Errorf("extend face gallery in %s: %w", frame.FrameID, rememberErr))
+			} else {
+				s.debug().Str("recording_id", recordingID).Str("track_id", track.id).Str("person_profile_id", identity.PersonProfileID).Str("frame_id", frame.FrameID).Msg("face gallery sample saved")
 			}
 		}
 
@@ -183,11 +213,31 @@ func (s *videoFaceIdentifier) Identify(
 				TrackingConfidence:      track.confidence, EvidenceFrameIDs: track.evidence,
 				ProcessingVersion: processingVersion,
 			}); saveErr != nil {
+				s.warn().Err(saveErr).Str("recording_id", recordingID).Str("track_id", track.id).Msg("save person track failed")
 				failures = append(failures, saveErr)
+			} else {
+				s.debug().Str("recording_id", recordingID).Str("track_id", track.id).Str("person_profile_id", identity.PersonProfileID).Msg("person track saved")
 			}
 		}
 	}
+	s.debug().Str("recording_id", recordingID).Int("identified_frames", len(identities)).Msg("face gallery identification completed")
 	return identities, errors.Join(failures...)
+}
+
+func (s *videoFaceIdentifier) debug() *zerolog.Event {
+	if s.logger == nil {
+		logger := zerolog.Nop()
+		return logger.Debug()
+	}
+	return s.logger.Debug()
+}
+
+func (s *videoFaceIdentifier) warn() *zerolog.Event {
+	if s.logger == nil {
+		logger := zerolog.Nop()
+		return logger.Warn()
+	}
+	return s.logger.Warn()
 }
 
 func (s *videoFaceIdentifier) remember(
