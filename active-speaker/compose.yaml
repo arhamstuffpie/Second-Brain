@@ -1,0 +1,18 @@
+services:
+  active-speaker:
+    build:
+      context: .
+      args:
+        ACTIVE_SPEAKER_DEVICE: ${ACTIVE_SPEAKER_DEVICE:-cpu}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8093:8093"
+    environment:
+      ACTIVE_SPEAKER_MODEL: talknet/talkset-v1
+      ACTIVE_SPEAKER_API_KEY: ${ACTIVE_SPEAKER_API_KEY:-}
+      ACTIVE_SPEAKER_MAX_UPLOAD_BYTES: ${ACTIVE_SPEAKER_MAX_UPLOAD_BYTES:-536870912}
+      ACTIVE_SPEAKER_IN_MEMORY_FRAMES: ${ACTIVE_SPEAKER_IN_MEMORY_FRAMES:-0}
+    deploy:
+      resources:
+        limits:
+          memory: 6G
