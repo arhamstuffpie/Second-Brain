@@ -205,6 +205,7 @@ func applySpeakerProfile(transcript *Transcript, providerSpeaker string, profile
 		}
 		segment.SpeakerRole = "other"
 		segment.SpeakerProfileID = profile.ID
+		segment.PersonProfileID = profile.PersonProfileID
 		segment.SpeakerIdentityStatus = profile.Status
 		if profile.Status == "confirmed" {
 			segment.SpeakerName = profile.DisplayName
@@ -229,6 +230,7 @@ func enrichTranscriptSpeakerProfiles(transcript *Transcript, profiles []SpeakerP
 		profile, found := byID[segment.SpeakerProfileID]
 		if !found {
 			segment.SpeakerProfileID = ""
+			segment.PersonProfileID = ""
 			segment.SpeakerName = ""
 			segment.SpeakerRelationship = ""
 			segment.SpeakerIdentityStatus = ""
@@ -247,6 +249,7 @@ func enrichEpisodeSpeakerProfile(segment *EpisodeSegment, profiles []SpeakerProf
 			continue
 		}
 		segment.SpeakerIdentityStatus = profile.Status
+		segment.PersonProfileID = profile.PersonProfileID
 		segment.SpeakerName = ""
 		segment.SpeakerRelationship = ""
 		if profile.Status == "confirmed" {
@@ -259,6 +262,7 @@ func enrichEpisodeSpeakerProfile(segment *EpisodeSegment, profiles []SpeakerProf
 		return
 	}
 	segment.SpeakerProfileID = ""
+	segment.PersonProfileID = ""
 	segment.SpeakerName = ""
 	segment.SpeakerRelationship = ""
 	segment.SpeakerIdentityStatus = ""

@@ -33,6 +33,29 @@ export type Health = {
   checked_at: string;
 };
 
+export type PipelineDebugProvider = {
+	stage: 'face' | 'speaker' | 'active_speaker' | 'stt' | 'vision' | 'memograph';
+	enabled: boolean;
+	provider: string;
+	model: string;
+	cost_profile: 'local' | 'paid';
+};
+
+export type PipelineDebugStatus = {
+	memograph_called: false;
+	providers: PipelineDebugProvider[];
+};
+
+export type PipelineDebugRun = {
+	run_id: string;
+	stage: string;
+	started_at: string;
+	duration_ms: number;
+	memograph_called: false;
+	request: unknown;
+	response: unknown;
+};
+
 export type ModelProfile = {
   task: 'transcription';
   provider: string;

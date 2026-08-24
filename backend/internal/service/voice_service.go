@@ -320,7 +320,7 @@ func (s *voiceService) Ingest(ctx context.Context, input VoiceIngestInput) (Voic
 		OwnerUserID: input.OwnerUserID, SessionID: input.SessionID, GroupID: input.GroupID,
 		MemoryID: input.MemoryID, DeviceID: strings.TrimSpace(input.DeviceID),
 		Location: strings.TrimSpace(input.Location), FileName: input.FileName,
-		FilePath: stored.Path, MediaType: input.MediaType, SizeBytes: stored.SizeBytes,
+		FilePath: stored.Path, StorageProvider: stored.Provider, StorageBucket: stored.Bucket, SHA256: stored.SHA256, MediaType: input.MediaType, SizeBytes: stored.SizeBytes,
 		StartOffset: input.StartOffset, ChunkIndex: input.ChunkIndex, IsFinal: input.IsFinal,
 		DefaultConfidence: input.DefaultConfidence, BatchID: input.BatchID,
 		BatchClosed: input.BatchClosed || input.BatchID == "",
@@ -497,8 +497,9 @@ func (s *voiceService) Search(ctx context.Context, memoryID string, request Memo
 		return nil, validation("query", "memory_id and query are required")
 	}
 	if request.Limit <= 0 {
-		request.Limit = 10
+		request.Limit = 20
 	}
+	request.Filters = evidenceFirstFilters(request.Filters)
 	result, err := s.memograph.Search(ctx, memoryID, request)
 	if err != nil {
 		return nil, &UnavailableError{Dependency: "memograph", Cause: err}
@@ -511,8 +512,9 @@ func (s *voiceService) Answer(ctx context.Context, memoryID string, request Memo
 		return nil, validation("query", "memory_id and query or messages are required")
 	}
 	if request.Limit <= 0 {
-		request.Limit = 10
+		request.Limit = 20
 	}
+	request.Filters = evidenceFirstFilters(request.Filters)
 	result, err := s.memograph.Answer(ctx, memoryID, request)
 	if err != nil {
 		return nil, &UnavailableError{Dependency: "memograph", Cause: err}
@@ -533,14 +535,25 @@ func (s *voiceService) AnswerStream(
 		)
 	}
 	if request.Limit <= 0 {
-		request.Limit = 10
+		request.Limit = 20
 	}
+	request.Filters = evidenceFirstFilters(request.Filters)
 	request.Stream = true
 	result, err := s.memograph.AnswerStream(ctx, memoryID, request)
 	if err != nil {
 		return MemoryAnswerStream{}, &UnavailableError{Dependency: "memograph", Cause: err}
 	}
 	return result, nil
+}
+
+func evidenceFirstFilters(filters map[string]any) map[string]any {
+	if filters == nil {
+		filters = make(map[string]any)
+	}
+	if _, explicit := filters["source"]; !explicit {
+		filters["source"] = []string{"visual_evidence", "speech_evidence"}
+	}
+	return filters
 }
 
 func (s *voiceService) GetGraph(ctx context.Context, memoryID, groupID string) (json.RawMessage, error) {
@@ -630,7 +643,6 @@ func (s *voiceService) processSTT(ctx context.Context, job VoiceJob) error {
 	); err != nil {
 		return err
 	}
-	_ = s.store.Delete(context.Background(), job.FilePath)
 	return nil
 }
 
@@ -662,14 +674,31 @@ func (s *voiceService) processMemograph(ctx context.Context, job VoiceJob) error
 		}
 	}
 	meta := map[string]any{
-		"source": "audio", "source_description": "voice recording",
+		"source": "speech_evidence", "source_description": "exact timestamped speech evidence",
 		"session_id": job.SessionID, "group_id": job.GroupID,
 		"batch_id": job.BatchID, "episode_id": job.EpisodeID,
 		"start_time": job.EpisodeStart, "end_time": job.EpisodeEnd,
 		"recording_ids":           job.SourceRecordingIDs,
+		"media_asset_ids":         job.MediaAssetIDs,
+		"provider":                job.Provider,
+		"model":                   job.Model,
+		"processing_version":      job.ProcessingVersion,
 		"owner_utterance_count":   job.OwnerUtteranceCount,
 		"other_utterance_count":   job.OtherUtteranceCount,
 		"unknown_utterance_count": job.UnknownUtteranceCount,
+	}
+	segmentIDs := make([]string, 0, len(job.EpisodeSegments))
+	for _, segment := range job.EpisodeSegments {
+		if strings.TrimSpace(segment.ID) != "" {
+			segmentIDs = append(segmentIDs, segment.ID)
+		}
+	}
+	meta["transcript_segment_ids"] = segmentIDs
+	if len(job.MediaAssetIDs) == 1 {
+		meta["media_asset_id"] = job.MediaAssetIDs[0]
+	}
+	if len(job.SourceRecordingIDs) == 1 {
+		meta["recording_id"] = job.SourceRecordingIDs[0]
 	}
 	addOwnerIdentityMeta(meta, job.OwnerUserID)
 	if job.Location != "" {
@@ -681,9 +710,14 @@ func (s *voiceService) processMemograph(ctx context.Context, job VoiceJob) error
 	custom := make(map[string]any)
 	if job.Confidence != nil {
 		custom["confidence"] = *job.Confidence
+		meta["confidence"] = *job.Confidence
+	}
+	identity := job.SourceIdentity
+	if identity == "" {
+		identity = job.EpisodeID
 	}
 	idempotencyKey := memographIdempotencyKey(
-		job.MemoryID, job.EpisodeID, "audio", job.GraphRevision,
+		job.MemoryID, identity, "speech_evidence", int64(job.ProcessingVersion),
 	)
 	meta["idempotency_key"] = idempotencyKey
 	structuredGraph := structuredVoiceConversation(job)
@@ -716,6 +750,7 @@ func BuildConversationEpisodes(
 	if maxSeconds <= gapSeconds {
 		maxSeconds = 120
 	}
+	maxSeconds = math.Min(maxSeconds, 15)
 	recordings := append([]AssemblyRecording(nil), snapshot.Recordings...)
 	sort.SliceStable(recordings, func(i, j int) bool {
 		if recordings[i].StartOffset == recordings[j].StartOffset {
@@ -879,12 +914,23 @@ func episodeFromSegments(
 		value := confidenceTotal / float64(confidenceCount)
 		confidence = &value
 	}
+	identities := make([]string, 0, len(segments))
+	for index, segment := range segments {
+		identity := strings.TrimSpace(segment.ID)
+		if identity == "" {
+			identity = stableEvidenceID("transcript-segment", segment.RecordingID, fmt.Sprint(index), fmt.Sprintf("%.3f", segment.StartTime), segment.Text)
+		}
+		identities = append(identities, identity)
+	}
 	return EpisodeDraft{
 		BucketIndex: index, EpisodeIndex: index, StartTime: start, EndTime: end,
 		Description: header + "\n" + ownerSection + "\n" + contextSection,
 		Confidence:  confidence, Segments: segments, SourceRecordingIDs: recordingIDs,
 		OwnerUtteranceCount: ownerCount, OtherUtteranceCount: otherCount,
 		UnknownUtteranceCount: unknownCount,
+		EvidenceKind:          "speech_evidence",
+		SourceIdentity:        stableEvidenceID("speech-turn", identities...),
+		ProcessingVersion:     2,
 	}
 }
 

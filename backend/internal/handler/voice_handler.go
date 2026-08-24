@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"io"
 	"mime"
 	"net/http"
@@ -433,6 +434,7 @@ func (h *voiceHandler) Search(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid search request")
 		return
 	}
+	scopeMemoryRequest(c.Request.Context(), &request.GroupID)
 	result, err := h.service.Search(c.Request.Context(), c.Param("memory_id"), request)
 	if err != nil {
 		_ = c.Error(err)
@@ -448,6 +450,7 @@ func (h *voiceHandler) Answer(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid answer request")
 		return
 	}
+	scopeMemoryRequest(c.Request.Context(), &request.GroupID)
 	result, err := h.service.Answer(c.Request.Context(), c.Param("memory_id"), request)
 	if err != nil {
 		_ = c.Error(err)
@@ -463,6 +466,7 @@ func (h *voiceHandler) AnswerStream(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid answer request")
 		return
 	}
+	scopeMemoryRequest(c.Request.Context(), &request.GroupID)
 	stream, err := h.service.AnswerStream(c.Request.Context(), c.Param("memory_id"), request)
 	if err != nil {
 		_ = c.Error(err)
@@ -496,6 +500,12 @@ func (h *voiceHandler) AnswerStream(c *gin.Context) {
 			}
 			return
 		}
+	}
+}
+
+func scopeMemoryRequest(ctx context.Context, groupID *string) {
+	if principal, ok := utils.PrincipalFromContext(ctx); ok && strings.TrimSpace(principal.Subject) != "" {
+		*groupID = "account-owner:" + strings.TrimSpace(principal.Subject)
 	}
 }
 

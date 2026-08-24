@@ -44,6 +44,10 @@ func Register(engine *gin.Engine, deps Dependencies) error {
 	registerModelProfiles(protected, deps.Handlers.Models)
 	registerVoice(protected, deps.Handlers.Voice)
 	registerVideo(protected, deps.Handlers.Video)
+	registerPeople(protected, deps.Handlers.People)
+	if deps.Handlers.Debug != nil {
+		registerPipelineDebug(protected, deps.Handlers.Debug)
+	}
 
 	return nil
 }

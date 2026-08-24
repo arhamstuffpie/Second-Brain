@@ -32,6 +32,8 @@ except `/health` live below `/api/v1`.
 | `GET` | `/api/v1/voice/memories/:memory_id/graph` | yes | Read graph |
 | `POST` | `/api/v1/video/recordings` | yes | Queue video recording |
 | `GET` | `/api/v1/video/recordings/:recording_id` | yes | Read video processing result |
+| `POST` | `/api/v1/video/recordings/:recording_id/reprocess` | yes | Queue a new processing version from the retained original |
+| `GET` | `/api/v1/video/recordings/:recording_id/evidence-url?timestamp=12.43` | yes | Create a five-minute evidence playback URL |
 | `POST` | `/api/v1/video/realtime/sessions` | yes | Start realtime video capture |
 | `POST` | `/api/v1/video/realtime/sessions/:session_id/chunks` | yes | Queue idempotent realtime video chunk |
 | `GET` | `/api/v1/video/realtime/sessions/:session_id` | yes | Read realtime video progress |

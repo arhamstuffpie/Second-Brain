@@ -9,20 +9,24 @@ import (
 )
 
 type Config struct {
-	Environment string
-	HTTP        HTTPConfig
-	Database    DatabaseConfig
-	JWT         JWTConfig
-	CORS        CORSConfig
-	Log         LogConfig
-	Voice       VoiceConfig
-	Video       VideoConfig
-	STT         STTConfig
-	Speaker     SpeakerEmbeddingConfig
-	Vision      VisionConfig
-	Models      ModelConfig
-	Memograph   MemographConfig
-	Worker      WorkerConfig
+	Environment   string
+	HTTP          HTTPConfig
+	Database      DatabaseConfig
+	JWT           JWTConfig
+	CORS          CORSConfig
+	Log           LogConfig
+	Voice         VoiceConfig
+	Video         VideoConfig
+	STT           STTConfig
+	Speaker       SpeakerEmbeddingConfig
+	Face          FaceRecognitionConfig
+	ActiveSpeaker ActiveSpeakerConfig
+	Vision        VisionConfig
+	Models        ModelConfig
+	Memograph     MemographConfig
+	Worker        WorkerConfig
+	Storage       StorageConfig
+	Debug         DebugConfig
 }
 
 type HTTPConfig struct {
@@ -118,6 +122,35 @@ type SpeakerEmbeddingConfig struct {
 	MaxClipDuration time.Duration
 }
 
+type FaceRecognitionConfig struct {
+	Provider        string
+	StorageDir      string
+	MaxUploadBytes  int64
+	BaseURL         string
+	APIKey          string
+	Model           string
+	Timeout         time.Duration
+	MatchThreshold  float64
+	AmbiguousMargin float64
+	ProvisionalTTL  time.Duration
+	AutoConfirm     bool
+}
+
+type ActiveSpeakerConfig struct {
+	Provider                   string
+	BaseURL                    string
+	APIKey                     string
+	Model                      string
+	Timeout                    time.Duration
+	AutoLink                   bool
+	AutoMerge                  bool
+	ScoreThreshold             float64
+	MinimumMouthCoverage       float64
+	MinimumTemporalCoverage    float64
+	MinimumSeparatedUtterances int
+	MergeEvidenceCount         int
+}
+
 type VisionConfig struct {
 	Provider string
 	BaseURL  string
@@ -147,6 +180,14 @@ type WorkerConfig struct {
 	PollInterval time.Duration
 	Concurrency  int
 	MaxAttempts  int
+}
+
+type StorageConfig struct{ S3Bucket, S3Prefix, S3Region string }
+
+type DebugConfig struct {
+	Enabled       bool
+	AdminEmail    string
+	AdminPassword string
 }
 
 func Load() (Config, error) {
@@ -205,7 +246,7 @@ func Load() (Config, error) {
 			MaxUploadBytes:    int64(GetEnvInt("APP_VIDEO_MAX_UPLOAD_MB", 250)) << 20,
 			EpisodeDuration:   getEnvDuration("APP_VIDEO_EPISODE_DURATION", 30*time.Second),
 			FrameInterval:     getEnvDuration("APP_VIDEO_FRAME_INTERVAL", 5*time.Second),
-			MaxFrames:         GetEnvInt("APP_VIDEO_MAX_FRAMES", 12),
+			MaxFrames:         GetEnvInt("APP_VIDEO_MAX_FRAMES", 120),
 			FFmpegPath:        GetEnv("APP_VIDEO_FFMPEG_PATH", "ffmpeg"),
 			ExtractionTimeout: getEnvDuration("APP_VIDEO_EXTRACTION_TIMEOUT", 2*time.Minute),
 		},
@@ -230,6 +271,33 @@ func Load() (Config, error) {
 			MinClipDuration: getEnvDuration("APP_SPEAKER_MIN_CLIP_DURATION", 2*time.Second),
 			MaxClipDuration: getEnvDuration("APP_SPEAKER_MAX_CLIP_DURATION", 10*time.Second),
 		},
+		Face: FaceRecognitionConfig{
+			Provider:        strings.ToLower(strings.TrimSpace(GetEnv("APP_FACE_RECOGNITION_PROVIDER", "disabled"))),
+			StorageDir:      GetEnv("APP_FACE_ENROLLMENT_STORAGE_DIR", "./data/face-enrollment"),
+			MaxUploadBytes:  int64(GetEnvInt("APP_FACE_MAX_UPLOAD_MB", 10)) << 20,
+			BaseURL:         strings.TrimRight(GetEnv("APP_FACE_RECOGNITION_BASE_URL", "http://127.0.0.1:8092"), "/"),
+			APIKey:          GetEnv("APP_FACE_RECOGNITION_API_KEY", ""),
+			Model:           GetEnv("APP_FACE_RECOGNITION_MODEL", "opencv/sface-2021dec@sha256:0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"),
+			Timeout:         getEnvDuration("APP_FACE_RECOGNITION_TIMEOUT", 10*time.Second),
+			MatchThreshold:  getEnvFloat("APP_FACE_MATCH_THRESHOLD", 0.50),
+			AmbiguousMargin: getEnvFloat("APP_FACE_AMBIGUOUS_MARGIN", 0.10),
+			ProvisionalTTL:  getEnvDuration("APP_FACE_PROVISIONAL_TTL", 30*24*time.Hour),
+			AutoConfirm:     GetEnvBool("APP_FACE_AUTO_CONFIRM", false),
+		},
+		ActiveSpeaker: ActiveSpeakerConfig{
+			Provider:                   strings.ToLower(strings.TrimSpace(GetEnv("APP_ACTIVE_SPEAKER_PROVIDER", "disabled"))),
+			BaseURL:                    strings.TrimRight(GetEnv("APP_ACTIVE_SPEAKER_BASE_URL", "http://127.0.0.1:8093"), "/"),
+			APIKey:                     GetEnv("APP_ACTIVE_SPEAKER_API_KEY", ""),
+			Model:                      GetEnv("APP_ACTIVE_SPEAKER_MODEL", "active-speaker-v1"),
+			Timeout:                    getEnvDuration("APP_ACTIVE_SPEAKER_TIMEOUT", 2*time.Minute),
+			AutoLink:                   GetEnvBool("APP_ACTIVE_SPEAKER_AUTO_LINK", false),
+			AutoMerge:                  GetEnvBool("APP_PERSON_AUTO_MERGE", false),
+			ScoreThreshold:             getEnvFloat("APP_ACTIVE_SPEAKER_SCORE_THRESHOLD", 0.85),
+			MinimumMouthCoverage:       getEnvFloat("APP_ACTIVE_SPEAKER_MIN_MOUTH_COVERAGE", 0.75),
+			MinimumTemporalCoverage:    getEnvFloat("APP_ACTIVE_SPEAKER_MIN_TEMPORAL_COVERAGE", 0.75),
+			MinimumSeparatedUtterances: GetEnvInt("APP_ACTIVE_SPEAKER_MIN_UTTERANCES", 2),
+			MergeEvidenceCount:         GetEnvInt("APP_PERSON_MERGE_EVIDENCE_COUNT", 3),
+		},
 		Vision: VisionConfig{
 			Provider: GetEnv("APP_VISION_PROVIDER", "mock"),
 			BaseURL:  strings.TrimRight(GetEnv("APP_VISION_BASE_URL", "https://api.openai.com/v1"), "/"),
@@ -253,6 +321,12 @@ func Load() (Config, error) {
 			PollInterval: getEnvDuration("APP_VOICE_WORKER_POLL_INTERVAL", time.Second),
 			Concurrency:  GetEnvInt("APP_VOICE_WORKER_CONCURRENCY", 2),
 			MaxAttempts:  GetEnvInt("APP_VOICE_WORKER_MAX_ATTEMPTS", 5),
+		},
+		Storage: StorageConfig{S3Bucket: GetEnv("APP_S3_BUCKET", ""), S3Prefix: GetEnv("APP_S3_PREFIX", "media"), S3Region: GetEnv("AWS_REGION", "us-east-1")},
+		Debug: DebugConfig{
+			Enabled:       GetEnvBool("APP_PIPELINE_DEBUG_ENABLED", environment != "production"),
+			AdminEmail:    GetEnv("APP_PIPELINE_DEBUG_ADMIN_EMAIL", "admin@gmail.com"),
+			AdminPassword: GetEnv("APP_PIPELINE_DEBUG_ADMIN_PASSWORD", "admin@123"),
 		},
 	}
 
@@ -348,7 +422,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("APP_VIDEO_STORAGE_DIR must not be empty")
 	}
 	if c.Video.MaxUploadBytes < 1 || c.Video.EpisodeDuration <= 0 ||
-		c.Video.FrameInterval <= 0 || c.Video.MaxFrames < 1 ||
+		c.Video.FrameInterval <= 0 || c.Video.MaxFrames < 2 ||
 		strings.TrimSpace(c.Video.FFmpegPath) == "" || c.Video.ExtractionTimeout <= 0 {
 		return fmt.Errorf("valid video processing configuration is required")
 	}
@@ -380,6 +454,40 @@ func (c Config) Validate() error {
 			return fmt.Errorf("speaker clip duration must be between 2 and 10 seconds")
 		}
 	}
+	if c.Face.Provider != "disabled" && c.Face.Provider != "local" && c.Face.Provider != "external" {
+		return fmt.Errorf("APP_FACE_RECOGNITION_PROVIDER must be disabled, local, or external")
+	}
+	if c.Face.Provider != "disabled" {
+		if strings.TrimSpace(c.Face.StorageDir) == "" || c.Face.MaxUploadBytes < 1 ||
+			strings.TrimSpace(c.Face.BaseURL) == "" || strings.TrimSpace(c.Face.Model) == "" || c.Face.Timeout <= 0 {
+			return fmt.Errorf("valid face recognition configuration is required")
+		}
+		if c.Face.Provider == "external" && strings.TrimSpace(c.Face.APIKey) == "" {
+			return fmt.Errorf("APP_FACE_RECOGNITION_API_KEY is required for the external provider")
+		}
+		if c.Face.MatchThreshold <= 0 || c.Face.MatchThreshold > 1 ||
+			c.Face.AmbiguousMargin < 0 || c.Face.AmbiguousMargin >= 1 || c.Face.ProvisionalTTL <= 0 {
+			return fmt.Errorf("face matching threshold, margin, and provisional TTL are invalid")
+		}
+	}
+	if c.ActiveSpeaker.Provider != "disabled" && c.ActiveSpeaker.Provider != "local" && c.ActiveSpeaker.Provider != "external" {
+		return fmt.Errorf("APP_ACTIVE_SPEAKER_PROVIDER must be disabled, local, or external")
+	}
+	if c.ActiveSpeaker.Provider != "disabled" {
+		if strings.TrimSpace(c.ActiveSpeaker.BaseURL) == "" || strings.TrimSpace(c.ActiveSpeaker.Model) == "" ||
+			c.ActiveSpeaker.Timeout <= 0 {
+			return fmt.Errorf("valid active-speaker configuration is required")
+		}
+		if c.ActiveSpeaker.Provider == "external" && strings.TrimSpace(c.ActiveSpeaker.APIKey) == "" {
+			return fmt.Errorf("APP_ACTIVE_SPEAKER_API_KEY is required for the external provider")
+		}
+		if c.ActiveSpeaker.ScoreThreshold <= 0 || c.ActiveSpeaker.ScoreThreshold > 1 ||
+			c.ActiveSpeaker.MinimumMouthCoverage <= 0 || c.ActiveSpeaker.MinimumMouthCoverage > 1 ||
+			c.ActiveSpeaker.MinimumTemporalCoverage <= 0 || c.ActiveSpeaker.MinimumTemporalCoverage > 1 ||
+			c.ActiveSpeaker.MinimumSeparatedUtterances < 2 || c.ActiveSpeaker.MergeEvidenceCount < 2 {
+			return fmt.Errorf("active-speaker identity thresholds are invalid")
+		}
+	}
 	if c.Vision.Provider != "openai" && c.Vision.Provider != "mock" {
 		return fmt.Errorf("APP_VISION_PROVIDER must be openai or mock")
 	}
@@ -407,6 +515,9 @@ func (c Config) Validate() error {
 	}
 	if c.Memograph.Timeout <= 0 || c.Memograph.MaxConcurrentWrites < 1 {
 		return fmt.Errorf("APP_MEMOGRAPH_TIMEOUT and APP_MEMOGRAPH_MAX_CONCURRENT_WRITES must be positive")
+	}
+	if c.Debug.Enabled && (strings.TrimSpace(c.Debug.AdminEmail) == "" || len(c.Debug.AdminPassword) < 8) {
+		return fmt.Errorf("pipeline debug admin email and password are required")
 	}
 	return nil
 }

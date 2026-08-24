@@ -15,6 +15,10 @@ type Dependencies struct {
 	VoiceConfig   config.VoiceConfig
 	VideoService  service.VideoService
 	VideoConfig   config.VideoConfig
+	PersonService service.PersonService
+	FaceConfig    config.FaceRecognitionConfig
+	DebugService  service.PipelineDebugService
+	DebugAdminID  string
 }
 
 type Container struct {
@@ -23,6 +27,8 @@ type Container struct {
 	Models ModelProfileHandler
 	Voice  VoiceHandler
 	Video  VideoHandler
+	People PersonHandler
+	Debug  PipelineDebugHandler
 }
 
 func NewContainer(deps Dependencies) (*Container, error) {
@@ -41,6 +47,12 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	if deps.VideoService == nil {
 		return nil, fmt.Errorf("video service is required")
 	}
+	if deps.PersonService == nil {
+		return nil, fmt.Errorf("person service is required")
+	}
+	if deps.DebugAdminID != "" && deps.DebugService == nil {
+		return nil, fmt.Errorf("pipeline debug service is required when debug is enabled")
+	}
 
 	container := &Container{
 		Health: newHealthHandler(deps.HealthService),
@@ -50,7 +62,16 @@ func NewContainer(deps Dependencies) (*Container, error) {
 			deps.VoiceService, deps.VoiceConfig.MaxUploadBytes,
 			deps.VoiceConfig.EnrollmentMaxUploadBytes,
 		),
-		Video: newVideoHandler(deps.VideoService, deps.VideoConfig.MaxUploadBytes),
+		Video:  newVideoHandler(deps.VideoService, deps.VideoConfig.MaxUploadBytes),
+		People: newPersonHandler(deps.PersonService, deps.FaceConfig.MaxUploadBytes),
+	}
+	if deps.DebugAdminID != "" {
+		container.Debug = newPipelineDebugHandler(
+			deps.DebugService, deps.DebugAdminID,
+			deps.FaceConfig.MaxUploadBytes,
+			deps.VoiceConfig.EnrollmentMaxUploadBytes,
+			deps.VideoConfig.MaxUploadBytes,
+		)
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err
@@ -76,6 +97,9 @@ func (c *Container) Validate() error {
 	}
 	if c.Video == nil {
 		return fmt.Errorf("video handler is required")
+	}
+	if c.People == nil {
+		return fmt.Errorf("person handler is required")
 	}
 	return nil
 }

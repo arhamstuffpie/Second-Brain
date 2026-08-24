@@ -18,6 +18,8 @@ func registerVideo(router *gin.RouterGroup, video handler.VideoHandler) {
 	// Returns 200 with service.VideoRecordingDetail, including audio/visual
 	// progress, transcript, visual analysis and memory episodes when available.
 	videoRoutes.GET("/recordings/:recording_id", video.GetRecording)
+	videoRoutes.POST("/recordings/:recording_id/reprocess", video.Reprocess)
+	videoRoutes.GET("/recordings/:recording_id/evidence-url", video.GetEvidenceURL)
 
 	// POST /api/v1/video/realtime/sessions
 	// JSON: service.StartVideoRealtimeSessionInput. memory_id is required;

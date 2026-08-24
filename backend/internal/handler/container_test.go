@@ -93,6 +93,13 @@ func (stubVoiceService) ProcessNextJob(context.Context) (bool, error) { return f
 
 type stubVideoService struct{}
 
+func (stubVideoService) ReprocessVideo(context.Context, string, string) (service.VideoRecording, error) {
+	return service.VideoRecording{}, nil
+}
+func (stubVideoService) GetVideoEvidenceURL(context.Context, string, string, float64) (service.EvidencePlayback, error) {
+	return service.EvidencePlayback{}, nil
+}
+
 func (stubVideoService) IngestVideo(context.Context, service.VideoIngestInput) (service.VideoRecording, error) {
 	return service.VideoRecording{}, nil
 }
@@ -111,7 +118,27 @@ func (stubVideoService) GetVideoRealtimeSession(context.Context, string, string)
 func (stubVideoService) StopVideoRealtimeSession(context.Context, string, string) (service.RealtimeVideoSession, error) {
 	return service.RealtimeVideoSession{}, nil
 }
-func (stubVideoService) ProcessNextVideoJob(context.Context) (bool, error) { return false, nil }
+func (stubVideoService) ProcessNextVideoJob(context.Context) (bool, error)    { return false, nil }
+func (stubVideoService) ProcessNextIdentityJob(context.Context) (bool, error) { return false, nil }
+
+type stubPersonService struct{}
+
+func (stubPersonService) EnrollFace(context.Context, service.FaceEnrollmentInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
+func (stubPersonService) RecognizeFace(context.Context, service.FaceRecognitionRequest) (service.FaceMatch, error) {
+	return service.FaceMatch{}, nil
+}
+func (stubPersonService) ListPeople(context.Context, string) ([]service.PersonProfile, error) {
+	return []service.PersonProfile{}, nil
+}
+func (stubPersonService) UpdatePerson(context.Context, service.UpdatePersonInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
+func (stubPersonService) ConfirmIdentity(context.Context, service.ConfirmPersonIdentityInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
+func (stubPersonService) DeletePerson(context.Context, string, string) error { return nil }
 
 func TestNewContainerRequiresServices(t *testing.T) {
 	if _, err := NewContainer(Dependencies{}); err == nil {
@@ -126,12 +153,13 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		ModelService:  stubModelProfileService{},
 		VoiceService:  stubVoiceService{},
 		VideoService:  stubVideoService{},
+		PersonService: stubPersonService{},
 	})
 	if err != nil {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
 	if container == nil || container.Health == nil || container.Auth == nil ||
-		container.Models == nil || container.Voice == nil || container.Video == nil {
+		container.Models == nil || container.Voice == nil || container.Video == nil || container.People == nil {
 		t.Fatal("handler container has nil required dependency")
 	}
 }

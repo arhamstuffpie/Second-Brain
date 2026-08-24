@@ -183,3 +183,186 @@ func hasStructuredRelation(
 	}
 	return false
 }
+
+func TestStructuredVisualEvidenceUsesObservationLocalIDs(t *testing.T) {
+	confidence := 0.9
+	graph := structuredVisualEvidence(VideoJob{
+		SourceIdentity: "window-1", SessionID: "session-1", MediaAssetID: "asset-1", OwnerUserID: "user-1",
+		EpisodeStart: 0, EpisodeEnd: 5, VisualDescription: "A person holds a document.",
+		EpisodeVisual: []VideoObservation{{
+			ObservationID: "obs-1", LocationGuess: "office",
+			People:    []VisualPerson{{VisualLabel: "person-1", Action: "holding an agreement", Confidence: &confidence}},
+			Objects:   []DetectedObject{{ObjectID: "document-1", Name: "Agreement", Confidence: &confidence}},
+			Relations: []VisualRelation{{Source: "person-1", Predicate: "holds", Target: "document-1", Confidence: &confidence}},
+		}},
+	})
+	if graph == nil {
+		t.Fatalf("visual graph = %+v", graph)
+	}
+	evidence := findStructuredEntity(graph.Entities, "visual-evidence:window-1")
+	owner := findStructuredEntity(graph.Entities, "account-owner:user-1")
+	person := findStructuredEntity(graph.Entities, "visual-track:session-1:person-1")
+	document := findStructuredEntity(graph.Entities, "asset-1:obs-1:document-1")
+	if evidence == nil || evidence.Name != "Visual evidence" || owner == nil || person == nil || document == nil {
+		t.Fatalf("visual entities = %+v", graph.Entities)
+	}
+	if person.Type != "VisualOccurrence" {
+		t.Fatalf("unresolved visual entity type = %q, want VisualOccurrence", person.Type)
+	}
+	if strings.Contains(evidence.Name, "0") || strings.Contains(evidence.CanonicalID, "0-5") ||
+		!hasStructuredRelation(graph.Relations, owner.CanonicalID, "HAS_VISUAL_CONTEXT", evidence.CanonicalID) ||
+		!hasStructuredRelation(graph.Relations, evidence.CanonicalID, "OBSERVED_PERSON", person.CanonicalID) ||
+		!hasStructuredRelation(graph.Relations, evidence.CanonicalID, "OBSERVED_OBJECT", document.CanonicalID) ||
+		!hasStructuredRelation(graph.Relations, person.CanonicalID, "HOLDS", document.CanonicalID) {
+		t.Fatalf("visual graph = %+v", graph)
+	}
+	for _, entity := range graph.Entities {
+		if entity.CanonicalID == evidence.CanonicalID || entity.CanonicalID == owner.CanonicalID {
+			continue
+		}
+		connected := false
+		for _, relation := range graph.Relations {
+			if relation.Source == entity.CanonicalID || relation.Target == entity.CanonicalID {
+				connected = true
+				break
+			}
+		}
+		if !connected {
+			t.Fatalf("orphan visual entity %q in %+v", entity.CanonicalID, graph.Relations)
+		}
+	}
+}
+
+func TestStructuredVisualEvidenceReusesResolvedPersonAcrossSessions(t *testing.T) {
+	job := func(source, session, asset, observation string) VideoJob {
+		return VideoJob{
+			SourceIdentity: source, SessionID: session, MediaAssetID: asset, OwnerUserID: "user-1",
+			EpisodeStart: 0, EpisodeEnd: 5,
+			EpisodeVisual: []VideoObservation{{
+				ObservationID: observation,
+				People: []VisualPerson{{
+					VisualLabel: "person-1", PersonProfileID: "person-42",
+					PersonIdentityStatus: "confirmed", PersonName: "Mark",
+				}},
+			}},
+		}
+	}
+	first := structuredVisualEvidence(job("window-1", "session-1", "asset-1", "obs-1"))
+	second := structuredVisualEvidence(job("window-2", "session-2", "asset-2", "obs-2"))
+	firstPerson := findStructuredEntity(first.Entities, "person-profile:person-42")
+	secondPerson := findStructuredEntity(second.Entities, "person-profile:person-42")
+	if firstPerson == nil || secondPerson == nil || firstPerson.Name != "Mark" || secondPerson.Name != "Mark" {
+		t.Fatalf("resolved people = %+v / %+v", first.Entities, second.Entities)
+	}
+}
+
+func TestStructuredVisualEvidenceReusesOneTemporaryEntityForOneTrack(t *testing.T) {
+	graph := structuredVisualEvidence(VideoJob{
+		SourceIdentity: "window-1", MediaAssetID: "asset-1",
+		EpisodeVisual: []VideoObservation{
+			{ObservationID: "obs-1", People: []VisualPerson{{VisualLabel: "person-1", PersonTrackID: "track-1"}}},
+			{ObservationID: "obs-2", People: []VisualPerson{{VisualLabel: "person-1", PersonTrackID: "track-1"}}},
+		},
+	})
+	if graph == nil {
+		t.Fatal("visual graph is nil")
+	}
+	count := 0
+	for _, entity := range graph.Entities {
+		if entity.CanonicalID == "visual-track:track-1" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("temporary track entity count = %d, entities = %+v", count, graph.Entities)
+	}
+}
+
+func TestStructuredVisualEvidenceSeparatesTemporaryTracksAcrossSessions(t *testing.T) {
+	graph := func(source, session, asset, track string) *StructuredGraph {
+		return structuredVisualEvidence(VideoJob{
+			SourceIdentity: source, SessionID: session, MediaAssetID: asset,
+			EpisodeVisual: []VideoObservation{{
+				ObservationID: "obs-1",
+				People:        []VisualPerson{{VisualLabel: "person-1", PersonTrackID: track}},
+			}},
+		})
+	}
+	mark := graph("window-mark", "session-mark", "asset-mark", "face-track:mark")
+	mrWho := graph("window-mrwho", "session-mrwho", "asset-mrwho", "face-track:mrwho")
+	markTrack := findStructuredEntity(mark.Entities, "visual-track:face-track:mark")
+	mrWhoTrack := findStructuredEntity(mrWho.Entities, "visual-track:face-track:mrwho")
+	if markTrack == nil || mrWhoTrack == nil || markTrack.Name == mrWhoTrack.Name ||
+		findStructuredEntity(mark.Entities, "visual-track:face-track:mrwho") != nil ||
+		findStructuredEntity(mrWho.Entities, "visual-track:face-track:mark") != nil {
+		t.Fatalf("temporary entities merged across sessions: mark=%+v mrwho=%+v", mark.Entities, mrWho.Entities)
+	}
+}
+
+func TestStructuredVisualEvidenceReusesSessionFallbackTrackAcrossRecordings(t *testing.T) {
+	graph := func(source, recording, asset string) *StructuredGraph {
+		return structuredVisualEvidence(VideoJob{
+			SessionID: "session-1", RecordingID: recording,
+			SourceIdentity: source, MediaAssetID: asset,
+			EpisodeVisual: []VideoObservation{{
+				ObservationID: "obs-1", People: []VisualPerson{{VisualLabel: "person-1"}},
+			}},
+		})
+	}
+	first := findStructuredEntity(graph("window-1", "recording-1", "asset-1").Entities, "visual-track:session-1:person-1")
+	second := findStructuredEntity(graph("window-2", "recording-2", "asset-2").Entities, "visual-track:session-1:person-1")
+	if first == nil || second == nil || first.Name != second.Name {
+		t.Fatalf("session fallback tracks differ: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestStructuredVisualEvidenceSeparatesFallbackTracksAcrossSessions(t *testing.T) {
+	graph := func(session string) *StructuredGraph {
+		return structuredVisualEvidence(VideoJob{
+			SessionID: session, RecordingID: "recording-1",
+			SourceIdentity: session, MediaAssetID: "asset-1",
+			EpisodeVisual: []VideoObservation{{
+				ObservationID: "obs-1", People: []VisualPerson{{VisualLabel: "person-1"}},
+			}},
+		})
+	}
+	mark := findStructuredEntity(graph("session-mark").Entities, "visual-track:session-mark:person-1")
+	mrWho := findStructuredEntity(graph("session-mrwho").Entities, "visual-track:session-mrwho:person-1")
+	if mark == nil || mrWho == nil || mark.Name == mrWho.Name {
+		t.Fatalf("fallback tracks merged across sessions: mark=%+v mrwho=%+v", mark, mrWho)
+	}
+}
+
+func TestConfirmedVoiceAndVisualIdentityUseSameCanonicalPerson(t *testing.T) {
+	voice := structuredVideoConversation(VideoJob{
+		EpisodeID: "speech-1", SessionID: "session-1", OwnerUserID: "user-1",
+		EpisodeStart: 0, EpisodeEnd: 2,
+		Transcript: Transcript{Segments: []TranscriptSegment{{
+			StartTime: 0, EndTime: 2, Speaker: "A", SpeakerRole: "other",
+			SpeakerProfileID: "voice-1", PersonProfileID: "person-42", SpeakerName: "Mark",
+			Text: "Hello.",
+		}}},
+	})
+	visual := structuredVisualEvidence(VideoJob{
+		SourceIdentity: "visual-1", SessionID: "session-1", MediaAssetID: "asset-1",
+		OwnerUserID: "user-1", EpisodeStart: 0, EpisodeEnd: 2,
+		EpisodeVisual: []VideoObservation{{ObservationID: "observation-1", People: []VisualPerson{{
+			VisualLabel: "person-1", PersonProfileID: "person-42", PersonName: "Mark",
+		}}}},
+	})
+	if voice == nil || visual == nil ||
+		findStructuredEntity(voice.Entities, "person-profile:person-42") == nil ||
+		findStructuredEntity(visual.Entities, "person-profile:person-42") == nil {
+		t.Fatalf("voice/visual entities = %+v / %+v", voice, visual)
+	}
+	if findStructuredEntity(voice.Entities, "speaker-profile:voice-1") != nil {
+		t.Fatalf("linked voice retained a separate speaker node: %+v", voice.Entities)
+	}
+}
+
+func TestVisualRelationPredicateKeepsVocabularyBounded(t *testing.T) {
+	if visualRelationPredicate("plays with") != "PLAYS_WITH" ||
+		visualRelationPredicate("invented predicate") != "INTERACTS_WITH" {
+		t.Fatal("visual relation predicate was not normalized")
+	}
+}

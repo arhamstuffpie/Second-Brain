@@ -96,21 +96,38 @@ type SpeakerProfileRepository interface {
 	GetSpeakerSample(ctx context.Context, id, profileID, ownerUserID string) (SpeakerSample, error)
 }
 
+type PersonRepository interface {
+	EnrollFace(ctx context.Context, input EnrollFaceProfileInput) (PersonProfile, error)
+	MatchFace(ctx context.Context, input MatchFaceProfileInput) (FaceMatch, error)
+	SavePersonTrack(ctx context.Context, input SavePersonTrackInput) error
+	ListPeople(ctx context.Context, ownerUserID string) ([]PersonProfile, error)
+	UpdatePerson(ctx context.Context, input UpdatePersonInput) (PersonProfile, error)
+	ConfirmIdentity(ctx context.Context, input ConfirmPersonIdentityInput) (PersonProfile, error)
+	ResolveAutomaticIdentity(ctx context.Context, input AutomaticIdentityEvidenceInput) (AutomaticIdentityResolution, error)
+	DeletePerson(ctx context.Context, id, ownerUserID string) ([]string, error)
+}
+
 type AudioInspector interface {
 	Duration(ctx context.Context, path string) (float64, error)
 }
 
-type AudioStore interface {
-	Save(ctx context.Context, filename string, content io.Reader) (StoredAudio, error)
-	Open(ctx context.Context, path string) (io.ReadCloser, error)
-	Delete(ctx context.Context, path string) error
+type ObjectStorage interface {
+	Save(context.Context, string, io.Reader) (StoredObject, error)
+	Open(context.Context, string) (io.ReadCloser, error)
+	Delete(context.Context, string) error
+	Exists(context.Context, string) (bool, error)
+	Checksum(context.Context, string) (string, error)
+	SignedDownloadURL(context.Context, string, time.Duration) (string, error)
+	RestoreStatus(context.Context, string) (string, error)
 }
 
-type VideoStore interface {
-	Save(ctx context.Context, filename string, content io.Reader) (StoredAudio, error)
-	Open(ctx context.Context, path string) (io.ReadCloser, error)
-	Delete(ctx context.Context, path string) error
+// Legacy names stay during the recording migration; both are object stores.
+type AudioStore interface {
+	Save(context.Context, string, io.Reader) (StoredObject, error)
+	Open(context.Context, string) (io.ReadCloser, error)
+	Delete(context.Context, string) error
 }
+type VideoStore = AudioStore
 
 type VideoRepository interface {
 	CreateVideoRecording(ctx context.Context, input CreateVideoRecordingInput, maxAttempts int) (VideoRecording, error)
@@ -120,9 +137,19 @@ type VideoRepository interface {
 	CreateVideoRealtimeSession(ctx context.Context, input StartVideoRealtimeSessionInput) (RealtimeVideoSession, error)
 	GetVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSessionDetail, error)
 	StopVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSession, error)
+	QueueVideoReprocessing(ctx context.Context, id, ownerUserID string) (VideoRecording, error)
+	GetVideoSourceObject(ctx context.Context, id, ownerUserID string) (string, StoredObject, error)
 	ClaimVideoJob(ctx context.Context) (VideoJob, bool, error)
+	ClaimIdentityJob(ctx context.Context) (VideoJob, bool, error)
+	CompleteIdentityJob(ctx context.Context, job VideoJob, warning string) error
+	RetryIdentityJob(ctx context.Context, job VideoJob, cause string, runAt time.Time, dead bool) error
+	CreateVideoAnalysisBatches(ctx context.Context, job VideoJob, durationSeconds float64, frames []VideoFrame) error
+	ClaimVideoAnalysisBatch(ctx context.Context, job VideoJob) (VideoAnalysisBatch, bool, error)
+	CompleteVideoAnalysisBatch(ctx context.Context, job VideoJob, batch VideoAnalysisBatch, analysis VisualAnalysis) error
+	RetryVideoAnalysisBatch(ctx context.Context, job VideoJob, batch VideoAnalysisBatch, cause string, dead bool) error
+	FinishVideoAnalysis(ctx context.Context, job VideoJob, durationSeconds float64, provider, model string, maxAttempts int) (bool, error)
 	SaveVideoTranscript(ctx context.Context, job VideoJob, transcript Transcript, referenceIDs []string, provider, model string, maxAttempts int) error
-	SaveVideoAnalysis(ctx context.Context, job VideoJob, analysis VisualAnalysis, provider, model string, maxAttempts int) error
+	SaveVideoAnalysis(ctx context.Context, job VideoJob, durationSeconds float64, analysis VisualAnalysis, provider, model string, maxAttempts int) error
 	SaveVideoEpisodes(ctx context.Context, job VideoJob, episodes []VideoEpisodeDraft, maxAttempts int) error
 	CompleteVideoMemographBranch(ctx context.Context, job VideoJob, response json.RawMessage) error
 	RetryVideoJob(ctx context.Context, job VideoJob, cause string, runAt time.Time, dead bool) error
@@ -130,7 +157,8 @@ type VideoRepository interface {
 
 type MediaExtractor interface {
 	ExtractAudio(ctx context.Context, videoPath string) (ExtractedAudio, error)
-	ExtractFrames(ctx context.Context, videoPath string, interval time.Duration, maxFrames int) ([]VideoFrame, error)
+	ExtractFrames(ctx context.Context, videoPath string, interval time.Duration, maxFrames int) (FrameExtraction, error)
+	ExtractFramesAt(ctx context.Context, videoPath string, frames []VideoFrame) ([]VideoFrame, error)
 }
 
 type VisualAnalyzer interface {
@@ -177,7 +205,19 @@ type VideoService interface {
 	IngestVideoRealtimeChunk(ctx context.Context, input RealtimeVideoChunkInput) (VideoRecording, error)
 	GetVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSessionDetail, error)
 	StopVideoRealtimeSession(ctx context.Context, id, ownerUserID string) (RealtimeVideoSession, error)
+	ReprocessVideo(ctx context.Context, id, ownerUserID string) (VideoRecording, error)
+	GetVideoEvidenceURL(ctx context.Context, id, ownerUserID string, timestamp float64) (EvidencePlayback, error)
 	ProcessNextVideoJob(ctx context.Context) (bool, error)
+	ProcessNextIdentityJob(ctx context.Context) (bool, error)
+}
+
+type PersonService interface {
+	EnrollFace(ctx context.Context, input FaceEnrollmentInput) (PersonProfile, error)
+	RecognizeFace(ctx context.Context, input FaceRecognitionRequest) (FaceMatch, error)
+	ListPeople(ctx context.Context, ownerUserID string) ([]PersonProfile, error)
+	UpdatePerson(ctx context.Context, input UpdatePersonInput) (PersonProfile, error)
+	ConfirmIdentity(ctx context.Context, input ConfirmPersonIdentityInput) (PersonProfile, error)
+	DeletePerson(ctx context.Context, id, ownerUserID string) error
 }
 
 type Health struct {
@@ -208,10 +248,13 @@ type AuthResult struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 }
 
-type StoredAudio struct {
-	Path      string
-	SizeBytes int64
+type StoredObject struct {
+	Provider, Bucket, Key, Path, SHA256 string
+	SizeBytes                           int64
 }
+
+// StoredAudio is retained while callers migrate to StoredObject.
+type StoredAudio = StoredObject
 
 type VoiceIngestInput struct {
 	OwnerUserID       string
@@ -280,6 +323,9 @@ type CreateRecordingInput struct {
 	Location          string
 	FileName          string
 	FilePath          string
+	StorageProvider   string
+	StorageBucket     string
+	SHA256            string
 	MediaType         string
 	SizeBytes         int64
 	StartOffset       float64
@@ -343,6 +389,7 @@ type TranscriptSegment struct {
 	Speaker               string   `json:"speaker"`
 	SpeakerRole           string   `json:"speaker_role"`
 	SpeakerProfileID      string   `json:"speaker_profile_id,omitempty"`
+	PersonProfileID       string   `json:"person_profile_id,omitempty"`
 	SpeakerName           string   `json:"speaker_name,omitempty"`
 	SpeakerRelationship   string   `json:"speaker_relationship,omitempty"`
 	SpeakerIdentityStatus string   `json:"speaker_identity_status,omitempty"`
@@ -383,6 +430,7 @@ type SpeakerIdentificationInput struct {
 
 type SpeakerProfile struct {
 	ID                   string          `json:"id"`
+	PersonProfileID      string          `json:"person_profile_id,omitempty"`
 	Status               string          `json:"status"`
 	DisplayName          string          `json:"display_name"`
 	RelationshipCategory string          `json:"relationship_category"`
@@ -541,6 +589,7 @@ type EpisodeSegment struct {
 	Speaker               string   `json:"speaker"`
 	SpeakerRole           string   `json:"speaker_role"`
 	SpeakerProfileID      string   `json:"speaker_profile_id,omitempty"`
+	PersonProfileID       string   `json:"person_profile_id,omitempty"`
 	SpeakerName           string   `json:"speaker_name,omitempty"`
 	SpeakerRelationship   string   `json:"speaker_relationship,omitempty"`
 	SpeakerIdentityStatus string   `json:"speaker_identity_status,omitempty"`
@@ -560,6 +609,9 @@ type EpisodeDraft struct {
 	OwnerUtteranceCount   int              `json:"owner_utterance_count"`
 	OtherUtteranceCount   int              `json:"other_utterance_count"`
 	UnknownUtteranceCount int              `json:"unknown_utterance_count"`
+	EvidenceKind          string           `json:"evidence_kind"`
+	SourceIdentity        string           `json:"source_identity"`
+	ProcessingVersion     int              `json:"processing_version"`
 }
 
 type VoiceJob struct {
@@ -591,6 +643,11 @@ type VoiceJob struct {
 	OtherUtteranceCount   int
 	UnknownUtteranceCount int
 	GraphRevision         int64
+	MediaAssetIDs         []string
+	Provider              string
+	Model                 string
+	ProcessingVersion     int
+	SourceIdentity        string
 }
 
 type StartRealtimeSessionInput struct {

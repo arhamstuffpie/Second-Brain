@@ -59,7 +59,7 @@ func TestOpenAIAnalyzerSendsFramesAndParsesStructuredOutput(t *testing.T) {
 		  "output": [{
 		    "content": [{
 		      "type": "output_text",
-		      "text": "{\"observations\":[{\"start_time\":99,\"end_time\":100,\"objects\":[{\"name\":\"laptop\",\"confidence\":0.9}],\"text_detected\":[{\"text\":\"Plan\",\"confidence\":0.8}],\"activity\":\"planning\",\"location_guess\":\"office\",\"summary\":\"A planning document is open.\",\"confidence\":0.85}]}"
+		      "text": "{\"observations\":[{\"start_time\":99,\"end_time\":100,\"objects\":[{\"name\":\"laptop\",\"confidence\":0.9}],\"text_detected\":[{\"text\":\"Plan\",\"confidence\":0.8}],\"activity\":\"planning\",\"location_guess\":\"office\",\"summary\":\"A planning document is open.\",\"confidence\":0.85},{\"start_time\":100,\"end_time\":101,\"objects\":[],\"text_detected\":[],\"activity\":\"planning\",\"location_guess\":\"office\",\"summary\":\"The planning view continues.\",\"confidence\":0.8}]}"
 		    }]
 		  }]
 		}`)),
@@ -84,7 +84,7 @@ func TestOpenAIAnalyzerSendsFramesAndParsesStructuredOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
-	if len(result.Observations) != 1 {
+	if len(result.Observations) != 2 {
 		t.Fatalf("observations = %+v", result.Observations)
 	}
 	observation := result.Observations[0]

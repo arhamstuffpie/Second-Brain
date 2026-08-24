@@ -76,6 +76,31 @@ func (stubSpeakerProfileRepository) GetSpeakerSample(context.Context, string, st
 	return SpeakerSample{}, nil
 }
 
+type stubPersonRepository struct{}
+
+func (stubPersonRepository) EnrollFace(context.Context, EnrollFaceProfileInput) (PersonProfile, error) {
+	return PersonProfile{}, nil
+}
+func (stubPersonRepository) MatchFace(context.Context, MatchFaceProfileInput) (FaceMatch, error) {
+	return FaceMatch{}, nil
+}
+func (stubPersonRepository) SavePersonTrack(context.Context, SavePersonTrackInput) error { return nil }
+func (stubPersonRepository) ListPeople(context.Context, string) ([]PersonProfile, error) {
+	return []PersonProfile{}, nil
+}
+func (stubPersonRepository) UpdatePerson(context.Context, UpdatePersonInput) (PersonProfile, error) {
+	return PersonProfile{}, nil
+}
+func (stubPersonRepository) ConfirmIdentity(context.Context, ConfirmPersonIdentityInput) (PersonProfile, error) {
+	return PersonProfile{}, nil
+}
+func (stubPersonRepository) ResolveAutomaticIdentity(context.Context, AutomaticIdentityEvidenceInput) (AutomaticIdentityResolution, error) {
+	return AutomaticIdentityResolution{}, nil
+}
+func (stubPersonRepository) DeletePerson(context.Context, string, string) ([]string, error) {
+	return []string{}, nil
+}
+
 func (stubUserRepository) FindByEmail(context.Context, string) (StoredUser, bool, error) {
 	return StoredUser{}, true, nil
 }
@@ -146,6 +171,12 @@ func (stubVideoRepository) FindVideoRecordingByClientChunk(context.Context, stri
 func (stubVideoRepository) GetVideoRecording(context.Context, string, string) (VideoRecordingDetail, error) {
 	return VideoRecordingDetail{}, nil
 }
+func (stubVideoRepository) QueueVideoReprocessing(context.Context, string, string) (VideoRecording, error) {
+	return VideoRecording{}, nil
+}
+func (stubVideoRepository) GetVideoSourceObject(context.Context, string, string) (string, StoredObject, error) {
+	return "", StoredObject{}, nil
+}
 func (stubVideoRepository) CreateVideoRealtimeSession(context.Context, StartVideoRealtimeSessionInput) (RealtimeVideoSession, error) {
 	return RealtimeVideoSession{}, nil
 }
@@ -158,10 +189,32 @@ func (stubVideoRepository) StopVideoRealtimeSession(context.Context, string, str
 func (stubVideoRepository) ClaimVideoJob(context.Context) (VideoJob, bool, error) {
 	return VideoJob{}, false, nil
 }
+func (stubVideoRepository) ClaimIdentityJob(context.Context) (VideoJob, bool, error) {
+	return VideoJob{}, false, nil
+}
+func (stubVideoRepository) CompleteIdentityJob(context.Context, VideoJob, string) error { return nil }
+func (stubVideoRepository) RetryIdentityJob(context.Context, VideoJob, string, time.Time, bool) error {
+	return nil
+}
+func (stubVideoRepository) CreateVideoAnalysisBatches(context.Context, VideoJob, float64, []VideoFrame) error {
+	return nil
+}
+func (stubVideoRepository) ClaimVideoAnalysisBatch(context.Context, VideoJob) (VideoAnalysisBatch, bool, error) {
+	return VideoAnalysisBatch{}, false, nil
+}
+func (stubVideoRepository) CompleteVideoAnalysisBatch(context.Context, VideoJob, VideoAnalysisBatch, VisualAnalysis) error {
+	return nil
+}
+func (stubVideoRepository) RetryVideoAnalysisBatch(context.Context, VideoJob, VideoAnalysisBatch, string, bool) error {
+	return nil
+}
+func (stubVideoRepository) FinishVideoAnalysis(context.Context, VideoJob, float64, string, string, int) (bool, error) {
+	return false, nil
+}
 func (stubVideoRepository) SaveVideoTranscript(context.Context, VideoJob, Transcript, []string, string, string, int) error {
 	return nil
 }
-func (stubVideoRepository) SaveVideoAnalysis(context.Context, VideoJob, VisualAnalysis, string, string, int) error {
+func (stubVideoRepository) SaveVideoAnalysis(context.Context, VideoJob, float64, VisualAnalysis, string, string, int) error {
 	return nil
 }
 func (stubVideoRepository) SaveVideoEpisodes(context.Context, VideoJob, []VideoEpisodeDraft, int) error {
@@ -207,8 +260,11 @@ type stubMediaExtractor struct{}
 func (stubMediaExtractor) ExtractAudio(context.Context, string) (ExtractedAudio, error) {
 	return ExtractedAudio{Audio: io.NopCloser(strings.NewReader(""))}, nil
 }
-func (stubMediaExtractor) ExtractFrames(context.Context, string, time.Duration, int) ([]VideoFrame, error) {
-	return []VideoFrame{{Image: []byte("frame")}}, nil
+func (stubMediaExtractor) ExtractFrames(context.Context, string, time.Duration, int) (FrameExtraction, error) {
+	return FrameExtraction{DurationSeconds: 1, Frames: []VideoFrame{{Image: []byte("frame")}}}, nil
+}
+func (stubMediaExtractor) ExtractFramesAt(_ context.Context, _ string, frames []VideoFrame) ([]VideoFrame, error) {
+	return frames, nil
 }
 
 type stubVisualAnalyzer struct{}
@@ -262,6 +318,8 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		CredentialCipher:  stubCredentialCipher{},
 		VoiceRepository:   stubVoiceRepository{},
 		SpeakerProfiles:   stubSpeakerProfileRepository{},
+		PersonRepository:  stubPersonRepository{},
+		FaceStore:         stubAudioStore{},
 		VideoRepository:   stubVideoRepository{},
 		Transcriber:       stubTranscriber{},
 		SpeakerAttributor: stubSpeakerAttributor{},
@@ -283,7 +341,7 @@ func TestNewContainerPopulatesDependencies(t *testing.T) {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
 	if container == nil || container.Health == nil || container.Auth == nil ||
-		container.Models == nil || container.Voice == nil || container.Video == nil {
+		container.Models == nil || container.Voice == nil || container.Video == nil || container.People == nil {
 		t.Fatal("service container has nil required dependency")
 	}
 }

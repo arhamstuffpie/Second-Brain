@@ -4,31 +4,40 @@ import (
 	"fmt"
 
 	"github.com/arham/ai-second-brain/internal/config"
+	"github.com/rs/zerolog"
 )
 
 type Dependencies struct {
-	HealthRepository  HealthRepository
-	UserRepository    UserRepository
-	ModelProfiles     ModelProfileRepository
-	CredentialCipher  CredentialCipher
-	JWT               config.JWTConfig
-	STTConfig         config.STTConfig
-	VoiceRepository   VoiceRepository
-	SpeakerProfiles   SpeakerProfileRepository
-	SpeakerIdentifier SpeakerIdentifier
-	VideoRepository   VideoRepository
-	Transcriber       Transcriber
-	SpeakerAttributor SpeakerAttributor
-	AudioStore        AudioStore
-	EnrollmentStore   AudioStore
-	AudioInspector    AudioInspector
-	VideoStore        VideoStore
-	MediaExtractor    MediaExtractor
-	VisualAnalyzer    VisualAnalyzer
-	Memograph         MemographClient
-	VoiceConfig       config.VoiceConfig
-	VideoConfig       config.VideoConfig
-	WorkerConfig      config.WorkerConfig
+	HealthRepository    HealthRepository
+	UserRepository      UserRepository
+	ModelProfiles       ModelProfileRepository
+	CredentialCipher    CredentialCipher
+	JWT                 config.JWTConfig
+	STTConfig           config.STTConfig
+	VoiceRepository     VoiceRepository
+	SpeakerProfiles     SpeakerProfileRepository
+	SpeakerEmbedder     SpeakerEmbedder
+	SpeakerIdentifier   SpeakerIdentifier
+	PersonRepository    PersonRepository
+	FaceRecognizer      FaceRecognizer
+	ActiveSpeaker       ActiveSpeakerDetector
+	FaceStore           AudioStore
+	VideoRepository     VideoRepository
+	Transcriber         Transcriber
+	SpeakerAttributor   SpeakerAttributor
+	AudioStore          AudioStore
+	EnrollmentStore     AudioStore
+	AudioInspector      AudioInspector
+	VideoStore          VideoStore
+	MediaExtractor      MediaExtractor
+	VisualAnalyzer      VisualAnalyzer
+	Memograph           MemographClient
+	VoiceConfig         config.VoiceConfig
+	VideoConfig         config.VideoConfig
+	FaceConfig          config.FaceRecognitionConfig
+	ActiveSpeakerConfig config.ActiveSpeakerConfig
+	WorkerConfig        config.WorkerConfig
+	Logger              *zerolog.Logger
 }
 
 type Container struct {
@@ -37,6 +46,8 @@ type Container struct {
 	Models ModelProfileService
 	Voice  VoiceService
 	Video  VideoService
+	People PersonService
+	Debug  PipelineDebugService
 }
 
 func NewContainer(deps Dependencies) (*Container, error) {
@@ -58,6 +69,9 @@ func NewContainer(deps Dependencies) (*Container, error) {
 		deps.MediaExtractor == nil || deps.VisualAnalyzer == nil {
 		return nil, fmt.Errorf("video service dependencies are required")
 	}
+	if deps.PersonRepository == nil || deps.FaceStore == nil {
+		return nil, fmt.Errorf("person identity dependencies are required")
+	}
 	if len(deps.JWT.Secret) < 32 || deps.JWT.Issuer == "" || deps.JWT.AccessTokenTTL <= 0 {
 		return nil, fmt.Errorf("valid JWT configuration is required")
 	}
@@ -77,6 +91,17 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	)
 	video.speakerProfiles = deps.SpeakerProfiles
 	video.speakerIdentifier = deps.SpeakerIdentifier
+	video.faceIdentifier = NewVideoFaceIdentifier(
+		deps.PersonRepository, deps.FaceRecognizer, deps.FaceConfig,
+	)
+	video.personRepository = deps.PersonRepository
+	video.activeSpeaker = deps.ActiveSpeaker
+	video.faceConfig = deps.FaceConfig
+	video.activeSpeakerConfig = deps.ActiveSpeakerConfig
+	video.logger = deps.Logger
+	if identifier, ok := video.faceIdentifier.(*videoFaceIdentifier); ok {
+		identifier.logger = deps.Logger
+	}
 
 	container := &Container{
 		Health: newHealthService(deps.HealthRepository),
@@ -84,6 +109,8 @@ func NewContainer(deps Dependencies) (*Container, error) {
 		Models: newModelProfileService(deps.ModelProfiles, deps.CredentialCipher, deps.STTConfig),
 		Voice:  voice,
 		Video:  video,
+		People: newPersonService(deps.PersonRepository, deps.FaceRecognizer, deps.FaceStore, deps.FaceConfig),
+		Debug:  newPipelineDebugService(deps.FaceRecognizer, deps.SpeakerEmbedder, deps.ActiveSpeaker),
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err
@@ -109,6 +136,12 @@ func (c *Container) Validate() error {
 	}
 	if c.Video == nil {
 		return fmt.Errorf("video service is required")
+	}
+	if c.People == nil {
+		return fmt.Errorf("person service is required")
+	}
+	if c.Debug == nil {
+		return fmt.Errorf("pipeline debug service is required")
 	}
 	return nil
 }

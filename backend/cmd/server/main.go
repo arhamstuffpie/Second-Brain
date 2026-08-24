@@ -12,9 +12,11 @@ import (
 	"syscall"
 	"time"
 
+	active_speaker "github.com/arham/ai-second-brain/internal/active_speaker"
 	"github.com/arham/ai-second-brain/internal/audio"
 	"github.com/arham/ai-second-brain/internal/config"
 	internaldb "github.com/arham/ai-second-brain/internal/db"
+	"github.com/arham/ai-second-brain/internal/face"
 	"github.com/arham/ai-second-brain/internal/handler"
 	"github.com/arham/ai-second-brain/internal/http/middleware"
 	"github.com/arham/ai-second-brain/internal/http/router"
@@ -38,6 +40,13 @@ func main() {
 		bootstrapLogger.Error().Err(err).Msg("server stopped")
 		os.Exit(1)
 	}
+}
+
+func newStore(ctx context.Context, cfg config.Config, localDir string, maxBytes int64) (service.AudioStore, error) {
+	if cfg.Storage.S3Bucket != "" && os.Getenv("AWS_ACCESS_KEY_ID") != "" && os.Getenv("AWS_SECRET_ACCESS_KEY") != "" {
+		return audio.NewS3Store(ctx, cfg.Storage.S3Bucket, cfg.Storage.S3Prefix, cfg.Storage.S3Region, maxBytes)
+	}
+	return audio.NewLocalStore(localDir, maxBytes)
 }
 
 func run() error {
@@ -73,15 +82,17 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct repositories: %w", err)
 	}
-	audioStore, err := audio.NewLocalStore(cfg.Voice.StorageDir, cfg.Voice.MaxUploadBytes)
+	audioStore, err := newStore(rootCtx, cfg, cfg.Voice.StorageDir, cfg.Voice.MaxUploadBytes)
 	if err != nil {
 		return fmt.Errorf("construct audio store: %w", err)
 	}
-	enrollmentStore, err := audio.NewLocalStore(
-		cfg.Voice.EnrollmentStorageDir, cfg.Voice.EnrollmentMaxUploadBytes,
-	)
+	enrollmentStore, err := newStore(rootCtx, cfg, cfg.Voice.EnrollmentStorageDir, cfg.Voice.EnrollmentMaxUploadBytes)
 	if err != nil {
 		return fmt.Errorf("construct voice enrollment store: %w", err)
+	}
+	faceStore, err := newStore(rootCtx, cfg, cfg.Face.StorageDir, cfg.Face.MaxUploadBytes)
+	if err != nil {
+		return fmt.Errorf("construct face enrollment store: %w", err)
 	}
 	audioInspector, err := audio.NewFFprobeInspector(
 		cfg.Voice.FFprobePath, cfg.Voice.InspectionTimeout,
@@ -89,7 +100,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct voice audio inspector: %w", err)
 	}
-	videoStore, err := audio.NewLocalStore(cfg.Video.StorageDir, cfg.Video.MaxUploadBytes)
+	videoStore, err := newStore(rootCtx, cfg, cfg.Video.StorageDir, cfg.Video.MaxUploadBytes)
 	if err != nil {
 		return fmt.Errorf("construct video store: %w", err)
 	}
@@ -117,12 +128,14 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct profile-aware transcriber: %w", err)
 	}
+	var speakerEmbedder service.SpeakerEmbedder
 	var speakerIdentifier service.SpeakerIdentifier
 	if cfg.Speaker.Provider != "disabled" {
 		embedder, embedderErr := speaker.NewHTTPEmbedder(cfg.Speaker)
 		if embedderErr != nil {
 			return fmt.Errorf("construct speaker embedder: %w", embedderErr)
 		}
+		speakerEmbedder = embedder
 		speakerIdentifier, err = service.NewPersistentSpeakerIdentifier(
 			repositories.Speakers, embedder, mediaExtractor, enrollmentStore, cfg.Speaker,
 		)
@@ -140,41 +153,88 @@ func run() error {
 	default:
 		visualAnalyzer = vision.NewMock()
 	}
+	var faceRecognizer service.FaceRecognizer
+	if cfg.Face.Provider != "disabled" {
+		faceRecognizer, err = face.NewHTTPRecognizer(cfg.Face)
+		if err != nil {
+			return fmt.Errorf("construct face recognizer: %w", err)
+		}
+		validationCtx, cancel := context.WithTimeout(rootCtx, cfg.Face.Timeout)
+		_, err = faceRecognizer.Validate(validationCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("validate face recognizer: %w", err)
+		}
+	}
+	var activeSpeaker service.ActiveSpeakerDetector
+	if cfg.ActiveSpeaker.Provider != "disabled" {
+		activeSpeaker, err = active_speaker.NewHTTPDetector(cfg.ActiveSpeaker)
+		if err != nil {
+			return fmt.Errorf("construct active-speaker detector: %w", err)
+		}
+		validationCtx, cancel := context.WithTimeout(rootCtx, cfg.ActiveSpeaker.Timeout)
+		_, err = activeSpeaker.Validate(validationCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("validate active-speaker detector: %w", err)
+		}
+	}
 	appLogger.Info().
 		Str("stt_provider", transcriber.Provider()).
 		Str("stt_model", transcriber.Model()).
 		Str("speaker_embedding_provider", cfg.Speaker.Provider).
 		Str("speaker_embedding_model", cfg.Speaker.Model).
+		Str("face_recognition_provider", cfg.Face.Provider).
+		Str("face_recognition_model", cfg.Face.Model).
+		Str("active_speaker_provider", cfg.ActiveSpeaker.Provider).
+		Str("active_speaker_model", cfg.ActiveSpeaker.Model).
 		Str("vision_provider", visualAnalyzer.Provider()).
 		Str("vision_model", visualAnalyzer.Model()).
 		Msg("media analysis providers configured")
 	memographClient := memograph.NewClient(cfg.Memograph)
 	services, err := service.NewContainer(service.Dependencies{
-		HealthRepository:  repositories.Health,
-		UserRepository:    repositories.User,
-		ModelProfiles:     repositories.Models,
-		CredentialCipher:  credentialCipher,
-		STTConfig:         cfg.STT,
-		VoiceRepository:   repositories.Voice,
-		SpeakerProfiles:   repositories.Speakers,
-		SpeakerIdentifier: speakerIdentifier,
-		VideoRepository:   repositories.Video,
-		Transcriber:       transcriber,
-		SpeakerAttributor: stt.NewReferenceAttributor(),
-		AudioStore:        audioStore,
-		EnrollmentStore:   enrollmentStore,
-		AudioInspector:    audioInspector,
-		VideoStore:        videoStore,
-		MediaExtractor:    mediaExtractor,
-		VisualAnalyzer:    visualAnalyzer,
-		Memograph:         memographClient,
-		VoiceConfig:       cfg.Voice,
-		VideoConfig:       cfg.Video,
-		WorkerConfig:      cfg.Worker,
-		JWT:               cfg.JWT,
+		HealthRepository:    repositories.Health,
+		UserRepository:      repositories.User,
+		ModelProfiles:       repositories.Models,
+		CredentialCipher:    credentialCipher,
+		STTConfig:           cfg.STT,
+		VoiceRepository:     repositories.Voice,
+		SpeakerProfiles:     repositories.Speakers,
+		SpeakerEmbedder:     speakerEmbedder,
+		SpeakerIdentifier:   speakerIdentifier,
+		PersonRepository:    repositories.People,
+		FaceRecognizer:      faceRecognizer,
+		ActiveSpeaker:       activeSpeaker,
+		FaceStore:           faceStore,
+		VideoRepository:     repositories.Video,
+		Transcriber:         transcriber,
+		SpeakerAttributor:   stt.NewReferenceAttributor(),
+		AudioStore:          audioStore,
+		EnrollmentStore:     enrollmentStore,
+		AudioInspector:      audioInspector,
+		VideoStore:          videoStore,
+		MediaExtractor:      mediaExtractor,
+		VisualAnalyzer:      visualAnalyzer,
+		Memograph:           memographClient,
+		VoiceConfig:         cfg.Voice,
+		VideoConfig:         cfg.Video,
+		FaceConfig:          cfg.Face,
+		ActiveSpeakerConfig: cfg.ActiveSpeaker,
+		WorkerConfig:        cfg.Worker,
+		Logger:              &appLogger,
+		JWT:                 cfg.JWT,
 	})
 	if err != nil {
 		return fmt.Errorf("construct services: %w", err)
+	}
+	debugAdminID := ""
+	if cfg.Debug.Enabled {
+		debugAdmin, debugErr := ensurePipelineDebugAdmin(rootCtx, services.Auth, cfg.Debug)
+		if debugErr != nil {
+			return fmt.Errorf("prepare pipeline debug admin: %w", debugErr)
+		}
+		debugAdminID = debugAdmin.User.ID
+		appLogger.Info().Str("email", debugAdmin.User.Email).Msg("pipeline debug dashboard enabled")
 	}
 	handlers, err := handler.NewContainer(handler.Dependencies{
 		HealthService: services.Health,
@@ -184,6 +244,10 @@ func run() error {
 		VoiceConfig:   cfg.Voice,
 		VideoService:  services.Video,
 		VideoConfig:   cfg.Video,
+		PersonService: services.People,
+		FaceConfig:    cfg.Face,
+		DebugService:  services.Debug,
+		DebugAdminID:  debugAdminID,
 	})
 	if err != nil {
 		return fmt.Errorf("construct handlers: %w", err)
@@ -260,6 +324,17 @@ func run() error {
 
 	appLogger.Info().Msg("http server stopped gracefully")
 	return nil
+}
+
+func ensurePipelineDebugAdmin(ctx context.Context, auth service.AuthService, cfg config.DebugConfig) (service.AuthResult, error) {
+	result, err := auth.Login(ctx, cfg.AdminEmail, cfg.AdminPassword)
+	if err == nil {
+		return result, nil
+	}
+	if !errors.Is(err, service.ErrUnauthorized) {
+		return service.AuthResult{}, err
+	}
+	return auth.Signup(ctx, cfg.AdminEmail, cfg.AdminPassword)
 }
 
 func loadDotEnv(filename string) error {

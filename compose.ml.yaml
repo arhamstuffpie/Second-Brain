@@ -1,0 +1,55 @@
+services:
+  speaker-embedder:
+    build: ./speaker-embedder
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8091:8091"
+    environment:
+      SPEAKER_EMBEDDER_MODEL: speechbrain/spkrec-ecapa-voxceleb
+      SPEAKER_EMBEDDER_API_KEY: ${SPEAKER_EMBEDDER_API_KEY:-}
+    volumes:
+      - speaker-model-cache:/var/cache/speaker-embedder
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+
+  face-embedder:
+    build: ./face-embedder
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8092:8092"
+    environment:
+      FACE_EMBEDDER_DETECTOR_PATH: /models/face_detection_yunet_2023mar.onnx
+      FACE_EMBEDDER_DETECTOR_SHA256: 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
+      FACE_EMBEDDER_MODEL_PATH: /models/face_recognition_sface_2021dec.onnx
+      FACE_EMBEDDER_MODEL: opencv/sface-2021dec@sha256:0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
+      FACE_EMBEDDER_MODEL_SHA256: 0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
+      FACE_EMBEDDER_API_KEY: ${FACE_EMBEDDER_API_KEY:-}
+      FACE_EMBEDDER_BLUR_THRESHOLD: ${FACE_EMBEDDER_BLUR_THRESHOLD:-35}
+    volumes:
+      - ./face-embedder/models:/models:ro
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  active-speaker:
+    build:
+      context: ./active-speaker
+      args:
+        ACTIVE_SPEAKER_DEVICE: ${ACTIVE_SPEAKER_DEVICE:-cpu}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8093:8093"
+    environment:
+      ACTIVE_SPEAKER_MODEL: talknet/talkset-v1
+      ACTIVE_SPEAKER_API_KEY: ${ACTIVE_SPEAKER_API_KEY:-}
+      ACTIVE_SPEAKER_IN_MEMORY_FRAMES: ${ACTIVE_SPEAKER_IN_MEMORY_FRAMES:-0}
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+
+volumes:
+  speaker-model-cache:

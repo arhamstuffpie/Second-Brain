@@ -50,12 +50,15 @@ func (a *OpenAIAnalyzer) Analyze(
 	content := make([]map[string]any, 0, len(input.Frames)+1)
 	timestamps := make([]string, 0, len(input.Frames))
 	for _, frame := range input.Frames {
-		timestamps = append(timestamps, strconv.FormatFloat(frame.Timestamp, 'f', 2, 64)+"s")
+		timestamps = append(timestamps, fmt.Sprintf(
+			"%s at %ss (%s)", frame.FrameID,
+			strconv.FormatFloat(frame.Timestamp, 'f', 2, 64), frame.SelectionReason,
+		))
 	}
 	content = append(content, map[string]any{
-	"type": "input_text",
-	"text": "Analyze the following ordered video frames at timestamps " +
-		strings.Join(timestamps, ", ") + `. Return exactly one observation for each
+		"type": "input_text",
+		"text": "Analyze the following ordered video frames at timestamps " +
+			strings.Join(timestamps, ", ") + `. Return exactly one observation for each
 		supplied frame, in the same order.
 
 		Analyze each frame carefully and produce a dense, self-contained, visually
@@ -107,6 +110,15 @@ func (a *OpenAIAnalyzer) Analyze(
 
 		9. Identify the visible activity, action, event, or scenario. Describe who or
 		what is performing the action and which visible entities are involved.
+		For each grounded person-to-object, person-to-person, or person-to-environment
+		interaction, add a relation using only one of: HOLDS, LOOKS_AT,
+		INTERACTS_WITH, PURCHASES, PLAYS_WITH, WALKS_THROUGH, EXPLORES, TALKS_TO,
+		SITS_ON, STANDS_IN, LOCATED_AT, NEAR, BESIDE, ON, INSIDE, BEHIND,
+		IN_FRONT_OF, ATTACHED_TO, WEARS, DISPLAYED_ON, CONTAINS, PICKS_UP, CARRIES,
+		RIDES, DRIVES, ENTERS, or EXITS. Both source and target must be visible labels
+		from people or objects. Represent useful environmental targets such as a park,
+		forest, trail, shop, or field as objects. Use INTERACTS_WITH when no more
+		specific allowed relation is visually supported.
 
 		10. Make a conservative location guess using only visible evidence. Distinguish
 			between directly observed environmental details and inferred location.
@@ -129,6 +141,16 @@ func (a *OpenAIAnalyzer) Analyze(
 
 		13. Do not omit a visible detail merely because it appears unimportant. However,
 			do not repeat identical facts unnecessarily within the same observation.
+
+		14. Label people anonymously as person-1, person-2, and so on. Never infer a
+			person's identity from appearance. Preserve OCR exactly, use ? for each
+			unreadable character, and store uncertainty instead of guessing.
+
+		15. For each person, set physical_presence true only when the person is
+			physically present in the camera scene. Set it false for a person shown on a
+			TV, phone, computer, photograph, poster, painting, or other display. Set
+			face_visible true only when a real, sufficiently visible face belongs to that
+			physically present person. When uncertain, use false.
 
 		Use each supplied timestamp as start_time and the next supplied timestamp as
 		end_time. For the final frame, use the configured window duration.
@@ -217,8 +239,11 @@ func (a *OpenAIAnalyzer) Analyze(
 	if err := json.Unmarshal([]byte(outputText), &analysis); err != nil {
 		return service.VisualAnalysis{}, fmt.Errorf("decode structured visual analysis: %w", err)
 	}
-	if len(analysis.Observations) == 0 {
-		return service.VisualAnalysis{}, fmt.Errorf("vision analysis returned no observations")
+	if len(analysis.Observations) != len(input.Frames) {
+		return service.VisualAnalysis{}, fmt.Errorf(
+			"vision analysis returned %d observations for %d frames",
+			len(analysis.Observations), len(input.Frames),
+		)
 	}
 	normalizeObservations(&analysis, input)
 	return analysis, nil
@@ -232,6 +257,8 @@ func normalizeObservations(
 		observation := &analysis.Observations[index]
 		if index < len(input.Frames) {
 			observation.StartTime = input.Frames[index].Timestamp
+			observation.FrameID = input.Frames[index].FrameID
+			observation.SelectionReason = input.Frames[index].SelectionReason
 		}
 		if index+1 < len(input.Frames) {
 			observation.EndTime = input.Frames[index+1].Timestamp
@@ -259,35 +286,58 @@ func visualAnalysisSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"name":       map[string]any{"type": "string"},
+			"object_id": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"},
+			"attributes": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"position":   map[string]any{"type": "string"}, "state": map[string]any{"type": "string"},
 			"confidence": confidence,
 		},
-		"required": []string{"name", "confidence"},
+		"required": []string{"object_id", "name", "attributes", "position", "state", "confidence"},
 	}
 	textSchema := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"text":       map[string]any{"type": "string"},
+			"text": map[string]any{"type": "string"}, "surface": map[string]any{"type": "string"},
+			"region": map[string]any{"type": "string"}, "reading_status": map[string]any{"type": "string", "enum": []string{"complete", "partial", "unreadable"}},
 			"confidence": confidence,
 		},
-		"required": []string{"text", "confidence"},
+		"required": []string{"text", "surface", "region", "reading_status", "confidence"},
 	}
+	sceneSchema := strictObject(map[string]any{
+		"setting": map[string]any{"type": "string"}, "lighting": map[string]any{"type": "string"},
+		"foreground": map[string]any{"type": "string"}, "background": map[string]any{"type": "string"},
+	}, "setting", "lighting", "foreground", "background")
+	personSchema := strictObject(map[string]any{
+		"visual_label": map[string]any{"type": "string"}, "appearance": map[string]any{"type": "string"},
+		"position": map[string]any{"type": "string"}, "action": map[string]any{"type": "string"},
+		"physical_presence": map[string]any{"type": "boolean"}, "face_visible": map[string]any{"type": "boolean"},
+		"confidence": confidence,
+	}, "visual_label", "appearance", "position", "action", "physical_presence", "face_visible", "confidence")
+	relationSchema := strictObject(map[string]any{
+		"source": map[string]any{"type": "string"}, "predicate": map[string]any{"type": "string"},
+		"target": map[string]any{"type": "string"}, "confidence": confidence,
+	}, "source", "predicate", "target", "confidence")
 	observationSchema := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"start_time":     map[string]any{"type": "number"},
-			"end_time":       map[string]any{"type": "number"},
-			"objects":        map[string]any{"type": "array", "items": objectSchema},
-			"text_detected":  map[string]any{"type": "array", "items": textSchema},
-			"activity":       map[string]any{"type": "string"},
-			"location_guess": map[string]any{"type": "string"},
-			"summary":        map[string]any{"type": "string"},
-			"confidence":     confidence,
+			"observation_id":   map[string]any{"type": "string"},
+			"frame_id":         map[string]any{"type": "string"},
+			"start_time":       map[string]any{"type": "number"},
+			"end_time":         map[string]any{"type": "number"},
+			"selection_reason": map[string]any{"type": "string", "enum": []string{"periodic", "first", "final", "scene_change", "motion_start", "motion_peak", "motion_end", "text_change"}},
+			"scene":            sceneSchema,
+			"people":           map[string]any{"type": "array", "items": personSchema},
+			"objects":          map[string]any{"type": "array", "items": objectSchema},
+			"text_detected":    map[string]any{"type": "array", "items": textSchema},
+			"relations":        map[string]any{"type": "array", "items": relationSchema},
+			"activity":         map[string]any{"type": "string"},
+			"location_guess":   map[string]any{"type": "string"},
+			"summary":          map[string]any{"type": "string"},
+			"confidence":       confidence,
 		},
 		"required": []string{
-			"start_time", "end_time", "objects", "text_detected", "activity",
+			"observation_id", "frame_id", "start_time", "end_time", "selection_reason", "scene", "people", "objects", "text_detected", "relations", "activity",
 			"location_guess", "summary", "confidence",
 		},
 	}
@@ -301,6 +351,10 @@ func visualAnalysisSchema() map[string]any {
 		},
 		"required": []string{"observations"},
 	}
+}
+
+func strictObject(properties map[string]any, required ...string) map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}
 }
 
 func boundedMessage(body []byte) string {

@@ -44,6 +44,7 @@ type groundedConversationSegment struct {
 	Speaker          string
 	Role             string
 	SpeakerProfileID string
+	PersonProfileID  string
 	SpeakerName      string
 	Text             string
 	Confidence       *float64
@@ -56,7 +57,8 @@ func structuredVoiceConversation(job VoiceJob) *StructuredGraph {
 			StartTime: segment.StartTime, EndTime: segment.EndTime,
 			Speaker: segment.Speaker, Role: segment.SpeakerRole,
 			SpeakerProfileID: segment.SpeakerProfileID, SpeakerName: segment.SpeakerName,
-			Text: segment.Text, Confidence: segment.Confidence,
+			PersonProfileID: segment.PersonProfileID,
+			Text:            segment.Text, Confidence: segment.Confidence,
 		})
 	}
 	return buildStructuredConversation(
@@ -77,13 +79,160 @@ func structuredVideoConversation(job VideoJob) *StructuredGraph {
 			StartTime: start, EndTime: end, Speaker: segment.Speaker,
 			Role: segment.SpeakerRole, Text: segment.Text,
 			SpeakerProfileID: segment.SpeakerProfileID, SpeakerName: segment.SpeakerName,
-			Confidence: segment.Confidence,
+			PersonProfileID: segment.PersonProfileID,
+			Confidence:      segment.Confidence,
 		})
 	}
 	return buildStructuredConversation(
 		job.EpisodeID, "video-speech", job.SessionID, job.OwnerUserID,
 		job.Location, job.SpeechDescription, job.EpisodeStart, job.EpisodeEnd, segments,
 	)
+}
+
+func structuredVisualEvidence(job VideoJob) *StructuredGraph {
+	if len(job.EpisodeVisual) == 0 || strings.TrimSpace(job.SourceIdentity) == "" {
+		return nil
+	}
+	evidenceID := "visual-evidence:" + strings.TrimSpace(job.SourceIdentity)
+	graph := &StructuredGraph{
+		EpisodeID: "second-brain:visual:" + job.SourceIdentity,
+		SceneID:   strings.TrimSpace(job.SessionID),
+		StartTime: job.EpisodeStart, EndTime: job.EpisodeEnd,
+		Summary: job.VisualDescription, Location: job.Location,
+		Entities:   []StructuredEntity{{CanonicalID: evidenceID, Name: "Visual evidence", Type: "VisualEvidence"}},
+		Relations:  []StructuredRelation{},
+		Utterances: []StructuredUtterance{},
+	}
+	seen := map[string]bool{evidenceID: true}
+	if ownerID := canonicalOwnerID(job.OwnerUserID); ownerID != "" {
+		seen[ownerID] = true
+		graph.Entities = append(graph.Entities, StructuredEntity{
+			CanonicalID: ownerID, Name: "Owner", Type: "Person",
+		})
+		graph.Relations = append(graph.Relations, StructuredRelation{
+			Source: ownerID, Predicate: "HAS_VISUAL_CONTEXT", Target: evidenceID,
+			Fact: "Owner has this visual evidence.",
+		})
+	}
+	for _, observation := range job.EpisodeVisual {
+		type entityRef struct{ id, name string }
+		labels := make(map[string]entityRef)
+		for _, person := range observation.People {
+			label := strings.TrimSpace(person.VisualLabel)
+			if label == "" {
+				continue
+			}
+			trackID := strings.TrimSpace(person.PersonTrackID)
+			if trackID == "" {
+				captureScope := strings.TrimSpace(job.SessionID)
+				if captureScope == "" {
+					captureScope = strings.TrimSpace(job.RecordingID)
+				}
+				if captureScope == "" {
+					captureScope = strings.TrimSpace(job.MediaAssetID)
+				}
+				trackID = strings.Join([]string{captureScope, label}, ":")
+			}
+			id := "visual-track:" + trackID
+			name := "Unverified visual track " + stableShortID(trackID)[:8]
+			entityType := "VisualOccurrence"
+			if personProfileID := strings.TrimSpace(person.PersonProfileID); personProfileID != "" {
+				id = "person-profile:" + personProfileID
+				entityType = "Person"
+				if resolvedName := strings.TrimSpace(person.PersonName); resolvedName != "" {
+					name = resolvedName
+				} else {
+					name = "Unidentified person"
+				}
+			}
+			labels[label] = entityRef{id: id, name: name}
+			if !seen[id] {
+				seen[id] = true
+				graph.Entities = append(graph.Entities, StructuredEntity{
+					CanonicalID: id, Name: name,
+					Type: entityType, Confidence: person.Confidence,
+				})
+				fact := "Visual evidence shows " + name + "."
+				if action := strings.TrimSpace(person.Action); action != "" {
+					fact = "Visual evidence shows " + name + " " + action + "."
+				}
+				graph.Relations = append(graph.Relations, StructuredRelation{
+					Source: evidenceID, Predicate: "OBSERVED_PERSON", Target: id,
+					Fact: fact, Confidence: person.Confidence,
+				})
+			}
+		}
+		for index, object := range observation.Objects {
+			label := strings.TrimSpace(object.ObjectID)
+			if label == "" {
+				label = fmt.Sprintf("object-%d", index+1)
+			}
+			id := strings.Join([]string{job.MediaAssetID, observation.ObservationID, label}, ":")
+			name := strings.TrimSpace(object.Name)
+			labels[label] = entityRef{id: id, name: name}
+			if !seen[id] {
+				seen[id] = true
+				graph.Entities = append(graph.Entities, StructuredEntity{
+					CanonicalID: id, Name: name, Type: "object",
+					Confidence: object.Confidence,
+				})
+				graph.Relations = append(graph.Relations, StructuredRelation{
+					Source: evidenceID, Predicate: "OBSERVED_OBJECT", Target: id,
+					Fact: "Visual evidence shows " + name + ".", Confidence: object.Confidence,
+				})
+			}
+		}
+		if location := strings.TrimSpace(observation.LocationGuess); location != "" {
+			placeID := evidenceID + ":place:" + stableShortID(strings.ToLower(location))
+			if !seen[placeID] {
+				seen[placeID] = true
+				graph.Entities = append(graph.Entities, StructuredEntity{
+					CanonicalID: placeID, Name: location, Type: "Place",
+					Confidence: observation.Confidence,
+				})
+				graph.Relations = append(graph.Relations, StructuredRelation{
+					Source: evidenceID, Predicate: "OBSERVED_AT", Target: placeID,
+					Fact:       "Visual evidence appears to occur at " + location + ".",
+					Confidence: observation.Confidence,
+				})
+			}
+		}
+		for _, relation := range observation.Relations {
+			source, sourceOK := labels[strings.TrimSpace(relation.Source)]
+			target, targetOK := labels[strings.TrimSpace(relation.Target)]
+			if !sourceOK || !targetOK || strings.TrimSpace(relation.Predicate) == "" {
+				continue
+			}
+			graph.Relations = append(graph.Relations, StructuredRelation{
+				Source: source.id, Predicate: visualRelationPredicate(relation.Predicate), Target: target.id,
+				Fact:       fmt.Sprintf("%s %s %s.", source.name, strings.TrimSpace(relation.Predicate), target.name),
+				Confidence: relation.Confidence,
+			})
+		}
+	}
+	return graph
+}
+
+func stableShortID(value string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return hex.EncodeToString(digest[:8])
+}
+
+func visualRelationPredicate(value string) string {
+	predicate := strings.ToUpper(strings.NewReplacer("-", "_", " ", "_").Replace(strings.TrimSpace(value)))
+	allowed := map[string]bool{
+		"HOLDS": true, "LOOKS_AT": true, "INTERACTS_WITH": true, "PURCHASES": true,
+		"PLAYS_WITH": true, "WALKS_THROUGH": true, "EXPLORES": true, "TALKS_TO": true,
+		"SITS_ON": true, "STANDS_IN": true, "LOCATED_AT": true, "NEAR": true,
+		"BESIDE": true, "ON": true, "INSIDE": true, "BEHIND": true,
+		"IN_FRONT_OF": true, "ATTACHED_TO": true, "WEARS": true, "DISPLAYED_ON": true,
+		"CONTAINS": true, "PICKS_UP": true, "CARRIES": true, "RIDES": true,
+		"DRIVES": true, "ENTERS": true, "EXITS": true,
+	}
+	if allowed[predicate] {
+		return predicate
+	}
+	return "INTERACTS_WITH"
 }
 
 func buildStructuredConversation(
@@ -117,7 +266,7 @@ func buildStructuredConversation(
 		}
 		speakerID, speakerName := structuredSpeakerIdentity(
 			ownerID, sessionID, segment.Role, segment.Speaker,
-			segment.SpeakerProfileID, segment.SpeakerName,
+			segment.SpeakerProfileID, segment.SpeakerName, segment.PersonProfileID,
 		)
 		if _, exists := seenEntities[speakerID]; !exists {
 			seenEntities[speakerID] = struct{}{}
@@ -222,6 +371,16 @@ func structuredSpeakerIdentity(
 	}
 	if len(persistentIdentity) > 1 {
 		speakerName = persistentIdentity[1]
+	}
+	personProfileID := ""
+	if len(persistentIdentity) > 2 {
+		personProfileID = strings.TrimSpace(persistentIdentity[2])
+	}
+	if personProfileID != "" {
+		if speakerName = strings.TrimSpace(speakerName); speakerName == "" {
+			speakerName = "Unlabeled person"
+		}
+		return "person-profile:" + personProfileID, speakerName
 	}
 	if speakerProfileID = strings.TrimSpace(speakerProfileID); speakerProfileID != "" {
 		if speakerName = strings.TrimSpace(speakerName); speakerName == "" {

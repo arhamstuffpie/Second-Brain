@@ -7,6 +7,7 @@ type Container struct {
 	User     UserRepository
 	Models   ModelProfileRepository
 	Speakers SpeakerProfileRepository
+	People   PersonRepository
 	Voice    VoiceRepository
 	Video    VideoRepository
 }
@@ -22,6 +23,7 @@ func NewContainer(db DBTX) (*Container, error) {
 		User:     newUserRepository(baseRepository),
 		Models:   newModelProfileRepository(baseRepository),
 		Speakers: newSpeakerProfileRepository(baseRepository),
+		People:   newPersonRepository(baseRepository),
 		Voice:    newVoiceRepository(baseRepository),
 		Video:    newVideoRepository(baseRepository),
 	}
@@ -46,6 +48,9 @@ func (c *Container) Validate() error {
 	}
 	if c.Speakers == nil {
 		return fmt.Errorf("speaker profile repository is required")
+	}
+	if c.People == nil {
+		return fmt.Errorf("person repository is required")
 	}
 	if c.Voice == nil {
 		return fmt.Errorf("voice repository is required")

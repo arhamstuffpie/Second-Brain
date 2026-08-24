@@ -12,6 +12,77 @@ import (
 	"github.com/arham/ai-second-brain/internal/config"
 )
 
+type retentionVideoRepository struct {
+	stubVideoRepository
+	saved bool
+}
+
+type videoFaceIdentifierStub struct {
+	identities map[string]VideoFaceIdentity
+	err        error
+	frames     []VideoFrame
+}
+
+func (s *videoFaceIdentifierStub) Identify(
+	_ context.Context, _, _ string, _ int, frames []VideoFrame,
+) (map[string]VideoFaceIdentity, error) {
+	s.frames = append([]VideoFrame(nil), frames...)
+	return s.identities, s.err
+}
+
+func TestIdentifyVisualFacesEnrichesOnlyOnePhysicalVisiblePersonAndFailsOpen(t *testing.T) {
+	identifier := &videoFaceIdentifierStub{
+		identities: map[string]VideoFaceIdentity{"frame-1": {
+			PersonProfileID: "person-1", IdentityStatus: "confirmed", Outcome: "attached",
+			DisplayName: "Mark", TrackID: "face-track-1",
+		}},
+		err: errors.New("one later frame failed"),
+	}
+	video := &videoService{faceIdentifier: identifier}
+	analysis := VisualAnalysis{Observations: []VideoObservation{
+		{FrameID: "frame-1", People: []VisualPerson{{PhysicalPresence: true, FaceVisible: true}}},
+		{FrameID: "frame-2", People: []VisualPerson{{PhysicalPresence: true, FaceVisible: false}}},
+		{FrameID: "frame-3", People: []VisualPerson{{PhysicalPresence: true, FaceVisible: true}, {PhysicalPresence: true, FaceVisible: true}}},
+	}}
+	frames := []VideoFrame{{FrameID: "frame-1"}, {FrameID: "frame-2"}, {FrameID: "frame-3"}}
+	video.identifyVisualFaces(context.Background(), "owner-1", "recording-1", 1, &analysis, frames)
+	person := analysis.Observations[0].People[0]
+	if len(identifier.frames) != 1 || identifier.frames[0].FrameID != "frame-1" ||
+		person.PersonProfileID != "person-1" || person.PersonName != "Mark" ||
+		person.PersonTrackID != "face-track-1" || person.FaceIdentityOutcome != "attached" ||
+		!strings.Contains(analysis.Warning, "face identification was unavailable") {
+		t.Fatalf("eligible = %+v, person = %+v, warning = %q", identifier.frames, person, analysis.Warning)
+	}
+}
+
+func (r *retentionVideoRepository) SaveVideoEpisodes(context.Context, VideoJob, []VideoEpisodeDraft, int) error {
+	r.saved = true
+	return nil
+}
+
+func TestVideoMergeRetainsOriginal(t *testing.T) {
+	repository := &retentionVideoRepository{}
+	store := &realtimeTestStore{}
+	video := newVideoService(
+		repository, stubVoiceRepository{}, stubTranscriber{}, stubSpeakerAttributor{},
+		stubAudioStore{}, store, stubMediaExtractor{}, stubVisualAnalyzer{},
+		stubMemographClient{}, config.VideoConfig{EpisodeDuration: 30 * time.Second},
+		config.WorkerConfig{MaxAttempts: 5},
+	)
+	err := video.processVideoMerge(context.Background(), VideoJob{
+		ID: 1, RecordingID: "recording-1", FilePath: "original.webm",
+		VisualAnalysis: VisualAnalysis{Observations: []VideoObservation{{
+			StartTime: 0, EndTime: 5, Summary: "A person is visible.",
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repository.saved || store.deleteCalls != 0 {
+		t.Fatalf("saved = %v, original delete calls = %d", repository.saved, store.deleteCalls)
+	}
+}
+
 func TestBuildVideoEpisodesMergesSpeechAndVisualContext(t *testing.T) {
 	speechConfidence := 0.8
 	visionConfidence := 0.9
@@ -224,7 +295,10 @@ type noAudioExtractor struct{}
 func (noAudioExtractor) ExtractAudio(context.Context, string) (ExtractedAudio, error) {
 	return ExtractedAudio{}, ErrNoAudioTrack
 }
-func (noAudioExtractor) ExtractFrames(context.Context, string, time.Duration, int) ([]VideoFrame, error) {
+func (noAudioExtractor) ExtractFrames(context.Context, string, time.Duration, int) (FrameExtraction, error) {
+	return FrameExtraction{}, errors.New("not used")
+}
+func (noAudioExtractor) ExtractFramesAt(context.Context, string, []VideoFrame) ([]VideoFrame, error) {
 	return nil, errors.New("not used")
 }
 
@@ -545,5 +619,43 @@ func TestVideoSpeechDescriptionUsesConfirmedSpeakerName(t *testing.T) {
 	}}}, 30, 30, 60)
 	if got != "[31.00s-32.00s] Raj (friend): Hello." {
 		t.Fatalf("videoSpeechDescription() = %q", got)
+	}
+}
+
+func TestBuildEvidenceEpisodesUsesFiveSecondWindowsAndExactSpeech(t *testing.T) {
+	confidence := 0.9
+	episodes := BuildEvidenceEpisodes(
+		Transcript{Language: "English", Segments: []TranscriptSegment{{
+			ID: "segment-1", StartTime: 2, EndTime: 4, SpeakerRole: "owner",
+			Text: "Keep this wording exactly.", Confidence: &confidence,
+		}}},
+		VisualAnalysis{Observations: []VideoObservation{
+			{ObservationID: "obs-1", FrameID: "frame-1", StartTime: 4.9, EndTime: 5.4, Summary: "A document is visible."},
+			{ObservationID: "obs-2", FrameID: "frame-2", StartTime: 6, EndTime: 7, Summary: "A screen is visible."},
+		}},
+		30*time.Second, 0, "session-1", "office", "recording-1", "asset-1", 2,
+	)
+	visual, speech, summaries := 0, 0, 0
+	for _, episode := range episodes {
+		switch episode.EvidenceKind {
+		case "visual_evidence":
+			visual++
+			if episode.Visual[0].ObservationID == "obs-1" && episode.StartTime != 0 {
+				t.Fatalf("cross-boundary observation assigned to %.2f, want start window 0", episode.StartTime)
+			}
+		case "speech_evidence":
+			speech++
+			if !strings.Contains(episode.Description, "Keep this wording exactly.") {
+				t.Fatalf("speech was not preserved: %q", episode.Description)
+			}
+		case "context_summary":
+			summaries++
+			if len(episode.SupportingEpisodeIDs) == 0 {
+				t.Fatal("context summary has no supporting evidence IDs")
+			}
+		}
+	}
+	if visual != 2 || speech != 1 || summaries != 1 {
+		t.Fatalf("episode counts visual/speech/summary = %d/%d/%d", visual, speech, summaries)
 	}
 }

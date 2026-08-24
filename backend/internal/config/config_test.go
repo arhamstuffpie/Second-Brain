@@ -80,11 +80,14 @@ func TestLoadUsesFallbackValues(t *testing.T) {
 	if cfg.HTTP.ReadTimeout != 10*time.Second {
 		t.Fatalf("HTTP.ReadTimeout = %s, want 10s", cfg.HTTP.ReadTimeout)
 	}
-	if cfg.Video.FrameInterval != 5*time.Second || cfg.Video.MaxFrames != 12 {
+	if cfg.Video.FrameInterval != 5*time.Second || cfg.Video.MaxFrames != 120 {
 		t.Fatalf("Video defaults = %+v", cfg.Video)
 	}
 	if cfg.Vision.Provider != "mock" || cfg.Vision.Model != "gpt-4.1-mini" {
 		t.Fatalf("Vision defaults = %+v", cfg.Vision)
+	}
+	if cfg.ActiveSpeaker.Provider != "disabled" || cfg.ActiveSpeaker.AutoLink || cfg.ActiveSpeaker.AutoMerge {
+		t.Fatalf("Active-speaker defaults = %+v", cfg.ActiveSpeaker)
 	}
 	if cfg.Memograph.MaxConcurrentWrites != 1 {
 		t.Fatalf("Memograph.MaxConcurrentWrites = %d, want 1", cfg.Memograph.MaxConcurrentWrites)
@@ -103,6 +106,9 @@ func TestLoadUsesJSONLoggingInProductionByDefault(t *testing.T) {
 	}
 	if cfg.Log.Pretty {
 		t.Fatal("Log.Pretty = true, want production fallback false")
+	}
+	if cfg.Debug.Enabled {
+		t.Fatal("Debug.Enabled = true, want production fallback false")
 	}
 }
 

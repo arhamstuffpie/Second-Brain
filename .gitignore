@@ -1,7 +1,9 @@
 .env
 .idea/
 .vscode/
+.venv/
 bin/
 coverage.out
 *.log
 data/
+face-embedder/models/*.onnx

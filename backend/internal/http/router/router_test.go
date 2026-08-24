@@ -111,6 +111,13 @@ func (fakeVoiceService) ProcessNextJob(context.Context) (bool, error) { return f
 
 type fakeVideoService struct{}
 
+func (fakeVideoService) ReprocessVideo(context.Context, string, string) (service.VideoRecording, error) {
+	return service.VideoRecording{}, nil
+}
+func (fakeVideoService) GetVideoEvidenceURL(context.Context, string, string, float64) (service.EvidencePlayback, error) {
+	return service.EvidencePlayback{}, nil
+}
+
 func (fakeVideoService) IngestVideo(context.Context, service.VideoIngestInput) (service.VideoRecording, error) {
 	return service.VideoRecording{}, nil
 }
@@ -129,7 +136,27 @@ func (fakeVideoService) GetVideoRealtimeSession(context.Context, string, string)
 func (fakeVideoService) StopVideoRealtimeSession(context.Context, string, string) (service.RealtimeVideoSession, error) {
 	return service.RealtimeVideoSession{}, nil
 }
-func (fakeVideoService) ProcessNextVideoJob(context.Context) (bool, error) { return false, nil }
+func (fakeVideoService) ProcessNextVideoJob(context.Context) (bool, error)    { return false, nil }
+func (fakeVideoService) ProcessNextIdentityJob(context.Context) (bool, error) { return false, nil }
+
+type fakePersonService struct{}
+
+func (fakePersonService) EnrollFace(context.Context, service.FaceEnrollmentInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
+func (fakePersonService) RecognizeFace(context.Context, service.FaceRecognitionRequest) (service.FaceMatch, error) {
+	return service.FaceMatch{}, nil
+}
+func (fakePersonService) ListPeople(context.Context, string) ([]service.PersonProfile, error) {
+	return []service.PersonProfile{}, nil
+}
+func (fakePersonService) UpdatePerson(context.Context, service.UpdatePersonInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
+func (fakePersonService) ConfirmIdentity(context.Context, service.ConfirmPersonIdentityInput) (service.PersonProfile, error) {
+	return service.PersonProfile{}, nil
+}
+func (fakePersonService) DeletePerson(context.Context, string, string) error { return nil }
 
 func (f fakeAuthService) Signup(context.Context, string, string) (service.AuthResult, error) {
 	return f.signupResult, f.signupErr
@@ -311,6 +338,7 @@ func testRouterWithAuth(t *testing.T, healthService service.HealthService, authS
 		ModelService:  fakeModelProfileService{},
 		VoiceService:  fakeVoiceService{},
 		VideoService:  fakeVideoService{},
+		PersonService: fakePersonService{},
 	})
 	if err != nil {
 		t.Fatalf("handler.NewContainer() error = %v", err)

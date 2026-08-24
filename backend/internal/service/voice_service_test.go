@@ -10,6 +10,35 @@ import (
 	"github.com/arham/ai-second-brain/internal/config"
 )
 
+type retentionVoiceRepository struct {
+	stubVoiceRepository
+	saved bool
+}
+
+func (r *retentionVoiceRepository) SaveTranscriptAndQueueAssembly(context.Context, VoiceJob, Transcript, []string, string, string, int) error {
+	r.saved = true
+	return nil
+}
+
+func TestVoiceProcessingRetainsOriginal(t *testing.T) {
+	repository := &retentionVoiceRepository{}
+	store := &realtimeTestStore{}
+	voice := newVoiceService(
+		repository, stubTranscriber{}, stubSpeakerAttributor{}, store, store,
+		stubAudioInspector{}, stubMemographClient{}, config.VoiceConfig{},
+		config.WorkerConfig{MaxAttempts: 5},
+	)
+	if err := voice.processSTT(context.Background(), VoiceJob{
+		ID: 1, RecordingID: "recording-1", OwnerUserID: "owner-1",
+		FilePath: "original.wav", FileName: "original.wav", MediaType: "audio/wav",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !repository.saved || store.deleteCalls != 0 {
+		t.Fatalf("saved = %v, original delete calls = %d", repository.saved, store.deleteCalls)
+	}
+}
+
 func TestBuildAudioEpisodesBucketsSegmentsAndAppliesOffset(t *testing.T) {
 	confidenceOne := 0.8
 	confidenceTwo := 1.0
@@ -358,5 +387,16 @@ func TestIngestRealtimeChunkIsIdempotent(t *testing.T) {
 	}
 	if result.ID != "existing" || repository.createCalls != 0 || store.saveCalls != 0 {
 		t.Fatalf("idempotent result = %+v, createCalls=%d saveCalls=%d", result, repository.createCalls, store.saveCalls)
+	}
+}
+
+func TestEvidenceFirstFiltersPreservesExplicitSource(t *testing.T) {
+	defaults := evidenceFirstFilters(nil)
+	if len(defaults["source"].([]string)) != 2 {
+		t.Fatalf("default filters = %+v", defaults)
+	}
+	explicit := evidenceFirstFilters(map[string]any{"source": "context_summary"})
+	if explicit["source"] != "context_summary" {
+		t.Fatalf("explicit source was replaced: %+v", explicit)
 	}
 }
