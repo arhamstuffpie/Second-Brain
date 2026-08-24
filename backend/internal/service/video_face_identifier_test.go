@@ -53,16 +53,44 @@ func TestVideoFaceIdentifierReusesCanonicalPersonAcrossSessions(t *testing.T) {
 		repository, faceRecognizerStub{result: recognition},
 		config.FaceRecognitionConfig{MatchThreshold: .5, AmbiguousMargin: .1},
 	)
-	for _, frameID := range []string{"session-1-frame", "session-2-frame"} {
-		identities, err := identifier.Identify(context.Background(), "owner-1", "recording-1", 1, []VideoFrame{{
-			FrameID: frameID, MediaType: "image/jpeg", Image: []byte("image"),
+	for _, capture := range []struct{ recordingID, frameID string }{
+		{"recording-1", "session-1-frame"},
+		{"recording-2", "session-2-frame"},
+	} {
+		identities, err := identifier.Identify(context.Background(), "owner-1", capture.recordingID, 1, []VideoFrame{{
+			FrameID: capture.frameID, MediaType: "image/jpeg", Image: []byte("image"),
 		}})
-		if err != nil || identities[frameID].PersonProfileID != "person-1" || identities[frameID].DisplayName != "Mark" {
-			t.Fatalf("frame %s identities = %+v, error = %v", frameID, identities, err)
+		if err != nil || identities[capture.frameID].PersonProfileID != "person-1" || identities[capture.frameID].DisplayName != "Mark" {
+			t.Fatalf("frame %s identities = %+v, error = %v", capture.frameID, identities, err)
 		}
 	}
 	if repository.enrollments != 2 || repository.enrollment.PersonProfileID != "person-1" {
 		t.Fatalf("canonical gallery additions = %d, last = %+v", repository.enrollments, repository.enrollment)
+	}
+}
+
+func TestVideoFaceIdentifierSeparatesUnknownTracksAcrossRecordings(t *testing.T) {
+	repository := &videoFaceRepository{matchResult: FaceMatch{Reasons: []string{"no_compatible_face_profiles"}}}
+	recognition := usableFaceRecognition()
+	recognition.Faces[0].Box = FaceBox{X: 2, Y: 2, Width: 10, Height: 10}
+	identifier := NewVideoFaceIdentifier(
+		repository, faceRecognizerStub{result: recognition},
+		config.FaceRecognitionConfig{MatchThreshold: .5, AmbiguousMargin: .1},
+	)
+
+	var trackIDs []string
+	for _, recordingID := range []string{"recording-mark", "recording-mrwho"} {
+		identities, err := identifier.Identify(context.Background(), "owner-1", recordingID, 1, []VideoFrame{{
+			FrameID: "frame-1", MediaType: "image/jpeg", Image: []byte("image"),
+		}})
+		if err != nil || identities["frame-1"].TrackID == "" {
+			t.Fatalf("recording %s identities = %+v, error = %v", recordingID, identities, err)
+		}
+		trackIDs = append(trackIDs, identities["frame-1"].TrackID)
+	}
+	if trackIDs[0] == trackIDs[1] || len(repository.tracks) != 2 ||
+		repository.tracks[0].RecordingID == repository.tracks[1].RecordingID {
+		t.Fatalf("track IDs = %v, saved tracks = %+v", trackIDs, repository.tracks)
 	}
 }
 

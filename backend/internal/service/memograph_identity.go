@@ -124,10 +124,17 @@ func structuredVisualEvidence(job VideoJob) *StructuredGraph {
 			}
 			trackID := strings.TrimSpace(person.PersonTrackID)
 			if trackID == "" {
-				trackID = strings.Join([]string{job.MediaAssetID, observation.ObservationID, label}, ":")
+				captureScope := strings.TrimSpace(job.SessionID)
+				if captureScope == "" {
+					captureScope = strings.TrimSpace(job.RecordingID)
+				}
+				if captureScope == "" {
+					captureScope = strings.TrimSpace(job.MediaAssetID)
+				}
+				trackID = strings.Join([]string{captureScope, label}, ":")
 			}
 			id := "visual-track:" + trackID
-			name := "Unverified visual track"
+			name := "Unverified visual track " + stableShortID(trackID)[:8]
 			entityType := "VisualOccurrence"
 			if personProfileID := strings.TrimSpace(person.PersonProfileID); personProfileID != "" {
 				id = "person-profile:" + personProfileID

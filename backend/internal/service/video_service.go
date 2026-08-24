@@ -1061,9 +1061,6 @@ func (s *videoService) processVideoMemograph(ctx context.Context, job VideoJob) 
 		Str("episode_id", job.EpisodeID).
 		Str("memory_id", job.MemoryID).
 		Str("source", source).
-		Str("memograph_data", data).
-		Interface("memograph_meta", baseMeta).
-		Interface("memograph_structured_graph", structuredGraph).
 		Msg("sending Memograph episode payload")
 	response, err := s.memograph.InsertEpisode(ctx, job.MemoryID, request)
 	if err != nil {

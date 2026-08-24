@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import threading
 from contextlib import asynccontextmanager
@@ -44,7 +45,7 @@ class Settings:
             max_image_pixels=int(os.getenv("FACE_EMBEDDER_MAX_IMAGE_PIXELS", "16000000")),
             min_face_pixels=int(os.getenv("FACE_EMBEDDER_MIN_FACE_PIXELS", "64")),
             detector_score=float(os.getenv("FACE_EMBEDDER_DETECTION_THRESHOLD", "0.80")),
-            blur_threshold=float(os.getenv("FACE_EMBEDDER_BLUR_THRESHOLD", "50")),
+            blur_threshold=float(os.getenv("FACE_EMBEDDER_BLUR_THRESHOLD", "35")),
         )
 
     def validate(self) -> None:
@@ -217,7 +218,14 @@ class Embedder:
             reasons.append("invalid_landmarks")
             return reasons
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        if float(cv2.Laplacian(gray, cv2.CV_64F).var()) < self.settings.blur_threshold:
+        blur_variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        blurred = blur_variance < self.settings.blur_threshold
+        print("face_quality " + json.dumps({
+            "blur_variance": round(blur_variance, 2),
+            "blur_threshold": self.settings.blur_threshold,
+            "blurred": blurred,
+        }), flush=True)
+        if blurred:
             reasons.append("blurred")
         brightness = float(gray.mean())
         if brightness < 35:

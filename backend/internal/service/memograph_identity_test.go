@@ -201,7 +201,7 @@ func TestStructuredVisualEvidenceUsesObservationLocalIDs(t *testing.T) {
 	}
 	evidence := findStructuredEntity(graph.Entities, "visual-evidence:window-1")
 	owner := findStructuredEntity(graph.Entities, "account-owner:user-1")
-	person := findStructuredEntity(graph.Entities, "visual-track:asset-1:obs-1:person-1")
+	person := findStructuredEntity(graph.Entities, "visual-track:session-1:person-1")
 	document := findStructuredEntity(graph.Entities, "asset-1:obs-1:document-1")
 	if evidence == nil || evidence.Name != "Visual evidence" || owner == nil || person == nil || document == nil {
 		t.Fatalf("visual entities = %+v", graph.Entities)
@@ -275,6 +275,61 @@ func TestStructuredVisualEvidenceReusesOneTemporaryEntityForOneTrack(t *testing.
 	}
 	if count != 1 {
 		t.Fatalf("temporary track entity count = %d, entities = %+v", count, graph.Entities)
+	}
+}
+
+func TestStructuredVisualEvidenceSeparatesTemporaryTracksAcrossSessions(t *testing.T) {
+	graph := func(source, session, asset, track string) *StructuredGraph {
+		return structuredVisualEvidence(VideoJob{
+			SourceIdentity: source, SessionID: session, MediaAssetID: asset,
+			EpisodeVisual: []VideoObservation{{
+				ObservationID: "obs-1",
+				People:        []VisualPerson{{VisualLabel: "person-1", PersonTrackID: track}},
+			}},
+		})
+	}
+	mark := graph("window-mark", "session-mark", "asset-mark", "face-track:mark")
+	mrWho := graph("window-mrwho", "session-mrwho", "asset-mrwho", "face-track:mrwho")
+	markTrack := findStructuredEntity(mark.Entities, "visual-track:face-track:mark")
+	mrWhoTrack := findStructuredEntity(mrWho.Entities, "visual-track:face-track:mrwho")
+	if markTrack == nil || mrWhoTrack == nil || markTrack.Name == mrWhoTrack.Name ||
+		findStructuredEntity(mark.Entities, "visual-track:face-track:mrwho") != nil ||
+		findStructuredEntity(mrWho.Entities, "visual-track:face-track:mark") != nil {
+		t.Fatalf("temporary entities merged across sessions: mark=%+v mrwho=%+v", mark.Entities, mrWho.Entities)
+	}
+}
+
+func TestStructuredVisualEvidenceReusesSessionFallbackTrackAcrossRecordings(t *testing.T) {
+	graph := func(source, recording, asset string) *StructuredGraph {
+		return structuredVisualEvidence(VideoJob{
+			SessionID: "session-1", RecordingID: recording,
+			SourceIdentity: source, MediaAssetID: asset,
+			EpisodeVisual: []VideoObservation{{
+				ObservationID: "obs-1", People: []VisualPerson{{VisualLabel: "person-1"}},
+			}},
+		})
+	}
+	first := findStructuredEntity(graph("window-1", "recording-1", "asset-1").Entities, "visual-track:session-1:person-1")
+	second := findStructuredEntity(graph("window-2", "recording-2", "asset-2").Entities, "visual-track:session-1:person-1")
+	if first == nil || second == nil || first.Name != second.Name {
+		t.Fatalf("session fallback tracks differ: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestStructuredVisualEvidenceSeparatesFallbackTracksAcrossSessions(t *testing.T) {
+	graph := func(session string) *StructuredGraph {
+		return structuredVisualEvidence(VideoJob{
+			SessionID: session, RecordingID: "recording-1",
+			SourceIdentity: session, MediaAssetID: "asset-1",
+			EpisodeVisual: []VideoObservation{{
+				ObservationID: "obs-1", People: []VisualPerson{{VisualLabel: "person-1"}},
+			}},
+		})
+	}
+	mark := findStructuredEntity(graph("session-mark").Entities, "visual-track:session-mark:person-1")
+	mrWho := findStructuredEntity(graph("session-mrwho").Entities, "visual-track:session-mrwho:person-1")
+	if mark == nil || mrWho == nil || mark.Name == mrWho.Name {
+		t.Fatalf("fallback tracks merged across sessions: mark=%+v mrwho=%+v", mark, mrWho)
 	}
 }
 
