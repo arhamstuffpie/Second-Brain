@@ -11,6 +11,8 @@ import type {
   MemorySearchRequest,
   ModelProfile,
   ModelProfileInput,
+	PipelineDebugRun,
+	PipelineDebugStatus,
   RealtimeVideoSession,
   RealtimeVideoSessionDetail,
   RealtimeVoiceSession,
@@ -509,6 +511,16 @@ export class ApiClient {
         { method: 'POST' },
       ),
   };
+
+	pipelineDebug = {
+		providers: () =>
+			this.request<PipelineDebugStatus>('/api/v1/debug/pipeline/providers'),
+
+		run: (stage: 'face' | 'speaker' | 'active-speaker', form: FormData) =>
+			this.request<PipelineDebugRun>(`/api/v1/debug/pipeline/${stage}`, {
+				method: 'POST', form, timeoutMs: stage === 'active-speaker' ? 15 * 60_000 : 60_000,
+			}),
+	};
 
   memory = {
     create: (projectId: string, input: MemoryCreateRequest) =>

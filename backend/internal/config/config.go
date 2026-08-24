@@ -26,6 +26,7 @@ type Config struct {
 	Memograph     MemographConfig
 	Worker        WorkerConfig
 	Storage       StorageConfig
+	Debug         DebugConfig
 }
 
 type HTTPConfig struct {
@@ -183,6 +184,12 @@ type WorkerConfig struct {
 
 type StorageConfig struct{ S3Bucket, S3Prefix, S3Region string }
 
+type DebugConfig struct {
+	Enabled       bool
+	AdminEmail    string
+	AdminPassword string
+}
+
 func Load() (Config, error) {
 	environment := GetEnv("APP_ENV", "development")
 	cfg := Config{
@@ -316,6 +323,11 @@ func Load() (Config, error) {
 			MaxAttempts:  GetEnvInt("APP_VOICE_WORKER_MAX_ATTEMPTS", 5),
 		},
 		Storage: StorageConfig{S3Bucket: GetEnv("APP_S3_BUCKET", ""), S3Prefix: GetEnv("APP_S3_PREFIX", "media"), S3Region: GetEnv("AWS_REGION", "us-east-1")},
+		Debug: DebugConfig{
+			Enabled:       GetEnvBool("APP_PIPELINE_DEBUG_ENABLED", environment != "production"),
+			AdminEmail:    GetEnv("APP_PIPELINE_DEBUG_ADMIN_EMAIL", "admin@gmail.com"),
+			AdminPassword: GetEnv("APP_PIPELINE_DEBUG_ADMIN_PASSWORD", "admin@123"),
+		},
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -503,6 +515,9 @@ func (c Config) Validate() error {
 	}
 	if c.Memograph.Timeout <= 0 || c.Memograph.MaxConcurrentWrites < 1 {
 		return fmt.Errorf("APP_MEMOGRAPH_TIMEOUT and APP_MEMOGRAPH_MAX_CONCURRENT_WRITES must be positive")
+	}
+	if c.Debug.Enabled && (strings.TrimSpace(c.Debug.AdminEmail) == "" || len(c.Debug.AdminPassword) < 8) {
+		return fmt.Errorf("pipeline debug admin email and password are required")
 	}
 	return nil
 }

@@ -27,6 +27,9 @@ type HTTPEmbedder struct {
 	client   *http.Client
 }
 
+func (e *HTTPEmbedder) Provider() string { return "speaker-embedding-http" }
+func (e *HTTPEmbedder) Model() string    { return e.model }
+
 func NewHTTPEmbedder(cfg config.SpeakerEmbeddingConfig) (*HTTPEmbedder, error) {
 	baseURL, err := url.Parse(strings.TrimSpace(cfg.BaseURL))
 	if err != nil || baseURL.Scheme == "" || baseURL.Host == "" {

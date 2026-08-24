@@ -28,6 +28,14 @@ import { useApp } from '@/state/app-provider';
 import type { CapturePhase, QueuedVideoChunk } from '@/types/app';
 import { useTheme } from '@/hooks/use-theme';
 
+async function releaseCaptureWakeLock() {
+  try {
+    await deactivateKeepAwake(KEEP_AWAKE_TAG);
+  } catch {
+    // The tag is absent when Capture unmounts before recording starts.
+  }
+}
+
 const KEEP_AWAKE_TAG = 'second-brain-foreground-capture';
 
 function formatElapsed(seconds: number) {
@@ -125,7 +133,7 @@ export function CaptureScreen() {
         stopRequested.current = true;
         cameraRef.current?.stopRecording();
       }
-      void deactivateKeepAwake(KEEP_AWAKE_TAG);
+      void releaseCaptureWakeLock();
     },
     [],
   );
@@ -182,7 +190,7 @@ export function CaptureScreen() {
     } finally {
       runningLoop.current = false;
       shouldCapture.current = false;
-      await deactivateKeepAwake(KEEP_AWAKE_TAG);
+			await releaseCaptureWakeLock();
       if (!finalChunkQueued) {
         try {
           await api.video.stopRealtimeSession(sessionId);

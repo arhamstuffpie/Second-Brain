@@ -107,6 +107,9 @@ func TestLoadUsesJSONLoggingInProductionByDefault(t *testing.T) {
 	if cfg.Log.Pretty {
 		t.Fatal("Log.Pretty = true, want production fallback false")
 	}
+	if cfg.Debug.Enabled {
+		t.Fatal("Debug.Enabled = true, want production fallback false")
+	}
 }
 
 func TestLoadUsesConfiguredValues(t *testing.T) {

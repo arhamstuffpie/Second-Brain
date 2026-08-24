@@ -7,19 +7,21 @@ import { ActivityScreen } from '@/features/activity/activity-screen';
 import { CaptureScreen } from '@/features/capture/capture-screen';
 import { ChatScreen } from '@/features/chat/chat-screen';
 import { MemoryScreen } from '@/features/memory/memory-screen';
+import { PipelineDebugScreen } from '@/features/pipeline-debug/pipeline-debug-screen';
 import { SettingsScreen } from '@/features/settings/settings-screen';
 import { useKeyboardHeight } from '@/hooks/use-keyboard-height';
 import { useReducedMotion } from '@/hooks/use-reduced-motion';
 import { useApp } from '@/state/app-provider';
 import { useTheme } from '@/hooks/use-theme';
 
-type Tab = 'capture' | 'activity' | 'chat' | 'memory' | 'settings';
+type Tab = 'capture' | 'activity' | 'chat' | 'memory' | 'debug' | 'settings';
 
 const tabs: Array<{ key: Tab; label: string }> = [
   { key: 'capture', label: 'Capture' },
   { key: 'activity', label: 'Activity' },
   { key: 'chat', label: 'Chat' },
   { key: 'memory', label: 'Memory' },
+  { key: 'debug', label: 'Debug' },
   { key: 'settings', label: 'Settings' },
 ];
 
@@ -72,6 +74,19 @@ function TabIcon({
     return (
       <View style={[styles.memoryIcon, { borderColor: color }]}>
         <View style={[styles.memoryIconCore, { backgroundColor: color }]} />
+      </View>
+    );
+  }
+  if (tab === 'debug') {
+    return (
+      <View style={styles.debugIcon}>
+        <View style={[styles.debugLine, { backgroundColor: color }]} />
+        {[0, 1, 2].map((index) => (
+          <View
+            key={index}
+            style={[styles.debugNode, { left: index * 8, borderColor: color, backgroundColor: surface }]}
+          />
+        ))}
       </View>
     );
   }
@@ -234,6 +249,8 @@ export function Dashboard() {
       <ChatScreen />
     ) : tab === 'memory' ? (
       <MemoryScreen />
+    ) : tab === 'debug' ? (
+      <PipelineDebugScreen />
     ) : (
       <SettingsScreen />
     );
@@ -346,6 +363,9 @@ export function Dashboard() {
 }
 
 const styles = StyleSheet.create({
+	debugIcon: { width: 22, height: 20, justifyContent: 'center' },
+	debugLine: { position: 'absolute', left: 2, right: 2, height: 2, top: 9 },
+	debugNode: { position: 'absolute', top: 5, width: 10, height: 10, borderRadius: 5, borderWidth: 2 },
   root: { flex: 1 },
   content: { flex: 1 },
   navOuter: {

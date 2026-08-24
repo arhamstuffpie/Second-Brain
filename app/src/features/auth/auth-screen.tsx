@@ -20,8 +20,8 @@ export function AuthScreen() {
   const theme = useTheme();
   const { login, signup, settings, updateSettings, showError } = useApp();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState(__DEV__ ? 'admin@gmail.com' : '');
+  const [password, setPassword] = useState(__DEV__ ? 'admin@123' : '');
   const [apiBaseUrl, setApiBaseUrl] = useState(settings.apiBaseUrl);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');

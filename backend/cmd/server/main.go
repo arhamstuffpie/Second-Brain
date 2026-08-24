@@ -128,12 +128,14 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct profile-aware transcriber: %w", err)
 	}
+	var speakerEmbedder service.SpeakerEmbedder
 	var speakerIdentifier service.SpeakerIdentifier
 	if cfg.Speaker.Provider != "disabled" {
 		embedder, embedderErr := speaker.NewHTTPEmbedder(cfg.Speaker)
 		if embedderErr != nil {
 			return fmt.Errorf("construct speaker embedder: %w", embedderErr)
 		}
+		speakerEmbedder = embedder
 		speakerIdentifier, err = service.NewPersistentSpeakerIdentifier(
 			repositories.Speakers, embedder, mediaExtractor, enrollmentStore, cfg.Speaker,
 		)
@@ -198,6 +200,7 @@ func run() error {
 		STTConfig:           cfg.STT,
 		VoiceRepository:     repositories.Voice,
 		SpeakerProfiles:     repositories.Speakers,
+		SpeakerEmbedder:     speakerEmbedder,
 		SpeakerIdentifier:   speakerIdentifier,
 		PersonRepository:    repositories.People,
 		FaceRecognizer:      faceRecognizer,
@@ -224,6 +227,15 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("construct services: %w", err)
 	}
+	debugAdminID := ""
+	if cfg.Debug.Enabled {
+		debugAdmin, debugErr := ensurePipelineDebugAdmin(rootCtx, services.Auth, cfg.Debug)
+		if debugErr != nil {
+			return fmt.Errorf("prepare pipeline debug admin: %w", debugErr)
+		}
+		debugAdminID = debugAdmin.User.ID
+		appLogger.Info().Str("email", debugAdmin.User.Email).Msg("pipeline debug dashboard enabled")
+	}
 	handlers, err := handler.NewContainer(handler.Dependencies{
 		HealthService: services.Health,
 		AuthService:   services.Auth,
@@ -234,6 +246,8 @@ func run() error {
 		VideoConfig:   cfg.Video,
 		PersonService: services.People,
 		FaceConfig:    cfg.Face,
+		DebugService:  services.Debug,
+		DebugAdminID:  debugAdminID,
 	})
 	if err != nil {
 		return fmt.Errorf("construct handlers: %w", err)
@@ -310,6 +324,17 @@ func run() error {
 
 	appLogger.Info().Msg("http server stopped gracefully")
 	return nil
+}
+
+func ensurePipelineDebugAdmin(ctx context.Context, auth service.AuthService, cfg config.DebugConfig) (service.AuthResult, error) {
+	result, err := auth.Login(ctx, cfg.AdminEmail, cfg.AdminPassword)
+	if err == nil {
+		return result, nil
+	}
+	if !errors.Is(err, service.ErrUnauthorized) {
+		return service.AuthResult{}, err
+	}
+	return auth.Signup(ctx, cfg.AdminEmail, cfg.AdminPassword)
 }
 
 func loadDotEnv(filename string) error {

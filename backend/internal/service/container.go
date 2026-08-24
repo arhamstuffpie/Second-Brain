@@ -16,6 +16,7 @@ type Dependencies struct {
 	STTConfig           config.STTConfig
 	VoiceRepository     VoiceRepository
 	SpeakerProfiles     SpeakerProfileRepository
+	SpeakerEmbedder     SpeakerEmbedder
 	SpeakerIdentifier   SpeakerIdentifier
 	PersonRepository    PersonRepository
 	FaceRecognizer      FaceRecognizer
@@ -46,6 +47,7 @@ type Container struct {
 	Voice  VoiceService
 	Video  VideoService
 	People PersonService
+	Debug  PipelineDebugService
 }
 
 func NewContainer(deps Dependencies) (*Container, error) {
@@ -108,6 +110,7 @@ func NewContainer(deps Dependencies) (*Container, error) {
 		Voice:  voice,
 		Video:  video,
 		People: newPersonService(deps.PersonRepository, deps.FaceRecognizer, deps.FaceStore, deps.FaceConfig),
+		Debug:  newPipelineDebugService(deps.FaceRecognizer, deps.SpeakerEmbedder, deps.ActiveSpeaker),
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err
@@ -136,6 +139,9 @@ func (c *Container) Validate() error {
 	}
 	if c.People == nil {
 		return fmt.Errorf("person service is required")
+	}
+	if c.Debug == nil {
+		return fmt.Errorf("pipeline debug service is required")
 	}
 	return nil
 }
