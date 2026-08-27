@@ -1,4 +1,4 @@
-.PHONY: build run test vet generate migrate-validate migrate-up migrate-down speaker-up speaker-down speaker-logs face-models face-up face-down face-logs
+.PHONY: build run test vet generate migrate-validate migrate-up migrate-down speaker-up speaker-down speaker-logs face-models face-up face-down face-logs audio-models ml-up ml-down ml-logs
 
 BACKEND_DIR := backend
 
@@ -25,3 +25,15 @@ face-down:
 
 face-logs:
 	docker compose -f face-embedder/compose.yaml logs -f face-embedder
+
+audio-models:
+	uv run --with huggingface-hub==0.36.0 python audio-analyzer/download-models.py
+
+ml-up:
+	docker compose -f compose.ml.yaml up --build -d
+
+ml-down:
+	docker compose -f compose.ml.yaml down
+
+ml-logs:
+	docker compose -f compose.ml.yaml logs -f

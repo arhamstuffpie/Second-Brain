@@ -636,6 +636,7 @@ func (s *voiceService) processSTT(ctx context.Context, job VoiceJob) error {
 			transcript.Warning = appendTranscriptWarning(transcript.Warning, "persistent speaker identification was unavailable")
 		}
 	}
+	enforceCompatibleSpeakerFields(&transcript)
 	if err := s.repository.SaveTranscriptAndQueueAssembly(
 		ctx, job, transcript, speakerReferenceIDs(references),
 		transcriptionProvider(transcript, s.transcriber),
@@ -805,6 +806,18 @@ func BuildConversationEpisodes(
 				SpeakerName:      segment.SpeakerName, SpeakerRelationship: segment.SpeakerRelationship,
 				SpeakerIdentityStatus: segment.SpeakerIdentityStatus,
 				Confidence:            segment.Confidence,
+				SourceSegmentID:       segment.SourceSegmentID,
+				DiarizationClusterID:  segment.DiarizationClusterID,
+				SpeakerProfileIDs:     append([]string(nil), segment.SpeakerProfileIDs...),
+				Overlap:               segment.Overlap,
+				OverlapGroupID:        segment.OverlapGroupID,
+				SourceIndex:           segment.SourceIndex,
+				SeparationStatus:      segment.SeparationStatus,
+				SeparationConfidence:  segment.SeparationConfidence,
+				TimingPrecision:       segment.TimingPrecision,
+				IdentityConfidence:    segment.IdentityConfidence,
+				AmbiguityReasons:      append([]string(nil), segment.AmbiguityReasons...),
+				Words:                 append([]WordAttribution(nil), segment.Words...),
 			})
 		}
 	}
@@ -930,7 +943,7 @@ func episodeFromSegments(
 		UnknownUtteranceCount: unknownCount,
 		EvidenceKind:          "speech_evidence",
 		SourceIdentity:        stableEvidenceID("speech-turn", identities...),
-		ProcessingVersion:     2,
+		ProcessingVersion:     EvidenceProcessingVersion,
 	}
 }
 

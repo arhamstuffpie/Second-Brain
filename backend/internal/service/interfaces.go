@@ -383,18 +383,39 @@ type VoiceEpisode struct {
 }
 
 type TranscriptSegment struct {
-	ID                    string   `json:"id,omitempty"`
-	StartTime             float64  `json:"start_time"`
-	EndTime               float64  `json:"end_time"`
-	Speaker               string   `json:"speaker"`
-	SpeakerRole           string   `json:"speaker_role"`
-	SpeakerProfileID      string   `json:"speaker_profile_id,omitempty"`
-	PersonProfileID       string   `json:"person_profile_id,omitempty"`
-	SpeakerName           string   `json:"speaker_name,omitempty"`
-	SpeakerRelationship   string   `json:"speaker_relationship,omitempty"`
-	SpeakerIdentityStatus string   `json:"speaker_identity_status,omitempty"`
-	Text                  string   `json:"text"`
-	Confidence            *float64 `json:"confidence,omitempty"`
+	ID                    string            `json:"id,omitempty"`
+	StartTime             float64           `json:"start_time"`
+	EndTime               float64           `json:"end_time"`
+	Speaker               string            `json:"speaker"`
+	SpeakerRole           string            `json:"speaker_role"`
+	SpeakerProfileID      string            `json:"speaker_profile_id,omitempty"`
+	PersonProfileID       string            `json:"person_profile_id,omitempty"`
+	SpeakerName           string            `json:"speaker_name,omitempty"`
+	SpeakerRelationship   string            `json:"speaker_relationship,omitempty"`
+	SpeakerIdentityStatus string            `json:"speaker_identity_status,omitempty"`
+	Text                  string            `json:"text"`
+	Confidence            *float64          `json:"confidence,omitempty"`
+	SourceSegmentID       string            `json:"source_segment_id,omitempty"`
+	DiarizationClusterID  string            `json:"diarization_cluster_id,omitempty"`
+	SpeakerProfileIDs     []string          `json:"speaker_profile_ids,omitempty"`
+	Overlap               bool              `json:"overlap,omitempty"`
+	OverlapGroupID        string            `json:"overlap_group_id,omitempty"`
+	SourceIndex           *int              `json:"source_index,omitempty"`
+	SeparationStatus      string            `json:"separation_status,omitempty"`
+	SeparationConfidence  *float64          `json:"separation_confidence,omitempty"`
+	TimingPrecision       string            `json:"timing_precision,omitempty"`
+	IdentityConfidence    *float64          `json:"identity_confidence,omitempty"`
+	AmbiguityReasons      []string          `json:"ambiguity_reasons,omitempty"`
+	Words                 []WordAttribution `json:"words,omitempty"`
+}
+
+type WordAttribution struct {
+	Word                 string   `json:"word"`
+	StartTime            float64  `json:"start_time"`
+	EndTime              float64  `json:"end_time"`
+	DiarizationClusterID string   `json:"diarization_cluster_id,omitempty"`
+	AudioSourceID        string   `json:"audio_source_id,omitempty"`
+	Confidence           *float64 `json:"confidence,omitempty"`
 }
 
 type AudioRange struct {
@@ -582,19 +603,31 @@ type SpeakerAttributionInput struct {
 }
 
 type EpisodeSegment struct {
-	ID                    string   `json:"id,omitempty"`
-	RecordingID           string   `json:"recording_id"`
-	StartTime             float64  `json:"start_time"`
-	EndTime               float64  `json:"end_time"`
-	Speaker               string   `json:"speaker"`
-	SpeakerRole           string   `json:"speaker_role"`
-	SpeakerProfileID      string   `json:"speaker_profile_id,omitempty"`
-	PersonProfileID       string   `json:"person_profile_id,omitempty"`
-	SpeakerName           string   `json:"speaker_name,omitempty"`
-	SpeakerRelationship   string   `json:"speaker_relationship,omitempty"`
-	SpeakerIdentityStatus string   `json:"speaker_identity_status,omitempty"`
-	Text                  string   `json:"text"`
-	Confidence            *float64 `json:"confidence,omitempty"`
+	ID                    string            `json:"id,omitempty"`
+	RecordingID           string            `json:"recording_id"`
+	StartTime             float64           `json:"start_time"`
+	EndTime               float64           `json:"end_time"`
+	Speaker               string            `json:"speaker"`
+	SpeakerRole           string            `json:"speaker_role"`
+	SpeakerProfileID      string            `json:"speaker_profile_id,omitempty"`
+	PersonProfileID       string            `json:"person_profile_id,omitempty"`
+	SpeakerName           string            `json:"speaker_name,omitempty"`
+	SpeakerRelationship   string            `json:"speaker_relationship,omitempty"`
+	SpeakerIdentityStatus string            `json:"speaker_identity_status,omitempty"`
+	Text                  string            `json:"text"`
+	Confidence            *float64          `json:"confidence,omitempty"`
+	SourceSegmentID       string            `json:"source_segment_id,omitempty"`
+	DiarizationClusterID  string            `json:"diarization_cluster_id,omitempty"`
+	SpeakerProfileIDs     []string          `json:"speaker_profile_ids,omitempty"`
+	Overlap               bool              `json:"overlap,omitempty"`
+	OverlapGroupID        string            `json:"overlap_group_id,omitempty"`
+	SourceIndex           *int              `json:"source_index,omitempty"`
+	SeparationStatus      string            `json:"separation_status,omitempty"`
+	SeparationConfidence  *float64          `json:"separation_confidence,omitempty"`
+	TimingPrecision       string            `json:"timing_precision,omitempty"`
+	IdentityConfidence    *float64          `json:"identity_confidence,omitempty"`
+	AmbiguityReasons      []string          `json:"ambiguity_reasons,omitempty"`
+	Words                 []WordAttribution `json:"words,omitempty"`
 }
 
 type EpisodeDraft struct {
