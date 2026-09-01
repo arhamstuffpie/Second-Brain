@@ -22,11 +22,13 @@ This file tracks the replacement plan. A checked item is implemented in code; ro
 - [x] Durable dense-person worker with independent claim, stale-lock recovery, retry backoff, and dead-letter state.
 - [x] Atomic persistence for dense person tracks, face observations, stage checkpoints, and model provenance.
 - [x] Owner-scoped storage for curated gallery embeddings from every confirmed face track.
+- [x] Seven-stage analysis-run manifest with explicit stage dependencies.
 - [x] Automatic identity linking and automatic profile merging remain disabled.
 
 ## Still required before production enablement
 
 - [ ] Connect the overlap-audio client to its independently retryable backend worker and persist its checkpoints/results.
+- [ ] Make every remaining worker complete its matching analysis-stage row.
 - [ ] Store separated WAV outputs as owner-scoped `evidence_review` media assets, then transcribe accepted sources.
 - [ ] Match separated sources to non-overlap ECAPA cluster centroids; keep failures ambiguous.
 - [ ] Replace the sampled `localFaceTrack` identity path after scene observations can be mapped safely to dense tracks.
@@ -43,6 +45,7 @@ This file tracks the replacement plan. A checked item is implemented in code; ro
 - **Version 3 instead of overwrite:** old evidence stays usable until the new run completes.
 - **Dense tracking stays separate from scene sampling:** faces need 8 FPS; scene descriptions do not.
 - **Use the existing stage queue:** one durable retry system is easier to operate than another custom queue.
+- **Persist stage dependencies:** blocked work is visible without adding another workflow service.
 - **Store gallery embeddings only:** a few strong samples per face are enough for matching and keep the database smaller.
 - **Kalman + two-pass association:** motion handles nearby frames; SFace helps after crossing or occlusion.
 - **Unknown is a valid result:** weak separation or matching stays ambiguous instead of creating a false identity.

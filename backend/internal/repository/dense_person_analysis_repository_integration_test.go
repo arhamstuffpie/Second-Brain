@@ -20,7 +20,7 @@ func TestDensePersonAnalysisRepositoryPersistsTwoFaceTracks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	t.Cleanup(func() { _ = database.Close() })
 	ctx := context.Background()
 	const ownerID = "dense-person-integration-owner"
 	if _, err := database.ExecContext(ctx, `
@@ -29,6 +29,8 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM video_recordings WHERE owner_user_id=$1`, ownerID)
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM media_assets WHERE owner_user_id=$1`, ownerID)
 		_, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, ownerID)
 	})
 	baseRepository, err := newBase(database)
@@ -43,6 +45,29 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 	}, 5)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var stageCount int
+	var dependenciesCorrect bool
+	if err := database.QueryRowContext(ctx, `
+SELECT COUNT(*),BOOL_AND(
+    CASE stage
+      WHEN 'audio_analysis' THEN cardinality(depends_on)=0
+      WHEN 'dense_person_tracking' THEN cardinality(depends_on)=0
+      WHEN 'transcription' THEN depends_on=ARRAY['audio_analysis']::TEXT[]
+      WHEN 'identity_matching' THEN depends_on=ARRAY['dense_person_tracking','transcription']::TEXT[]
+      WHEN 'active_speaker_fusion' THEN depends_on=ARRAY['identity_matching']::TEXT[]
+      WHEN 'episode_generation' THEN depends_on=ARRAY['active_speaker_fusion']::TEXT[]
+      WHEN 'graph_persistence' THEN depends_on=ARRAY['episode_generation']::TEXT[]
+      ELSE FALSE
+    END
+)
+FROM analysis_stage_jobs job
+JOIN analysis_runs run ON run.id=job.analysis_run_id
+WHERE run.recording_id=$1`, recording.ID).Scan(&stageCount, &dependenciesCorrect); err != nil {
+		t.Fatal(err)
+	}
+	if stageCount != 7 || !dependenciesCorrect {
+		t.Fatalf("analysis stages=%d dependencies correct=%t, want 7/true", stageCount, dependenciesCorrect)
 	}
 	repository := newDensePersonAnalysisRepository(baseRepository)
 	job, found, err := repository.ClaimDensePersonAnalysis(ctx, `{}`, time.Hour)

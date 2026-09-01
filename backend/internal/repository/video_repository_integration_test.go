@@ -20,7 +20,7 @@ func TestVideoRepositoryPipelineIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	t.Cleanup(func() { _ = database.Close() })
 	ctx := context.Background()
 	if err := database.PingContext(ctx); err != nil {
 		t.Fatal(err)
@@ -33,6 +33,8 @@ ON CONFLICT (id) DO NOTHING`, ownerID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM video_recordings WHERE owner_user_id=$1`, ownerID)
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM media_assets WHERE owner_user_id=$1`, ownerID)
 		_, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE id = $1`, ownerID)
 	})
 

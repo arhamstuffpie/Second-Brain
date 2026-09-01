@@ -51,12 +51,24 @@ WITH asset AS (
 		owner_user_id,recording_id,processing_version,status,configuration_profile
 	)
 	SELECT owner_user_id,id,GREATEST(processing_version,requested_processing_version),
-	       'queued','pending:dense_person_tracking'
+	       'queued','pipeline:v3'
 	FROM recording
 	RETURNING id
-), dense_person_job AS (
-	INSERT INTO analysis_stage_jobs (analysis_run_id,stage,required,max_attempts)
-	SELECT id,'dense_person_tracking',TRUE,$17 FROM analysis_run
+), stage_jobs AS (
+	INSERT INTO analysis_stage_jobs (
+		analysis_run_id,stage,required,status,max_attempts,depends_on
+	)
+	SELECT analysis_run.id,definition.stage,TRUE,'queued',$17,definition.depends_on
+	FROM analysis_run
+	CROSS JOIN (VALUES
+		('audio_analysis', ARRAY[]::TEXT[]),
+		('dense_person_tracking', ARRAY[]::TEXT[]),
+		('transcription', ARRAY['audio_analysis']::TEXT[]),
+		('identity_matching', ARRAY['dense_person_tracking','transcription']::TEXT[]),
+		('active_speaker_fusion', ARRAY['identity_matching']::TEXT[]),
+		('episode_generation', ARRAY['active_speaker_fusion']::TEXT[]),
+		('graph_persistence', ARRAY['episode_generation']::TEXT[])
+	) definition(stage,depends_on)
 )
 SELECT id, session_id, group_id, memory_id, status, audio_status, visual_status,
        merge_status, file_name, media_type, size_bytes, start_offset_seconds, created_at
@@ -119,12 +131,24 @@ WITH claimed_session AS (
 		owner_user_id,recording_id,processing_version,status,configuration_profile
 	)
 	SELECT owner_user_id,id,GREATEST(processing_version,requested_processing_version),
-	       'queued','pending:dense_person_tracking'
+	       'queued','pipeline:v3'
 	FROM recording
 	RETURNING id
-), dense_person_job AS (
-	INSERT INTO analysis_stage_jobs (analysis_run_id,stage,required,max_attempts)
-	SELECT id,'dense_person_tracking',TRUE,$13 FROM analysis_run
+), stage_jobs AS (
+	INSERT INTO analysis_stage_jobs (
+		analysis_run_id,stage,required,status,max_attempts,depends_on
+	)
+	SELECT analysis_run.id,definition.stage,TRUE,'queued',$13,definition.depends_on
+	FROM analysis_run
+	CROSS JOIN (VALUES
+		('audio_analysis', ARRAY[]::TEXT[]),
+		('dense_person_tracking', ARRAY[]::TEXT[]),
+		('transcription', ARRAY['audio_analysis']::TEXT[]),
+		('identity_matching', ARRAY['dense_person_tracking','transcription']::TEXT[]),
+		('active_speaker_fusion', ARRAY['identity_matching']::TEXT[]),
+		('episode_generation', ARRAY['active_speaker_fusion']::TEXT[]),
+		('graph_persistence', ARRAY['episode_generation']::TEXT[])
+	) definition(stage,depends_on)
 )
 SELECT id, session_id, group_id, memory_id, status, audio_status, visual_status,
        merge_status, file_name, media_type, size_bytes, client_chunk_id,
@@ -335,22 +359,35 @@ WITH reset_recording AS (
 		owner_user_id,recording_id,processing_version,status,configuration_profile
 	)
 	SELECT owner_user_id,id,GREATEST(processing_version,requested_processing_version),
-	       'queued','pending:dense_person_tracking'
+	       'queued','pipeline:v3'
 	FROM reset_recording
 	ON CONFLICT (recording_id,processing_version) DO UPDATE
 	SET status='queued',last_error='',completed_at=NULL,updated_at=NOW()
 	RETURNING id,recording_id
-), dense_person_job AS (
-	INSERT INTO analysis_stage_jobs (analysis_run_id,stage,required,max_attempts)
-	SELECT a.id,'dense_person_tracking',TRUE,COALESCE((
+), stage_jobs AS (
+	INSERT INTO analysis_stage_jobs (
+		analysis_run_id,stage,required,status,max_attempts,depends_on
+	)
+	SELECT a.id,definition.stage,TRUE,'queued',COALESCE((
 		SELECT MAX(j.max_attempts)
 		FROM analysis_stage_jobs j
 		JOIN analysis_runs old_run ON old_run.id=j.analysis_run_id
-		WHERE old_run.recording_id=a.recording_id AND j.stage='dense_person_tracking'
-	),5)
+		WHERE old_run.recording_id=a.recording_id
+	),5),definition.depends_on
 	FROM analysis_run a
+	CROSS JOIN (VALUES
+		('audio_analysis', ARRAY[]::TEXT[]),
+		('dense_person_tracking', ARRAY[]::TEXT[]),
+		('transcription', ARRAY['audio_analysis']::TEXT[]),
+		('identity_matching', ARRAY['dense_person_tracking','transcription']::TEXT[]),
+		('active_speaker_fusion', ARRAY['identity_matching']::TEXT[]),
+		('episode_generation', ARRAY['active_speaker_fusion']::TEXT[]),
+		('graph_persistence', ARRAY['episode_generation']::TEXT[])
+	) definition(stage,depends_on)
 	ON CONFLICT (analysis_run_id,stage) DO UPDATE
-	SET status='queued',attempts=0,run_at=NOW(),locked_at=NULL,last_error='',updated_at=NOW()
+	SET required=TRUE,status='queued',attempts=0,run_at=NOW(),locked_at=NULL,
+	    depends_on=EXCLUDED.depends_on,last_error='',checkpoint='{}'::jsonb,
+	    result_provenance='{}'::jsonb,updated_at=NOW()
 )
 SELECT id, session_id, group_id, memory_id, status, audio_status, visual_status,
        merge_status, file_name, media_type, size_bytes, COALESCE(client_chunk_id, ''),

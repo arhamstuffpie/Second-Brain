@@ -40,6 +40,14 @@ WITH candidate AS (
         (j.status IN ('queued','retryable_failed') AND j.run_at<=NOW())
         OR (j.status='processing' AND j.locked_at<NOW()-make_interval(secs => $1))
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM unnest(j.depends_on) dependency(stage)
+        LEFT JOIN analysis_stage_jobs prerequisite
+          ON prerequisite.analysis_run_id=j.analysis_run_id
+         AND prerequisite.stage=dependency.stage
+        WHERE prerequisite.status IS DISTINCT FROM 'completed'
+      )
     ORDER BY j.run_at,j.id
     FOR UPDATE SKIP LOCKED
     LIMIT 1
