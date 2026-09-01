@@ -1,27 +1,39 @@
-.PHONY: build run test vet generate migrate-up migrate-down
+.PHONY: build run test vet generate migrate-validate migrate-up migrate-down speaker-up speaker-down speaker-logs face-models face-up face-down face-logs audio-models ml-up ml-down ml-logs
 
-DATABASE_URL ?=postgresql://postgres:mysecretpassword@localhost:5432/mysecondbrain
+BACKEND_DIR := backend
 
-build:
-	@mkdir -p bin
-	go build -o bin/server ./cmd/server
+build run test vet generate migrate-validate migrate-up migrate-down:
+	$(MAKE) -C $(BACKEND_DIR) $@
 
-run:
-	go run ./cmd/server
+speaker-up:
+	docker compose -f speaker-embedder/compose.yaml up --build -d
 
-test:
-	go test -race ./...
+speaker-down:
+	docker compose -f speaker-embedder/compose.yaml down
 
-vet:
-	go vet ./...
+speaker-logs:
+	docker compose -f speaker-embedder/compose.yaml logs -f speaker-embedder
 
-generate:
-	sqlc generate
+face-models:
+	./face-embedder/download-models.sh
 
-migrate-up:
-	@test -n "$(DATABASE_URL)" || (echo "DATABASE_URL is required"; exit 1)
-	goose -dir db/migrations postgres "$(DATABASE_URL)" up
+face-up:
+	docker compose -f face-embedder/compose.yaml up --build -d
 
-migrate-down:
-	@test -n "$(DATABASE_URL)" || (echo "DATABASE_URL is required"; exit 1)
-	goose -dir db/migrations postgres "$(DATABASE_URL)" down
+face-down:
+	docker compose -f face-embedder/compose.yaml down
+
+face-logs:
+	docker compose -f face-embedder/compose.yaml logs -f face-embedder
+
+audio-models:
+	uv run --with huggingface-hub==0.36.0 python audio-analyzer/download-models.py
+
+ml-up:
+	docker compose -f compose.ml.yaml up --build -d
+
+ml-down:
+	docker compose -f compose.ml.yaml down
+
+ml-logs:
+	docker compose -f compose.ml.yaml logs -f

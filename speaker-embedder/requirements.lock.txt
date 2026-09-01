@@ -1,0 +1,10 @@
+fastapi==0.115.12
+huggingface-hub==0.19.4
+numpy==2.2.6
+python-multipart==0.0.20
+requests==2.32.3
+soundfile==0.13.1
+speechbrain==1.0.3
+torch==2.7.1
+torchaudio==2.7.1
+uvicorn==0.34.3

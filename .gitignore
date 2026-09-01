@@ -1,7 +1,13 @@
 .env
 .idea/
 .vscode/
+.venv/
 bin/
 coverage.out
 *.log
-
+data/
+face-embedder/models/*.onnx
+audio-analyzer/models/*
+!audio-analyzer/models/.gitkeep
+__pycache__/
+*.py[cod]

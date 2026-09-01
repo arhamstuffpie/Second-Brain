@@ -1,6 +1,0 @@
-.git
-.env
-bin
-coverage.out
-*.log
-
