@@ -9,24 +9,25 @@ import (
 )
 
 type Config struct {
-	Environment   string
-	HTTP          HTTPConfig
-	Database      DatabaseConfig
-	JWT           JWTConfig
-	CORS          CORSConfig
-	Log           LogConfig
-	Voice         VoiceConfig
-	Video         VideoConfig
-	STT           STTConfig
-	Speaker       SpeakerEmbeddingConfig
-	Face          FaceRecognitionConfig
-	ActiveSpeaker ActiveSpeakerConfig
-	Vision        VisionConfig
-	Models        ModelConfig
-	Memograph     MemographConfig
-	Worker        WorkerConfig
-	Storage       StorageConfig
-	Debug         DebugConfig
+	Environment    string
+	HTTP           HTTPConfig
+	Database       DatabaseConfig
+	JWT            JWTConfig
+	CORS           CORSConfig
+	Log            LogConfig
+	Voice          VoiceConfig
+	Video          VideoConfig
+	STT            STTConfig
+	Speaker        SpeakerEmbeddingConfig
+	Face           FaceRecognitionConfig
+	PersonTracking PersonTrackingConfig
+	ActiveSpeaker  ActiveSpeakerConfig
+	Vision         VisionConfig
+	Models         ModelConfig
+	Memograph      MemographConfig
+	Worker         WorkerConfig
+	Storage        StorageConfig
+	Debug          DebugConfig
 }
 
 type HTTPConfig struct {
@@ -134,6 +135,31 @@ type FaceRecognitionConfig struct {
 	AmbiguousMargin float64
 	ProvisionalTTL  time.Duration
 	AutoConfirm     bool
+}
+
+// PersonTrackingConfig controls the independent dense face-tracking worker.
+// Its model IDs must match the models loaded by person-analyzer.
+type PersonTrackingConfig struct {
+	Provider       string
+	BaseURL        string
+	APIKey         string
+	DetectorModel  string
+	EmbeddingModel string
+	Timeout        time.Duration
+	Profile        PersonTrackingProfile
+}
+
+type PersonTrackingProfile struct {
+	FPS                           float64
+	ConfirmationDetections        int
+	ConfirmationWindowFrames      int
+	LostTimeoutSeconds            float64
+	ReidentificationWindowSeconds float64
+	HighConfidenceThreshold       float64
+	LowConfidenceThreshold        float64
+	IOUThreshold                  float64
+	AppearanceThreshold           float64
+	MaxGallerySamples             int
 }
 
 type ActiveSpeakerConfig struct {
@@ -283,6 +309,26 @@ func Load() (Config, error) {
 			AmbiguousMargin: getEnvFloat("APP_FACE_AMBIGUOUS_MARGIN", 0.10),
 			ProvisionalTTL:  getEnvDuration("APP_FACE_PROVISIONAL_TTL", 30*24*time.Hour),
 			AutoConfirm:     GetEnvBool("APP_FACE_AUTO_CONFIRM", false),
+		},
+		PersonTracking: PersonTrackingConfig{
+			Provider:       strings.ToLower(strings.TrimSpace(GetEnv("APP_PERSON_ANALYZER_PROVIDER", "disabled"))),
+			BaseURL:        strings.TrimRight(GetEnv("APP_PERSON_ANALYZER_BASE_URL", "http://127.0.0.1:8094"), "/"),
+			APIKey:         GetEnv("APP_PERSON_ANALYZER_API_KEY", ""),
+			DetectorModel:  GetEnv("APP_PERSON_ANALYZER_DETECTOR_MODEL", "opencv/yunet-2023mar"),
+			EmbeddingModel: GetEnv("APP_PERSON_ANALYZER_EMBEDDING_MODEL", "opencv/sface-2021dec"),
+			Timeout:        getEnvDuration("APP_PERSON_ANALYZER_TIMEOUT", 30*time.Minute),
+			Profile: PersonTrackingProfile{
+				FPS:                           getEnvFloat("APP_PERSON_TRACKING_FPS", 8),
+				ConfirmationDetections:        GetEnvInt("APP_PERSON_TRACKING_CONFIRMATION_DETECTIONS", 3),
+				ConfirmationWindowFrames:      GetEnvInt("APP_PERSON_TRACKING_CONFIRMATION_WINDOW_FRAMES", 5),
+				LostTimeoutSeconds:            getEnvFloat("APP_PERSON_TRACKING_LOST_TIMEOUT_SECONDS", 1),
+				ReidentificationWindowSeconds: getEnvFloat("APP_PERSON_TRACKING_REIDENTIFICATION_WINDOW_SECONDS", 10),
+				HighConfidenceThreshold:       getEnvFloat("APP_PERSON_TRACKING_HIGH_CONFIDENCE_THRESHOLD", 0.8),
+				LowConfidenceThreshold:        getEnvFloat("APP_PERSON_TRACKING_LOW_CONFIDENCE_THRESHOLD", 0.35),
+				IOUThreshold:                  getEnvFloat("APP_PERSON_TRACKING_IOU_THRESHOLD", 0.2),
+				AppearanceThreshold:           getEnvFloat("APP_PERSON_TRACKING_APPEARANCE_THRESHOLD", 0.35),
+				MaxGallerySamples:             GetEnvInt("APP_PERSON_TRACKING_MAX_GALLERY_SAMPLES", 5),
+			},
 		},
 		ActiveSpeaker: ActiveSpeakerConfig{
 			Provider:                   strings.ToLower(strings.TrimSpace(GetEnv("APP_ACTIVE_SPEAKER_PROVIDER", "disabled"))),
@@ -468,6 +514,28 @@ func (c Config) Validate() error {
 		if c.Face.MatchThreshold <= 0 || c.Face.MatchThreshold > 1 ||
 			c.Face.AmbiguousMargin < 0 || c.Face.AmbiguousMargin >= 1 || c.Face.ProvisionalTTL <= 0 {
 			return fmt.Errorf("face matching threshold, margin, and provisional TTL are invalid")
+		}
+	}
+	if c.PersonTracking.Provider != "disabled" && c.PersonTracking.Provider != "local" && c.PersonTracking.Provider != "external" {
+		return fmt.Errorf("APP_PERSON_ANALYZER_PROVIDER must be disabled, local, or external")
+	}
+	if c.PersonTracking.Provider != "disabled" {
+		p := c.PersonTracking.Profile
+		if strings.TrimSpace(c.PersonTracking.BaseURL) == "" || strings.TrimSpace(c.PersonTracking.DetectorModel) == "" ||
+			strings.TrimSpace(c.PersonTracking.EmbeddingModel) == "" || c.PersonTracking.Timeout <= 0 {
+			return fmt.Errorf("valid person analyzer configuration is required")
+		}
+		if c.PersonTracking.Provider == "external" && strings.TrimSpace(c.PersonTracking.APIKey) == "" {
+			return fmt.Errorf("APP_PERSON_ANALYZER_API_KEY is required for the external provider")
+		}
+		if p.FPS <= 0 || p.FPS > 30 || p.ConfirmationDetections < 2 || p.ConfirmationDetections > 10 ||
+			p.ConfirmationWindowFrames < 2 || p.ConfirmationWindowFrames > 30 ||
+			p.LostTimeoutSeconds <= 0 || p.LostTimeoutSeconds > 30 ||
+			p.ReidentificationWindowSeconds <= 0 || p.ReidentificationWindowSeconds > 120 ||
+			p.LowConfidenceThreshold < 0 || p.HighConfidenceThreshold > 1 ||
+			p.LowConfidenceThreshold > p.HighConfidenceThreshold || p.IOUThreshold < 0 || p.IOUThreshold > 1 ||
+			p.AppearanceThreshold < -1 || p.AppearanceThreshold > 1 || p.MaxGallerySamples < 1 || p.MaxGallerySamples > 20 {
+			return fmt.Errorf("person tracking profile is invalid")
 		}
 	}
 	if c.ActiveSpeaker.Provider != "disabled" && c.ActiveSpeaker.Provider != "local" && c.ActiveSpeaker.Provider != "external" {

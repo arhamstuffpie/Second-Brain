@@ -510,6 +510,7 @@ func (s *videoService) processVideoAudio(ctx context.Context, job VideoJob) erro
 	if transcript.Segments == nil {
 		transcript.Segments = []TranscriptSegment{}
 	}
+	enforceCompatibleSpeakerFields(&transcript)
 	audioTrackPresent := true
 	transcript.AudioTrackPresent = &audioTrackPresent
 	if strings.TrimSpace(transcript.Text) == "" && len(transcript.Segments) == 0 {
@@ -827,7 +828,7 @@ func BuildEvidenceEpisodes(
 	processingVersion int,
 ) []VideoEpisodeDraft {
 	if processingVersion < 1 {
-		processingVersion = 2
+		processingVersion = EvidenceProcessingVersion
 	}
 	result := make([]VideoEpisodeDraft, 0)
 	visualBuckets := make(map[int][]VideoObservation)
