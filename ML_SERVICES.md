@@ -11,14 +11,13 @@ identity decisions. The ML services only return evidence.
 | 8091 | speaker-embedder | SpeechBrain ECAPA | Turns a short owner voice clip or speech segment into a voice signature for account-scoped matching. | Live |
 | 8092 | face-embedder | YuNet + SFace | Detects a face and creates its face signature for enrollment and visual matching. | Live |
 | 8093 | active-speaker | TalkNet | Scores which visible person is speaking during an already-timed speech segment. | Live |
-| 8094 | person-analyzer | YuNet + SFace + tracker | Finds every face through a video and keeps one physical person under one track ID. | Service ready; worker wiring pending |
+| 8094 | person-analyzer | YuNet + SFace + tracker | Finds every face through a video and keeps one physical person under one track ID. | Live through a durable worker |
 | 8095 | audio-analyzer | pyannote + SepFormer | Finds speech, silence, and overlap; attempts to split overlapping voices. | Service ready; worker wiring pending |
 
 “Live” means the backend creates the client and calls the service during its
-current face, voice, or video flow. “Worker wiring pending” means the endpoint,
+normal processing flow. Audio worker wiring is still pending: its endpoint,
 database schema, and validated Go client exist, but normal uploads do not call
-it yet. This is intentional: dense tracking and overlap analysis need durable
-per-stage jobs before they can safely run on every recording.
+it yet.
 
 ## How the pieces fit
 
@@ -30,17 +29,18 @@ flowchart LR
     B --> F["8092 Face embedder"]
     B --> A["8093 Active speaker"]
 
-    B -. "planned durable worker" .-> P["8094 Person analyzer"]
+    B --> W["Durable dense-person worker"]
+    W --> P["8094 Person analyzer"]
     B -. "planned durable worker" .-> D["8095 Audio analyzer"]
 
     S --> DB["PostgreSQL evidence and profiles"]
     F --> DB
     A --> DB
-    P -. "future track evidence" .-> DB
+    P --> DB
     D -. "future overlap evidence" .-> DB
 ```
 
-The dashed paths are not enabled for normal uploads yet. Do not turn on
+Only the dashed audio path is not enabled for normal uploads yet. Do not turn on
 automatic identity merging: ambiguous evidence must remain ambiguous.
 
 ## One-time local setup
@@ -110,8 +110,7 @@ docker compose -f compose.ml.yaml logs -f person-analyzer
 
 ## Configure and start the backend
 
-Set these values in `backend/.env` to enable the three services already used
-by the backend:
+Set these values in `backend/.env` to enable the services used by the backend:
 
 ```dotenv
 APP_SPEAKER_EMBEDDING_PROVIDER=local
@@ -126,19 +125,28 @@ APP_ACTIVE_SPEAKER_PROVIDER=local
 APP_ACTIVE_SPEAKER_BASE_URL=http://127.0.0.1:8093
 APP_ACTIVE_SPEAKER_MODEL=talknet/talkset-v1
 
+APP_PERSON_ANALYZER_PROVIDER=local
+APP_PERSON_ANALYZER_BASE_URL=http://127.0.0.1:8094
+APP_PERSON_ANALYZER_API_KEY=copy_the_PERSON_ANALYZER_API_KEY_from_the_root_env
+APP_PERSON_ANALYZER_DETECTOR_MODEL=opencv/yunet-2023mar
+APP_PERSON_ANALYZER_EMBEDDING_MODEL=opencv/sface-2021dec
+APP_PERSON_ANALYZER_TIMEOUT=30m
+
 APP_ACTIVE_SPEAKER_AUTO_LINK=false
 APP_PERSON_AUTO_MERGE=false
 ```
 
-Start the backend:
+Apply database migrations before starting the backend:
 
 ```bash
 cd /Users/arham/Documents/ai-second-brain
-make -C backend run
+make migrate-up
+make run
 ```
 
-The backend validates face and active-speaker service compatibility at startup.
-Read the startup logs before uploading media.
+Read the startup logs before uploading media. When the person analyzer is
+enabled, the dense worker also queues existing recordings that do not yet have
+a `dense_person_tracking` stage for their requested processing version.
 
 ## Current end-to-end flows
 
@@ -170,23 +178,39 @@ Read the startup logs before uploading media.
 5. Automatic linking remains disabled unless you deliberately enable it after
    reviewing evidence.
 
-### Dense person and overlap-audio analysis
+### Dense person analysis
 
-`person-analyzer` and `audio-analyzer` are running and their Go clients
-validate model provenance, timing, and output shape. Their results are not yet
-scheduled by the normal backend workers.
+1. The dense worker creates or claims a `dense_person_tracking` stage job.
+2. It streams the owner-scoped original video to `person-analyzer`.
+3. YuNet detects every usable face and SFace helps keep identities separate.
+4. The backend saves every track and face observation in one transaction.
+5. It saves only the small, high-quality gallery embeddings, not every frame's
+   embedding.
+6. A failure is retried with backoff and becomes `dead` after the configured
+   maximum attempts.
 
-The next implementation step is to create durable `dense_person_tracking`
-and `audio_analysis` stage jobs, persist their output, and then activate a
-completed processing version. Track this work in
+The overlap-audio client is implemented, but its durable worker is still the
+next backend stage to wire. Track that work in
 `MULTIMODAL_PIPELINE_PROGRESS.md`.
+
+To audit one recording:
+
+```sql
+SELECT COUNT(DISTINCT t.id) AS face_tracks,
+       COUNT(o.id) AS observations,
+       COUNT(e.observation_id) AS gallery_embeddings
+FROM person_tracks t
+LEFT JOIN face_track_observations o ON o.person_track_id=t.id
+LEFT JOIN face_track_observation_embeddings e ON e.observation_id=o.id
+WHERE t.recording_id='your-recording-id';
+```
 
 ## Debugging safely
 
-The admin Pipeline Lab frontend currently tests only the three live services:
+The admin Pipeline Lab frontend currently tests only the three direct services:
 Face, Speaker, and Active speaker. It does not yet expose Person analyzer or
-Audio analyzer because those endpoints are not connected to durable backend
-workers.
+Audio analyzer because dense analysis is started by its durable backend worker,
+while the audio worker is still pending.
 
 Useful commands:
 

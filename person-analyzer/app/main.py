@@ -351,7 +351,7 @@ class Analyzer:
             start_time=observations[0].timestamp,
             end_time=observations[-1].timestamp,
             observation_count=len(observations),
-            tracking_confidence=round(min(item.detection_score for item in track.observations), 4),
+            tracking_confidence=round(min(item.detection.score for item in track.observations), 4),
             quality=QualitySummary(mean=round(sum(qualities)/len(qualities), 4), maximum=max(qualities), usable_observations=len(eligible)),
             gallery_observation_ids=[item.observation_id for item in gallery],
             observations=observations,

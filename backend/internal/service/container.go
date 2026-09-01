@@ -8,46 +8,50 @@ import (
 )
 
 type Dependencies struct {
-	HealthRepository    HealthRepository
-	UserRepository      UserRepository
-	ModelProfiles       ModelProfileRepository
-	CredentialCipher    CredentialCipher
-	JWT                 config.JWTConfig
-	STTConfig           config.STTConfig
-	VoiceRepository     VoiceRepository
-	SpeakerProfiles     SpeakerProfileRepository
-	SpeakerEmbedder     SpeakerEmbedder
-	SpeakerIdentifier   SpeakerIdentifier
-	PersonRepository    PersonRepository
-	FaceRecognizer      FaceRecognizer
-	ActiveSpeaker       ActiveSpeakerDetector
-	FaceStore           AudioStore
-	VideoRepository     VideoRepository
-	Transcriber         Transcriber
-	SpeakerAttributor   SpeakerAttributor
-	AudioStore          AudioStore
-	EnrollmentStore     AudioStore
-	AudioInspector      AudioInspector
-	VideoStore          VideoStore
-	MediaExtractor      MediaExtractor
-	VisualAnalyzer      VisualAnalyzer
-	Memograph           MemographClient
-	VoiceConfig         config.VoiceConfig
-	VideoConfig         config.VideoConfig
-	FaceConfig          config.FaceRecognitionConfig
-	ActiveSpeakerConfig config.ActiveSpeakerConfig
-	WorkerConfig        config.WorkerConfig
-	Logger              *zerolog.Logger
+	HealthRepository      HealthRepository
+	UserRepository        UserRepository
+	ModelProfiles         ModelProfileRepository
+	CredentialCipher      CredentialCipher
+	JWT                   config.JWTConfig
+	STTConfig             config.STTConfig
+	VoiceRepository       VoiceRepository
+	SpeakerProfiles       SpeakerProfileRepository
+	SpeakerEmbedder       SpeakerEmbedder
+	SpeakerIdentifier     SpeakerIdentifier
+	PersonRepository      PersonRepository
+	DensePersonRepository DensePersonAnalysisRepository
+	DensePersonAnalyzer   DensePersonAnalyzer
+	FaceRecognizer        FaceRecognizer
+	ActiveSpeaker         ActiveSpeakerDetector
+	FaceStore             AudioStore
+	VideoRepository       VideoRepository
+	Transcriber           Transcriber
+	SpeakerAttributor     SpeakerAttributor
+	AudioStore            AudioStore
+	EnrollmentStore       AudioStore
+	AudioInspector        AudioInspector
+	VideoStore            VideoStore
+	MediaExtractor        MediaExtractor
+	VisualAnalyzer        VisualAnalyzer
+	Memograph             MemographClient
+	VoiceConfig           config.VoiceConfig
+	VideoConfig           config.VideoConfig
+	FaceConfig            config.FaceRecognitionConfig
+	PersonTrackingConfig  config.PersonTrackingConfig
+	ActiveSpeakerConfig   config.ActiveSpeakerConfig
+	WorkerConfig          config.WorkerConfig
+	Logger                *zerolog.Logger
 }
 
 type Container struct {
-	Health HealthService
-	Auth   AuthService
-	Models ModelProfileService
-	Voice  VoiceService
-	Video  VideoService
-	People PersonService
-	Debug  PipelineDebugService
+	Health      HealthService
+	Auth        AuthService
+	Models      ModelProfileService
+	Voice       VoiceService
+	Video       VideoService
+	People      PersonService
+	DensePeople DensePersonAnalysisService
+	Debug       PipelineDebugService
 }
 
 func NewContainer(deps Dependencies) (*Container, error) {
@@ -103,14 +107,30 @@ func NewContainer(deps Dependencies) (*Container, error) {
 		identifier.logger = deps.Logger
 	}
 
+	var densePeople DensePersonAnalysisService
+	if deps.DensePersonAnalyzer != nil {
+		if deps.DensePersonRepository == nil {
+			return nil, fmt.Errorf("dense person analysis repository is required when its analyzer is enabled")
+		}
+		configured, err := newDensePersonAnalysisService(
+			deps.DensePersonRepository, deps.DensePersonAnalyzer, deps.VideoStore,
+			deps.PersonTrackingConfig, deps.Logger,
+		)
+		if err != nil {
+			return nil, err
+		}
+		densePeople = configured
+	}
+
 	container := &Container{
-		Health: newHealthService(deps.HealthRepository),
-		Auth:   newAuthService(deps.UserRepository, deps.JWT),
-		Models: newModelProfileService(deps.ModelProfiles, deps.CredentialCipher, deps.STTConfig),
-		Voice:  voice,
-		Video:  video,
-		People: newPersonService(deps.PersonRepository, deps.FaceRecognizer, deps.FaceStore, deps.FaceConfig),
-		Debug:  newPipelineDebugService(deps.FaceRecognizer, deps.SpeakerEmbedder, deps.ActiveSpeaker),
+		Health:      newHealthService(deps.HealthRepository),
+		Auth:        newAuthService(deps.UserRepository, deps.JWT),
+		Models:      newModelProfileService(deps.ModelProfiles, deps.CredentialCipher, deps.STTConfig),
+		Voice:       voice,
+		Video:       video,
+		People:      newPersonService(deps.PersonRepository, deps.FaceRecognizer, deps.FaceStore, deps.FaceConfig),
+		DensePeople: densePeople,
+		Debug:       newPipelineDebugService(deps.FaceRecognizer, deps.SpeakerEmbedder, deps.ActiveSpeaker),
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err

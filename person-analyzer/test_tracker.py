@@ -2,6 +2,7 @@ import unittest
 
 import numpy as np
 
+from app.main import Analyzer
 from app.tracker import DenseFaceTracker, Detection, TrackerConfig
 
 
@@ -48,6 +49,15 @@ class TrackerTest(unittest.TestCase):
         for frame in range(1, 7):
             tracker.update(frame, frame/8, [])
         self.assertEqual([], tracker.finish())
+
+    def test_confirmed_track_serializes_detection_confidence(self) -> None:
+        tracker = DenseFaceTracker(TrackerConfig("recording", 3, "sface"))
+        for frame, score in enumerate((0.92, 0.81, 0.87)):
+            tracker.update(frame, frame/8, [detection(frame, 10+frame, (1, 0), score)])
+
+        result = Analyzer._serialize_track(tracker.finish()[0], 5)
+
+        self.assertEqual(0.81, result.tracking_confidence)
 
 
 if __name__ == "__main__":

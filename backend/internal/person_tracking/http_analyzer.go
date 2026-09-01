@@ -129,6 +129,9 @@ func (a *HTTPAnalyzer) AnalyzePeople(ctx context.Context, input service.DensePer
 	if err := validate(result, input); err != nil {
 		return service.DensePersonAnalysis{}, err
 	}
+	if result.Provenance.DetectorModel != a.detectorModel || result.Provenance.EmbeddingModel != a.embeddingModel {
+		return service.DensePersonAnalysis{}, fmt.Errorf("person analyzer response used incompatible models")
+	}
 	return result, nil
 }
 
@@ -161,6 +164,7 @@ func validate(result service.DensePersonAnalysis, input service.DensePersonAnaly
 	}
 	seenTracks := make(map[string]struct{}, len(result.Tracks))
 	seenObservations := make(map[string]struct{})
+	embeddingDimensions := 0
 	for _, track := range result.Tracks {
 		if track.ID == "" || !oneOf(track.LifecycleStatus, "tentative", "confirmed", "lost", "ended") || track.FirstFrame < 0 || track.LastFrame < track.FirstFrame || track.StartTime < 0 || track.EndTime < track.StartTime || track.EndTime > result.DurationSeconds || track.ObservationCount != len(track.Observations) || !unit(track.TrackingConfidence) || !unit(track.Quality.Mean) || !unit(track.Quality.Maximum) {
 			return fmt.Errorf("person analyzer response contains an invalid track")
@@ -169,7 +173,7 @@ func validate(result service.DensePersonAnalysis, input service.DensePersonAnaly
 			return fmt.Errorf("person analyzer response contains duplicate track %q", track.ID)
 		}
 		seenTracks[track.ID] = struct{}{}
-		trackObservations := make(map[string]struct{}, len(track.Observations))
+		trackObservations := make(map[string]bool, len(track.Observations))
 		for _, observation := range track.Observations {
 			if observation.ObservationID == "" || observation.FrameIndex < track.FirstFrame || observation.FrameIndex > track.LastFrame || observation.Timestamp < track.StartTime || observation.Timestamp > track.EndTime || observation.Box.Width <= 0 || observation.Box.Height <= 0 || !unit(observation.DetectionScore) || !unit(observation.Quality.Score) || !unit(observation.MouthActivity) {
 				return fmt.Errorf("person analyzer response contains an invalid observation")
@@ -179,15 +183,26 @@ func validate(result service.DensePersonAnalysis, input service.DensePersonAnaly
 					return fmt.Errorf("person analyzer response contains a non-finite embedding")
 				}
 			}
+			if len(observation.Embedding) > 0 {
+				if embeddingDimensions == 0 {
+					embeddingDimensions = len(observation.Embedding)
+				} else if len(observation.Embedding) != embeddingDimensions {
+					return fmt.Errorf("person analyzer response mixes embedding dimensions")
+				}
+			}
 			if _, exists := seenObservations[observation.ObservationID]; exists {
 				return fmt.Errorf("person analyzer response contains duplicate observation %q", observation.ObservationID)
 			}
 			seenObservations[observation.ObservationID] = struct{}{}
-			trackObservations[observation.ObservationID] = struct{}{}
+			trackObservations[observation.ObservationID] = len(observation.Embedding) > 0
 		}
 		for _, observationID := range track.GalleryObservationIDs {
-			if _, exists := trackObservations[observationID]; !exists {
+			hasEmbedding, exists := trackObservations[observationID]
+			if !exists {
 				return fmt.Errorf("track %q references an unknown gallery observation", track.ID)
+			}
+			if !hasEmbedding {
+				return fmt.Errorf("track %q selected a gallery observation without an embedding", track.ID)
 			}
 		}
 	}

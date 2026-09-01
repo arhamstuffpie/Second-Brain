@@ -107,6 +107,12 @@ type PersonRepository interface {
 	DeletePerson(ctx context.Context, id, ownerUserID string) ([]string, error)
 }
 
+type DensePersonAnalysisRepository interface {
+	ClaimDensePersonAnalysis(ctx context.Context, configurationProfile string, staleAfter time.Duration) (DensePersonAnalysisJob, bool, error)
+	CompleteDensePersonAnalysis(ctx context.Context, job DensePersonAnalysisJob, analysis DensePersonAnalysis) error
+	RetryDensePersonAnalysis(ctx context.Context, job DensePersonAnalysisJob, cause string, runAt time.Time, dead bool) error
+}
+
 type AudioInspector interface {
 	Duration(ctx context.Context, path string) (float64, error)
 }
@@ -209,6 +215,10 @@ type VideoService interface {
 	GetVideoEvidenceURL(ctx context.Context, id, ownerUserID string, timestamp float64) (EvidencePlayback, error)
 	ProcessNextVideoJob(ctx context.Context) (bool, error)
 	ProcessNextIdentityJob(ctx context.Context) (bool, error)
+}
+
+type DensePersonAnalysisService interface {
+	ProcessNextDensePersonAnalysis(ctx context.Context) (bool, error)
 }
 
 type PersonService interface {

@@ -23,6 +23,7 @@ import (
 	internallogger "github.com/arham/ai-second-brain/internal/logger"
 	"github.com/arham/ai-second-brain/internal/media"
 	"github.com/arham/ai-second-brain/internal/memograph"
+	person_tracking "github.com/arham/ai-second-brain/internal/person_tracking"
 	"github.com/arham/ai-second-brain/internal/repository"
 	"github.com/arham/ai-second-brain/internal/secrets"
 	"github.com/arham/ai-second-brain/internal/service"
@@ -179,6 +180,20 @@ func run() error {
 			return fmt.Errorf("validate active-speaker detector: %w", err)
 		}
 	}
+	var densePersonAnalyzer service.DensePersonAnalyzer
+	if cfg.PersonTracking.Provider != "disabled" {
+		densePersonAnalyzer, err = person_tracking.NewHTTPAnalyzer(
+			cfg.PersonTracking.BaseURL,
+			cfg.PersonTracking.APIKey,
+			cfg.PersonTracking.DetectorModel,
+			cfg.PersonTracking.EmbeddingModel,
+			cfg.PersonTracking.Provider,
+			cfg.PersonTracking.Timeout,
+		)
+		if err != nil {
+			return fmt.Errorf("construct dense person analyzer: %w", err)
+		}
+	}
 	appLogger.Info().
 		Str("stt_provider", transcriber.Provider()).
 		Str("stt_model", transcriber.Model()).
@@ -186,6 +201,9 @@ func run() error {
 		Str("speaker_embedding_model", cfg.Speaker.Model).
 		Str("face_recognition_provider", cfg.Face.Provider).
 		Str("face_recognition_model", cfg.Face.Model).
+		Str("person_analyzer_provider", cfg.PersonTracking.Provider).
+		Str("person_analyzer_detector_model", cfg.PersonTracking.DetectorModel).
+		Str("person_analyzer_embedding_model", cfg.PersonTracking.EmbeddingModel).
 		Str("active_speaker_provider", cfg.ActiveSpeaker.Provider).
 		Str("active_speaker_model", cfg.ActiveSpeaker.Model).
 		Str("vision_provider", visualAnalyzer.Provider()).
@@ -193,36 +211,39 @@ func run() error {
 		Msg("media analysis providers configured")
 	memographClient := memograph.NewClient(cfg.Memograph)
 	services, err := service.NewContainer(service.Dependencies{
-		HealthRepository:    repositories.Health,
-		UserRepository:      repositories.User,
-		ModelProfiles:       repositories.Models,
-		CredentialCipher:    credentialCipher,
-		STTConfig:           cfg.STT,
-		VoiceRepository:     repositories.Voice,
-		SpeakerProfiles:     repositories.Speakers,
-		SpeakerEmbedder:     speakerEmbedder,
-		SpeakerIdentifier:   speakerIdentifier,
-		PersonRepository:    repositories.People,
-		FaceRecognizer:      faceRecognizer,
-		ActiveSpeaker:       activeSpeaker,
-		FaceStore:           faceStore,
-		VideoRepository:     repositories.Video,
-		Transcriber:         transcriber,
-		SpeakerAttributor:   stt.NewReferenceAttributor(),
-		AudioStore:          audioStore,
-		EnrollmentStore:     enrollmentStore,
-		AudioInspector:      audioInspector,
-		VideoStore:          videoStore,
-		MediaExtractor:      mediaExtractor,
-		VisualAnalyzer:      visualAnalyzer,
-		Memograph:           memographClient,
-		VoiceConfig:         cfg.Voice,
-		VideoConfig:         cfg.Video,
-		FaceConfig:          cfg.Face,
-		ActiveSpeakerConfig: cfg.ActiveSpeaker,
-		WorkerConfig:        cfg.Worker,
-		Logger:              &appLogger,
-		JWT:                 cfg.JWT,
+		HealthRepository:      repositories.Health,
+		UserRepository:        repositories.User,
+		ModelProfiles:         repositories.Models,
+		CredentialCipher:      credentialCipher,
+		STTConfig:             cfg.STT,
+		VoiceRepository:       repositories.Voice,
+		SpeakerProfiles:       repositories.Speakers,
+		SpeakerEmbedder:       speakerEmbedder,
+		SpeakerIdentifier:     speakerIdentifier,
+		PersonRepository:      repositories.People,
+		DensePersonRepository: repositories.DensePeople,
+		DensePersonAnalyzer:   densePersonAnalyzer,
+		FaceRecognizer:        faceRecognizer,
+		ActiveSpeaker:         activeSpeaker,
+		FaceStore:             faceStore,
+		VideoRepository:       repositories.Video,
+		Transcriber:           transcriber,
+		SpeakerAttributor:     stt.NewReferenceAttributor(),
+		AudioStore:            audioStore,
+		EnrollmentStore:       enrollmentStore,
+		AudioInspector:        audioInspector,
+		VideoStore:            videoStore,
+		MediaExtractor:        mediaExtractor,
+		VisualAnalyzer:        visualAnalyzer,
+		Memograph:             memographClient,
+		VoiceConfig:           cfg.Voice,
+		VideoConfig:           cfg.Video,
+		FaceConfig:            cfg.Face,
+		PersonTrackingConfig:  cfg.PersonTracking,
+		ActiveSpeakerConfig:   cfg.ActiveSpeaker,
+		WorkerConfig:          cfg.Worker,
+		Logger:                &appLogger,
+		JWT:                   cfg.JWT,
 	})
 	if err != nil {
 		return fmt.Errorf("construct services: %w", err)
@@ -277,11 +298,12 @@ func run() error {
 	serverErrors := make(chan error, 1)
 	voiceWorker := worker.NewVoiceWorker(services.Voice, cfg.Worker, appLogger)
 	videoWorker := worker.NewVideoWorker(services.Video, cfg.Worker, appLogger)
+	densePersonWorker := worker.NewDensePersonWorker(services.DensePeople, cfg.Worker, appLogger)
 	workersDone := make(chan struct{})
 	go func() {
 		defer close(workersDone)
 		var group sync.WaitGroup
-		group.Add(2)
+		group.Add(3)
 		go func() {
 			defer group.Done()
 			voiceWorker.Run(rootCtx)
@@ -289,6 +311,10 @@ func run() error {
 		go func() {
 			defer group.Done()
 			videoWorker.Run(rootCtx)
+		}()
+		go func() {
+			defer group.Done()
+			densePersonWorker.Run(rootCtx)
 		}()
 		group.Wait()
 	}()

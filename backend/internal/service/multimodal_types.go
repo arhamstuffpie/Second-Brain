@@ -96,6 +96,19 @@ type DensePersonAnalyzer interface {
 	Validate(ctx context.Context) (ModelProvenance, error)
 }
 
+type DensePersonAnalysisJob struct {
+	ID                int64
+	AnalysisRunID     string
+	RecordingID       string
+	OwnerUserID       string
+	ProcessingVersion int
+	Attempts          int
+	MaxAttempts       int
+	FilePath          string
+	FileName          string
+	MediaType         string
+}
+
 type AudioAnalysisInput struct {
 	RecordingID       string
 	ProcessingVersion int

@@ -46,6 +46,17 @@ WITH asset AS (
 	SELECT kind, recording.id, $17
 	FROM recording
 	CROSS JOIN (VALUES ('audio'), ('visual')) AS kinds(kind)
+), analysis_run AS (
+	INSERT INTO analysis_runs (
+		owner_user_id,recording_id,processing_version,status,configuration_profile
+	)
+	SELECT owner_user_id,id,GREATEST(processing_version,requested_processing_version),
+	       'queued','pending:dense_person_tracking'
+	FROM recording
+	RETURNING id
+), dense_person_job AS (
+	INSERT INTO analysis_stage_jobs (analysis_run_id,stage,required,max_attempts)
+	SELECT id,'dense_person_tracking',TRUE,$17 FROM analysis_run
 )
 SELECT id, session_id, group_id, memory_id, status, audio_status, visual_status,
        merge_status, file_name, media_type, size_bytes, start_offset_seconds, created_at
@@ -103,6 +114,17 @@ WITH claimed_session AS (
 	SELECT kind, recording.id, $13
 	FROM recording
 	CROSS JOIN (VALUES ('audio'), ('visual')) AS kinds(kind)
+), analysis_run AS (
+	INSERT INTO analysis_runs (
+		owner_user_id,recording_id,processing_version,status,configuration_profile
+	)
+	SELECT owner_user_id,id,GREATEST(processing_version,requested_processing_version),
+	       'queued','pending:dense_person_tracking'
+	FROM recording
+	RETURNING id
+), dense_person_job AS (
+	INSERT INTO analysis_stage_jobs (analysis_run_id,stage,required,max_attempts)
+	SELECT id,'dense_person_tracking',TRUE,$13 FROM analysis_run
 )
 SELECT id, session_id, group_id, memory_id, status, audio_status, visual_status,
        merge_status, file_name, media_type, size_bytes, client_chunk_id,
@@ -296,6 +318,7 @@ func (r *videoRepository) QueueVideoReprocessing(
 WITH reset_recording AS (
 	UPDATE video_recordings r
 	SET processing_version = processing_version + 1,
+	    requested_processing_version = GREATEST(requested_processing_version, processing_version + 1),
 	    visual_analysis = NULL, visual_provider = '', visual_model = '',
 	    visual_status = 'queued', merge_status = 'waiting', status = 'processing',
 	    last_error = '', updated_at = NOW()
@@ -307,6 +330,27 @@ WITH reset_recording AS (
 	UPDATE video_jobs j SET status = 'queued', attempts = 0, run_at = NOW(),
 	    locked_at = NULL, last_error = '', updated_at = NOW()
 	FROM reset_recording r WHERE j.recording_id = r.id AND j.kind = 'visual'
+), analysis_run AS (
+	INSERT INTO analysis_runs (
+		owner_user_id,recording_id,processing_version,status,configuration_profile
+	)
+	SELECT owner_user_id,id,GREATEST(processing_version,requested_processing_version),
+	       'queued','pending:dense_person_tracking'
+	FROM reset_recording
+	ON CONFLICT (recording_id,processing_version) DO UPDATE
+	SET status='queued',last_error='',completed_at=NULL,updated_at=NOW()
+	RETURNING id,recording_id
+), dense_person_job AS (
+	INSERT INTO analysis_stage_jobs (analysis_run_id,stage,required,max_attempts)
+	SELECT a.id,'dense_person_tracking',TRUE,COALESCE((
+		SELECT MAX(j.max_attempts)
+		FROM analysis_stage_jobs j
+		JOIN analysis_runs old_run ON old_run.id=j.analysis_run_id
+		WHERE old_run.recording_id=a.recording_id AND j.stage='dense_person_tracking'
+	),5)
+	FROM analysis_run a
+	ON CONFLICT (analysis_run_id,stage) DO UPDATE
+	SET status='queued',attempts=0,run_at=NOW(),locked_at=NULL,last_error='',updated_at=NOW()
 )
 SELECT id, session_id, group_id, memory_id, status, audio_status, visual_status,
        merge_status, file_name, media_type, size_bytes, COALESCE(client_chunk_id, ''),

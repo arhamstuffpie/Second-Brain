@@ -68,6 +68,7 @@ services:
       PERSON_ANALYZER_EMBEDDING_MODEL: opencv/sface-2021dec
       PERSON_ANALYZER_API_KEY: ${PERSON_ANALYZER_API_KEY:-}
       PERSON_ANALYZER_FPS: ${PERSON_ANALYZER_FPS:-8}
+      TMPDIR: /tmp/person-analyzer
     volumes:
       - ./face-embedder/models:/models:ro
     tmpfs:
