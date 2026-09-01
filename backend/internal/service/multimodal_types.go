@@ -81,6 +81,15 @@ type DensePersonTrack struct {
 	Observations           []DenseFaceObservation `json:"observations"`
 }
 
+// DenseIdentityTrack is the persisted dense track evidence consumed by the
+// identity stage. Embeddings are present only on gallery-selected observations.
+type DenseIdentityTrack struct {
+	DensePersonTrack
+	Provider       string `json:"provider"`
+	DetectorModel  string `json:"detector_model"`
+	EmbeddingModel string `json:"embedding_model"`
+}
+
 type DensePersonAnalysis struct {
 	RecordingID       string             `json:"recording_id"`
 	ProcessingVersion int                `json:"processing_version"`

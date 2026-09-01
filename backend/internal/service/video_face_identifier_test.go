@@ -20,9 +20,10 @@ type videoFaceRepository struct {
 
 func (r *videoFaceRepository) MatchFace(_ context.Context, input MatchFaceProfileInput) (FaceMatch, error) {
 	r.match = input
-	if r.matches < len(r.matchResults) {
-		result := r.matchResults[r.matches]
-		r.matches++
+	index := r.matches
+	r.matches++
+	if index < len(r.matchResults) {
+		result := r.matchResults[index]
 		return result, nil
 	}
 	return r.matchResult, nil

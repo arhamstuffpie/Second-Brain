@@ -75,7 +75,7 @@ Still needed:
 
 ### 2. Use dense tracks for identity matching
 
-Status: **Not implemented.**
+Status: **Implemented for version 3; the sampled legacy fallback is retained.**
 
 Why we need it:
 
@@ -99,12 +99,20 @@ How it improves the system:
 - Lower risk of attaching one person’s name to another person.
 - Better recovery after a face is briefly hidden.
 
-Implementation outline:
+What is implemented:
 
-- Match scene timestamps and face boxes to dense observations.
-- Match each dense track’s gallery embeddings to owner-scoped face profiles.
-- Keep ambiguous matches unknown.
-- Remove `localFaceTrack` only after comparison tests pass.
+- The identity worker claims the versioned `identity_matching` stage only after
+  dense tracking and transcription complete.
+- Every dense track’s selected gallery embeddings are matched to owner-scoped
+  face profiles using the existing threshold and runner-up margin policy.
+- Conflicting or ambiguous samples keep the whole track unknown; two clear
+  unknown samples can create one provisional profile for the stable track.
+- Scene people are mapped to dense observations only when the timestamp is
+  close and face-box overlap is unique. Crossings do not rely on array order.
+- Dense and gallery SFace model IDs include the same checksum, preventing
+  incompatible embeddings from being compared.
+- `localFaceTrack` remains available only to the legacy sampled visual path
+  while version 3 rollout comparisons are collected.
 
 ### 3. Activate completed versions
 
@@ -174,9 +182,10 @@ Implementation outline:
 
 ### Dense tracks exist, but identity may still use sampled faces
 
-**Yes.** Dense results are stored, while the visual identity path still calls
-the sampled face tracker. Using dense tracks will improve identity accuracy in
-multi-person and moving-camera videos.
+**Closed for version 3 identity matching.** The versioned identity stage now
+loads persisted dense tracks and their curated gallery embeddings. The older
+visual path still calls the sampled face tracker as a rollout fallback; it is
+not the source used by the version 3 identity stage.
 
 ### Face observations do not mean a person is identified
 
@@ -238,8 +247,8 @@ timestamps, or versions do not line up.
 - [x] Create the complete seven-stage run and dependency graph.
 - [ ] Replace migration-driven full backfill with controlled batches.
 - [ ] Connect the overlap-audio worker and transcription stage.
-- [ ] Map scene people to dense tracks.
-- [ ] Match dense tracks to face profiles.
+- [x] Map scene people to dense tracks when timestamp and face-box overlap are unambiguous.
+- [x] Match dense tracks to owner-scoped face profiles.
 - [ ] Fuse the correct dense face track with the correct voice.
 - [ ] Complete episode and graph stage reporting.
 - [ ] Activate only fully completed runs.

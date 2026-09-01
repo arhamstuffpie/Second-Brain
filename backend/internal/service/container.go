@@ -98,6 +98,7 @@ func NewContainer(deps Dependencies) (*Container, error) {
 	video.faceIdentifier = NewVideoFaceIdentifier(
 		deps.PersonRepository, deps.FaceRecognizer, deps.FaceConfig,
 	)
+	video.denseIdentityEnabled = deps.DensePersonAnalyzer != nil
 	video.personRepository = deps.PersonRepository
 	video.activeSpeaker = deps.ActiveSpeaker
 	video.faceConfig = deps.FaceConfig

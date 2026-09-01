@@ -315,7 +315,7 @@ func Load() (Config, error) {
 			BaseURL:        strings.TrimRight(GetEnv("APP_PERSON_ANALYZER_BASE_URL", "http://127.0.0.1:8094"), "/"),
 			APIKey:         GetEnv("APP_PERSON_ANALYZER_API_KEY", ""),
 			DetectorModel:  GetEnv("APP_PERSON_ANALYZER_DETECTOR_MODEL", "opencv/yunet-2023mar"),
-			EmbeddingModel: GetEnv("APP_PERSON_ANALYZER_EMBEDDING_MODEL", "opencv/sface-2021dec"),
+			EmbeddingModel: GetEnv("APP_PERSON_ANALYZER_EMBEDDING_MODEL", "opencv/sface-2021dec@sha256:0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"),
 			Timeout:        getEnvDuration("APP_PERSON_ANALYZER_TIMEOUT", 30*time.Minute),
 			Profile: PersonTrackingProfile{
 				FPS:                           getEnvFloat("APP_PERSON_TRACKING_FPS", 8),

@@ -23,6 +23,8 @@ This file tracks the replacement plan. A checked item is implemented in code; ro
 - [x] Atomic persistence for dense person tracks, face observations, stage checkpoints, and model provenance.
 - [x] Owner-scoped storage for curated gallery embeddings from every confirmed face track.
 - [x] Seven-stage analysis-run manifest with explicit stage dependencies.
+- [x] Versioned identity worker matching dense track galleries to owner-scoped face profiles.
+- [x] Conservative timestamp-and-face-box mapping from sampled scenes to dense tracks.
 - [x] Automatic identity linking and automatic profile merging remain disabled.
 
 ## Still required before production enablement
@@ -31,8 +33,7 @@ This file tracks the replacement plan. A checked item is implemented in code; ro
 - [ ] Make every remaining worker complete its matching analysis-stage row.
 - [ ] Store separated WAV outputs as owner-scoped `evidence_review` media assets, then transcribe accepted sources.
 - [ ] Match separated sources to non-overlap ECAPA cluster centroids; keep failures ambiguous.
-- [ ] Replace the sampled `localFaceTrack` identity path after scene observations can be mapped safely to dense tracks.
-- [ ] Map scene people to dense tracks only when timestamp and box overlap are available.
+- [ ] Remove the sampled `localFaceTrack` legacy fallback after shadow comparison passes.
 - [ ] Fuse mouth activity, temporal coverage, face match, and voice match into candidate evidence.
 - [ ] Add stage metrics, trace propagation, kill switches, and the synchronized admin evidence view.
 - [ ] Add a CUDA image/profile with the same API contracts.

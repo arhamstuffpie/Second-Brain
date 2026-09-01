@@ -55,6 +55,21 @@ func TestIdentifyVisualFacesEnrichesOnlyOnePhysicalVisiblePersonAndFailsOpen(t *
 	}
 }
 
+func TestIdentifyVisualFacesSkipsSampledPathWhenDenseIdentityIsEnabled(t *testing.T) {
+	identifier := &videoFaceIdentifierStub{}
+	video := &videoService{faceIdentifier: identifier, denseIdentityEnabled: true}
+	analysis := VisualAnalysis{Observations: []VideoObservation{{
+		FrameID: "frame-1", People: []VisualPerson{{PhysicalPresence: true, FaceVisible: true}},
+	}}}
+	video.identifyVisualFaces(
+		context.Background(), "owner-1", "recording-1", EvidenceProcessingVersion,
+		&analysis, []VideoFrame{{FrameID: "frame-1"}},
+	)
+	if len(identifier.frames) != 0 || analysis.Observations[0].People[0].PersonTrackID != "" {
+		t.Fatalf("sampled identifier frames = %+v, analysis = %+v", identifier.frames, analysis)
+	}
+}
+
 func (r *retentionVideoRepository) SaveVideoEpisodes(context.Context, VideoJob, []VideoEpisodeDraft, int) error {
 	r.saved = true
 	return nil

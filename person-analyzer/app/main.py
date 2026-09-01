@@ -46,7 +46,10 @@ class Settings:
             detector_id=os.getenv("PERSON_ANALYZER_DETECTOR", "opencv/yunet-2023mar"),
             embedding_path=Path(os.getenv("PERSON_ANALYZER_EMBEDDING_PATH", "/models/face_recognition_sface_2021dec.onnx")),
             embedding_sha256=os.getenv("PERSON_ANALYZER_EMBEDDING_SHA256", "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79").lower(),
-            embedding_id=os.getenv("PERSON_ANALYZER_EMBEDDING_MODEL", "opencv/sface-2021dec"),
+            embedding_id=os.getenv(
+                "PERSON_ANALYZER_EMBEDDING_MODEL",
+                "opencv/sface-2021dec@sha256:0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+            ),
             api_key=os.getenv("PERSON_ANALYZER_API_KEY", "").strip(),
             device=os.getenv("PERSON_ANALYZER_DEVICE", "cpu").strip().lower(),
             work_dir=Path(os.getenv("PERSON_ANALYZER_WORK_DIR", "/tmp/person-analyzer")),

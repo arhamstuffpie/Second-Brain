@@ -678,6 +678,193 @@ LEFT JOIN video_episodes e ON e.id = target.episode_id`
 }
 
 func (r *videoRepository) ClaimIdentityJob(ctx context.Context) (service.VideoJob, bool, error) {
+	job, found, err := r.claimDenseIdentityJob(ctx)
+	if err != nil || found {
+		return job, found, err
+	}
+	return r.claimLegacyIdentityJob(ctx)
+}
+
+func (r *videoRepository) claimDenseIdentityJob(ctx context.Context) (service.VideoJob, bool, error) {
+	database, ok := r.db.(interface {
+		BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	})
+	if !ok {
+		return service.VideoJob{}, false, fmt.Errorf("dense identity claim requires transaction support")
+	}
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return service.VideoJob{}, false, fmt.Errorf("begin dense identity claim: %w", err)
+	}
+	defer tx.Rollback()
+	const query = `
+WITH candidate AS (
+    SELECT j.id
+    FROM analysis_stage_jobs j
+    WHERE j.stage='identity_matching'
+      AND (
+        (j.status IN ('queued','retryable_failed') AND j.run_at<=NOW())
+        OR (j.status='processing' AND j.locked_at<NOW()-INTERVAL '10 minutes')
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM unnest(j.depends_on) dependency(stage)
+        LEFT JOIN analysis_stage_jobs prerequisite
+          ON prerequisite.analysis_run_id=j.analysis_run_id
+         AND prerequisite.stage=dependency.stage
+        WHERE prerequisite.status IS DISTINCT FROM 'completed'
+      )
+    ORDER BY j.run_at,j.id
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+), claimed AS (
+    UPDATE analysis_stage_jobs j
+    SET status='processing',attempts=attempts+1,locked_at=NOW(),last_error='',updated_at=NOW()
+    FROM candidate c WHERE j.id=c.id
+    RETURNING j.*
+), updated_run AS (
+    UPDATE analysis_runs a
+    SET status='processing',started_at=COALESCE(started_at,NOW()),last_error='',updated_at=NOW()
+    FROM claimed j WHERE a.id=j.analysis_run_id
+)
+SELECT j.id,a.id,a.recording_id,a.owner_user_id,j.attempts,j.max_attempts,
+       r.file_path,r.file_name,r.media_type,a.processing_version,r.transcript,r.visual_analysis
+FROM claimed j
+JOIN analysis_runs a ON a.id=j.analysis_run_id
+JOIN video_recordings r ON r.id=a.recording_id AND r.owner_user_id=a.owner_user_id`
+	var job service.VideoJob
+	var transcriptJSON, visualJSON []byte
+	err = tx.QueryRowContext(ctx, query).Scan(
+		&job.ID, &job.AnalysisRunID, &job.RecordingID, &job.OwnerUserID,
+		&job.Attempts, &job.MaxAttempts, &job.FilePath, &job.FileName, &job.MediaType,
+		&job.ProcessingVersion, &transcriptJSON, &visualJSON,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.VideoJob{}, false, nil
+	}
+	if err != nil {
+		return service.VideoJob{}, false, fmt.Errorf("claim dense identity job: %w", err)
+	}
+	if len(transcriptJSON) > 0 {
+		if err := json.Unmarshal(transcriptJSON, &job.Transcript); err != nil {
+			return service.VideoJob{}, false, fmt.Errorf("decode dense identity transcript: %w", err)
+		}
+	}
+	if len(visualJSON) > 0 {
+		if err := json.Unmarshal(visualJSON, &job.VisualAnalysis); err != nil {
+			return service.VideoJob{}, false, fmt.Errorf("decode dense identity visual analysis: %w", err)
+		}
+	}
+	tracks, err := r.loadDenseIdentityTracks(ctx, tx, job)
+	if err != nil {
+		return service.VideoJob{}, false, err
+	}
+	job.DenseIdentityTracks = tracks
+	if err := tx.Commit(); err != nil {
+		return service.VideoJob{}, false, fmt.Errorf("commit dense identity claim: %w", err)
+	}
+	return job, true, nil
+}
+
+func (r *videoRepository) loadDenseIdentityTracks(ctx context.Context, db DBTX, job service.VideoJob) ([]service.DenseIdentityTrack, error) {
+	rows, err := db.QueryContext(ctx, `
+SELECT t.id,t.face_track_provider_ref,t.lifecycle_status,t.first_frame,t.last_frame,
+       t.start_time,t.end_time,t.observation_count,t.tracking_confidence,
+       t.quality_summary,t.model_provenance,
+       o.id,o.frame_index,o.observed_at_seconds,o.face_box,o.detection_score,
+       o.quality,o.pose,o.embedding_model,o.mouth_visible,COALESCE(o.mouth_activity,0),
+       o.gallery_selected,COALESCE(to_jsonb(e.embedding),'[]'::jsonb)
+FROM person_tracks t
+JOIN face_track_observations o
+  ON o.owner_user_id=t.owner_user_id AND o.recording_id=t.recording_id
+ AND o.person_track_id=t.id AND o.processing_version=t.processing_version
+LEFT JOIN face_track_observation_embeddings e ON e.observation_id=o.id
+WHERE t.owner_user_id=$1 AND t.recording_id=$2 AND t.processing_version=$3
+ORDER BY t.start_time,t.id,o.observed_at_seconds,o.frame_index`,
+		job.OwnerUserID, job.RecordingID, job.ProcessingVersion,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load dense identity tracks: %w", err)
+	}
+	defer rows.Close()
+
+	tracks := make([]service.DenseIdentityTrack, 0)
+	trackIndexes := make(map[string]int)
+	for rows.Next() {
+		var trackID, providerReference, lifecycleStatus, observationID, embeddingModel string
+		var firstFrame, lastFrame, observationCount, frameIndex int
+		var startTime, endTime, trackingConfidence, timestamp, detectionScore, mouthActivity float64
+		var mouthVisible, gallerySelected bool
+		var qualityJSON, provenanceJSON, boxJSON, observationQualityJSON, poseJSON, embeddingJSON []byte
+		if err := rows.Scan(
+			&trackID, &providerReference, &lifecycleStatus, &firstFrame, &lastFrame,
+			&startTime, &endTime, &observationCount, &trackingConfidence,
+			&qualityJSON, &provenanceJSON, &observationID, &frameIndex, &timestamp,
+			&boxJSON, &detectionScore, &observationQualityJSON, &poseJSON, &embeddingModel,
+			&mouthVisible, &mouthActivity, &gallerySelected, &embeddingJSON,
+		); err != nil {
+			return nil, fmt.Errorf("scan dense identity track: %w", err)
+		}
+		index, exists := trackIndexes[trackID]
+		if !exists {
+			var quality service.PersonTrackQuality
+			var provenance service.ModelProvenance
+			if err := json.Unmarshal(qualityJSON, &quality); err != nil {
+				return nil, fmt.Errorf("decode dense track quality: %w", err)
+			}
+			if err := json.Unmarshal(provenanceJSON, &provenance); err != nil {
+				return nil, fmt.Errorf("decode dense track provenance: %w", err)
+			}
+			provider := strings.SplitN(embeddingModel, "/", 2)[0]
+			tracks = append(tracks, service.DenseIdentityTrack{
+				DensePersonTrack: service.DensePersonTrack{
+					ID: trackID, ProviderTrackReference: providerReference,
+					LifecycleStatus: lifecycleStatus, FirstFrame: firstFrame, LastFrame: lastFrame,
+					StartTime: startTime, EndTime: endTime, ObservationCount: observationCount,
+					TrackingConfidence: trackingConfidence, Quality: quality,
+				},
+				Provider: provider, DetectorModel: provenance.DetectorModel,
+				EmbeddingModel: embeddingModel,
+			})
+			index = len(tracks) - 1
+			trackIndexes[trackID] = index
+		} else if tracks[index].EmbeddingModel != embeddingModel {
+			return nil, fmt.Errorf("dense identity track %q mixes embedding models", trackID)
+		}
+		var observation service.DenseFaceObservation
+		observation.ObservationID = observationID
+		observation.FrameIndex = frameIndex
+		observation.Timestamp = timestamp
+		observation.DetectionScore = detectionScore
+		observation.MouthVisible = mouthVisible
+		observation.MouthActivity = mouthActivity
+		if err := json.Unmarshal(boxJSON, &observation.Box); err != nil {
+			return nil, fmt.Errorf("decode dense face box: %w", err)
+		}
+		if err := json.Unmarshal(observationQualityJSON, &observation.Quality); err != nil {
+			return nil, fmt.Errorf("decode dense face quality: %w", err)
+		}
+		if err := json.Unmarshal(poseJSON, &observation.Pose); err != nil {
+			return nil, fmt.Errorf("decode dense face pose: %w", err)
+		}
+		if gallerySelected {
+			if err := json.Unmarshal(embeddingJSON, &observation.Embedding); err != nil {
+				return nil, fmt.Errorf("decode dense face embedding: %w", err)
+			}
+			if len(observation.Embedding) == 0 {
+				return nil, fmt.Errorf("dense gallery observation %q has no embedding", observationID)
+			}
+			tracks[index].GalleryObservationIDs = append(tracks[index].GalleryObservationIDs, observationID)
+		}
+		tracks[index].Observations = append(tracks[index].Observations, observation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dense identity tracks: %w", err)
+	}
+	return tracks, nil
+}
+
+func (r *videoRepository) claimLegacyIdentityJob(ctx context.Context) (service.VideoJob, bool, error) {
 	const query = `
 WITH candidate AS (
     SELECT id FROM temporal_jobs
@@ -716,6 +903,9 @@ FROM claimed JOIN video_recordings recording ON recording.id=claimed.recording_i
 }
 
 func (r *videoRepository) CompleteIdentityJob(ctx context.Context, job service.VideoJob, warning string) error {
+	if job.AnalysisRunID != "" {
+		return r.completeDenseIdentityJob(ctx, job, warning)
+	}
 	result, err := r.db.ExecContext(ctx, `
 UPDATE temporal_jobs SET status='completed',locked_at=NULL,last_error='',warning=$2,updated_at=NOW()
 WHERE id=$1`, job.ID, warning)
@@ -728,9 +918,93 @@ WHERE id=$1`, job.ID, warning)
 	return nil
 }
 
+func (r *videoRepository) completeDenseIdentityJob(ctx context.Context, job service.VideoJob, warning string) error {
+	database, ok := r.db.(interface {
+		BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	})
+	if !ok {
+		return fmt.Errorf("dense identity completion requires transaction support")
+	}
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin dense identity completion: %w", err)
+	}
+	defer tx.Rollback()
+	visualJSON, err := json.Marshal(job.VisualAnalysis)
+	if err != nil {
+		return fmt.Errorf("encode dense identity visual analysis: %w", err)
+	}
+	checkpoint, err := json.Marshal(map[string]any{
+		"track_count": len(job.DenseIdentityTracks), "warning": warning,
+	})
+	if err != nil {
+		return fmt.Errorf("encode dense identity checkpoint: %w", err)
+	}
+	recordingResult, err := tx.ExecContext(ctx, `
+UPDATE video_recordings SET visual_analysis=$3::jsonb,updated_at=NOW()
+WHERE id=$1 AND owner_user_id=$2`, job.RecordingID, job.OwnerUserID, visualJSON)
+	if err != nil {
+		return fmt.Errorf("save dense identity scene mapping: %w", err)
+	}
+	if affected, err := recordingResult.RowsAffected(); err != nil || affected != 1 {
+		return fmt.Errorf("dense identity recording is no longer available")
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE analysis_stage_jobs
+SET status='completed',locked_at=NULL,checkpoint=$3::jsonb,last_error='',updated_at=NOW()
+WHERE id=$1 AND analysis_run_id=$2 AND status='processing'`,
+		job.ID, job.AnalysisRunID, checkpoint,
+	)
+	if err != nil {
+		return fmt.Errorf("complete dense identity stage: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return fmt.Errorf("dense identity stage is no longer claimable")
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE analysis_runs a
+SET status=CASE WHEN EXISTS (
+        SELECT 1 FROM analysis_stage_jobs j
+        WHERE j.analysis_run_id=a.id AND j.required AND j.status<>'completed'
+    ) THEN 'processing' ELSE 'completed' END,
+    completed_at=CASE WHEN NOT EXISTS (
+        SELECT 1 FROM analysis_stage_jobs j
+        WHERE j.analysis_run_id=a.id AND j.required AND j.status<>'completed'
+    ) THEN NOW() ELSE NULL END,
+    last_error='',updated_at=NOW()
+WHERE a.id=$1`, job.AnalysisRunID); err != nil {
+		return fmt.Errorf("complete dense identity analysis run: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit dense identity completion: %w", err)
+	}
+	return nil
+}
+
 func (r *videoRepository) RetryIdentityJob(
 	ctx context.Context, job service.VideoJob, cause string, runAt time.Time, dead bool,
 ) error {
+	if job.AnalysisRunID != "" {
+		status := "retryable_failed"
+		if dead {
+			status = "dead"
+		}
+		_, err := r.db.ExecContext(ctx, `
+WITH updated_job AS (
+    UPDATE analysis_stage_jobs
+    SET status=$3,run_at=$4,locked_at=NULL,last_error=$5,updated_at=NOW()
+    WHERE id=$1 AND analysis_run_id=$2 AND status='processing'
+    RETURNING analysis_run_id
+)
+UPDATE analysis_runs a SET status=$3,last_error=$5,updated_at=NOW()
+FROM updated_job j WHERE a.id=j.analysis_run_id`,
+			job.ID, job.AnalysisRunID, status, runAt, cause,
+		)
+		if err != nil {
+			return fmt.Errorf("retry dense identity job: %w", err)
+		}
+		return nil
+	}
 	status := "queued"
 	if dead {
 		status = "dead"

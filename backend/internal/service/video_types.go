@@ -200,6 +200,7 @@ type VisualScene struct {
 
 type VisualPerson struct {
 	VisualLabel          string   `json:"visual_label"`
+	FaceBox              *FaceBox `json:"face_box,omitempty"`
 	PersonTrackID        string   `json:"person_track_id,omitempty"`
 	FaceIdentityOutcome  string   `json:"face_identity_outcome,omitempty"`
 	Appearance           string   `json:"appearance"`
@@ -307,6 +308,7 @@ type VideoEpisode struct {
 
 type VideoJob struct {
 	ID                   int64
+	AnalysisRunID        string
 	Kind                 string
 	RecordingID          string
 	OwnerUserID          string
@@ -334,6 +336,7 @@ type VideoJob struct {
 	FrameInterval        float64
 	Transcript           Transcript
 	VisualAnalysis       VisualAnalysis
+	DenseIdentityTracks  []DenseIdentityTrack
 	EpisodeVisual        []VideoObservation
 	ObservationIDs       []string
 	FrameIDs             []string

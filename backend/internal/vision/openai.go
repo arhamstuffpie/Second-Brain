@@ -150,7 +150,9 @@ func (a *OpenAIAnalyzer) Analyze(
 			physically present in the camera scene. Set it false for a person shown on a
 			TV, phone, computer, photograph, poster, painting, or other display. Set
 			face_visible true only when a real, sufficiently visible face belongs to that
-			physically present person. When uncertain, use false.
+			physically present person. When face_visible is true, return face_box as the
+			tight pixel bounding box of that person's face in the supplied image. Otherwise
+			return null. When uncertain, use false and null.
 
 		Use each supplied timestamp as start_time and the next supplied timestamp as
 		end_time. For the final frame, use the configured window duration.
@@ -311,8 +313,15 @@ func visualAnalysisSchema() map[string]any {
 		"visual_label": map[string]any{"type": "string"}, "appearance": map[string]any{"type": "string"},
 		"position": map[string]any{"type": "string"}, "action": map[string]any{"type": "string"},
 		"physical_presence": map[string]any{"type": "boolean"}, "face_visible": map[string]any{"type": "boolean"},
+		"face_box": map[string]any{"anyOf": []any{
+			strictObject(map[string]any{
+				"x": map[string]any{"type": "integer", "minimum": 0}, "y": map[string]any{"type": "integer", "minimum": 0},
+				"width": map[string]any{"type": "integer", "minimum": 1}, "height": map[string]any{"type": "integer", "minimum": 1},
+			}, "x", "y", "width", "height"),
+			map[string]any{"type": "null"},
+		}},
 		"confidence": confidence,
-	}, "visual_label", "appearance", "position", "action", "physical_presence", "face_visible", "confidence")
+	}, "visual_label", "appearance", "position", "action", "physical_presence", "face_visible", "face_box", "confidence")
 	relationSchema := strictObject(map[string]any{
 		"source": map[string]any{"type": "string"}, "predicate": map[string]any{"type": "string"},
 		"target": map[string]any{"type": "string"}, "confidence": confidence,

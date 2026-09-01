@@ -21,27 +21,28 @@ import (
 )
 
 type videoService struct {
-	repository          VideoRepository
-	enrollments         VoiceRepository
-	transcriber         Transcriber
-	attributor          SpeakerAttributor
-	speakerProfiles     SpeakerProfileRepository
-	speakerIdentifier   SpeakerIdentifier
-	faceIdentifier      VideoFaceIdentifier
-	personRepository    PersonRepository
-	activeSpeaker       ActiveSpeakerDetector
-	enrollmentStore     AudioStore
-	store               VideoStore
-	extractor           MediaExtractor
-	analyzer            VisualAnalyzer
-	memograph           MemographClient
-	episodeDuration     time.Duration
-	frameInterval       time.Duration
-	maxFrames           int
-	maxAttempts         int
-	faceConfig          config.FaceRecognitionConfig
-	activeSpeakerConfig config.ActiveSpeakerConfig
-	logger              *zerolog.Logger
+	repository           VideoRepository
+	enrollments          VoiceRepository
+	transcriber          Transcriber
+	attributor           SpeakerAttributor
+	speakerProfiles      SpeakerProfileRepository
+	speakerIdentifier    SpeakerIdentifier
+	faceIdentifier       VideoFaceIdentifier
+	denseIdentityEnabled bool
+	personRepository     PersonRepository
+	activeSpeaker        ActiveSpeakerDetector
+	enrollmentStore      AudioStore
+	store                VideoStore
+	extractor            MediaExtractor
+	analyzer             VisualAnalyzer
+	memograph            MemographClient
+	episodeDuration      time.Duration
+	frameInterval        time.Duration
+	maxFrames            int
+	maxAttempts          int
+	faceConfig           config.FaceRecognitionConfig
+	activeSpeakerConfig  config.ActiveSpeakerConfig
+	logger               *zerolog.Logger
 }
 
 func newVideoService(
@@ -417,7 +418,11 @@ func (s *videoService) ProcessNextIdentityJob(ctx context.Context) (bool, error)
 		return found, err
 	}
 	s.debug().Str("capture_function", "ProcessNextIdentityJob").Int64("job_id", job.ID).Str("recording_id", job.RecordingID).Int("attempt", job.Attempts).Msg("identity job claimed")
-	err = s.autoResolveVideoIdentities(ctx, &job)
+	if job.AnalysisRunID != "" {
+		err = s.matchDenseTrackIdentities(ctx, &job)
+	} else {
+		err = s.autoResolveVideoIdentities(ctx, &job)
+	}
 	if err == nil {
 		completeErr := s.repository.CompleteIdentityJob(ctx, job, "")
 		if completeErr != nil {
@@ -646,6 +651,10 @@ func (s *videoService) identifyVisualFaces(
 	analysis *VisualAnalysis,
 	frames []VideoFrame,
 ) {
+	if processingVersion >= EvidenceProcessingVersion && s.denseIdentityEnabled {
+		s.debug().Str("recording_id", recordingID).Msg("sampled face identification skipped: dense identity stage is enabled")
+		return
+	}
 	if s.faceIdentifier == nil {
 		s.debug().Str("recording_id", recordingID).Msg("face identification skipped: recognizer is not configured")
 		return
