@@ -13,6 +13,10 @@ import type {
   ModelProfileInput,
 	PipelineDebugRun,
 	PipelineDebugStatus,
+	PipelineDebugOwner,
+	PipelineDebugAnalysisOverview,
+	PipelineDebugDenseOverview,
+	PipelineDebugDenseRecordingDetail,
   RealtimeVideoSession,
   RealtimeVideoSessionDetail,
   RealtimeVoiceSession,
@@ -170,6 +174,35 @@ export class ApiClient {
     }
     return envelope.data as T;
   }
+
+	private async requestBlob(path: string): Promise<Blob> {
+		if (!__DEV__ && !this.baseUrl.startsWith('https://')) {
+			throw new ApiError('Production backend URL must use HTTPS.', 0, 'INSECURE_BACKEND_URL');
+		}
+		const token = this.getAccessToken();
+		if (!token) throw new ApiError('Please sign in again.', 401, 'UNAUTHORIZED');
+		let response: Response;
+		try {
+			response = await fetch(`${this.baseUrl}${path}`, {
+				headers: { Authorization: `Bearer ${token}`, 'X-Request-ID': randomUUID() },
+			});
+		} catch {
+			throw new ApiError('Unable to reach the backend.', 0, 'NETWORK_ERROR');
+		}
+		const requestId = response.headers.get('X-Request-ID') ?? undefined;
+		if (response.status === 401) this.onUnauthorized?.();
+		if (!response.ok) {
+			let message = 'Request failed.';
+			let code = 'REQUEST_FAILED';
+			try {
+				const envelope = (await response.json()) as ApiEnvelope<never>;
+				message = envelope.message || envelope.error || message;
+				code = envelope.code || code;
+			} catch {}
+			throw new ApiError(message, response.status, code, requestId);
+		}
+		return response.blob();
+	}
 
   private async streamMemoryAnswer(
     memoryId: string,
@@ -516,10 +549,38 @@ export class ApiClient {
 		providers: () =>
 			this.request<PipelineDebugStatus>('/api/v1/debug/pipeline/providers'),
 
+		owners: () =>
+			this.request<{ owners: PipelineDebugOwner[] }>('/api/v1/debug/pipeline/owners'),
+
+		analysisOverview: (ownerUserId: string) =>
+			this.request<PipelineDebugAnalysisOverview>(
+				`/api/v1/debug/pipeline/overview?owner_user_id=${encodeURIComponent(ownerUserId)}`,
+			),
+
 		run: (stage: 'face' | 'speaker' | 'active-speaker', form: FormData) =>
 			this.request<PipelineDebugRun>(`/api/v1/debug/pipeline/${stage}`, {
 				method: 'POST', form, timeoutMs: stage === 'active-speaker' ? 15 * 60_000 : 60_000,
 			}),
+
+		denseOverview: (ownerUserId: string) =>
+			this.request<PipelineDebugDenseOverview>(
+				`/api/v1/debug/pipeline/dense?owner_user_id=${encodeURIComponent(ownerUserId)}`,
+			),
+
+		denseRecording: (ownerUserId: string, recordingId: string, processingVersion: number) =>
+			this.request<PipelineDebugDenseRecordingDetail>(
+				`/api/v1/debug/pipeline/dense/recordings/${encodeURIComponent(recordingId)}` +
+				`?processing_version=${processingVersion}&owner_user_id=${encodeURIComponent(ownerUserId)}`,
+			),
+
+		denseFace: (
+			ownerUserId: string, recordingId: string, trackId: string,
+			observationId: string, processingVersion: number,
+		) => this.requestBlob(
+			`/api/v1/debug/pipeline/dense/recordings/${encodeURIComponent(recordingId)}` +
+			`/tracks/${encodeURIComponent(trackId)}/observations/${encodeURIComponent(observationId)}` +
+			`/face?processing_version=${processingVersion}&owner_user_id=${encodeURIComponent(ownerUserId)}`,
+		),
 	};
 
   memory = {

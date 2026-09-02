@@ -34,7 +34,7 @@ export type Health = {
 };
 
 export type PipelineDebugProvider = {
-	stage: 'face' | 'speaker' | 'active_speaker' | 'stt' | 'vision' | 'memograph';
+	stage: 'face' | 'dense_person_tracking' | 'speaker' | 'active_speaker' | 'stt' | 'vision' | 'memograph';
 	enabled: boolean;
 	provider: string;
 	model: string;
@@ -54,6 +54,177 @@ export type PipelineDebugRun = {
 	memograph_called: false;
 	request: unknown;
 	response: unknown;
+};
+
+export type PipelineDebugOwner = {
+  id: string;
+  email: string;
+  recording_count: number;
+  run_count: number;
+  last_activity_at?: string;
+};
+
+export type PipelineDebugAnalysisStage = {
+  stage: string;
+  required: boolean;
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  depends_on: string[];
+  checkpoint: Record<string, unknown>;
+  result_provenance: Record<string, unknown>;
+  last_error: string;
+  run_at: string;
+  updated_at: string;
+};
+
+export type PipelineDebugAnalysisRun = {
+  id: string;
+  recording_id: string;
+  file_name: string;
+  processing_version: number;
+  status: string;
+  active: boolean;
+  configuration_profile: string;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+  stages: PipelineDebugAnalysisStage[];
+};
+
+export type PipelineDebugAnalysisOverview = {
+  owner_id: string;
+  runs: PipelineDebugAnalysisRun[];
+};
+
+export type PipelineDebugDenseWorker = {
+  enabled: boolean;
+  provider: string;
+  detector_model: string;
+  embedding_model: string;
+  profile: {
+    fps: number;
+    confirmation_detections: number;
+    confirmation_window_frames: number;
+    lost_timeout_seconds: number;
+    reidentification_window_seconds: number;
+    high_confidence_threshold: number;
+    low_confidence_threshold: number;
+    iou_threshold: number;
+    appearance_threshold: number;
+    max_gallery_samples: number;
+  };
+  jobs: Record<'queued' | 'processing' | 'completed' | 'retryable_failed' | 'dead', number>;
+  oldest_queued_at?: string;
+  last_completed_at?: string;
+};
+
+export type PipelineDebugDenseRecording = {
+  recording_id: string;
+  file_name: string;
+  processing_version: number;
+  run_status: string;
+  stage_status: string;
+  attempts: number;
+  max_attempts: number;
+  last_error: string;
+  checkpoint: Record<string, unknown>;
+  result_provenance: Record<string, unknown>;
+  track_count: number;
+  observation_count: number;
+  gallery_count: number;
+  embedding_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PipelineDebugDenseOverview = {
+  worker: PipelineDebugDenseWorker;
+  recordings: PipelineDebugDenseRecording[];
+};
+
+export type PipelineDebugDenseObservation = {
+  observation_id: string;
+  frame_index: number;
+  timestamp: number;
+  box: { x: number; y: number; width: number; height: number };
+  landmarks: number[][];
+  detection_score: number;
+  quality: { usable: boolean; reasons: string[]; score: number };
+  pose: { yaw: number; pitch: number; roll: number; bucket: string };
+  embedding_reference?: string;
+  embedding_model: string;
+  embedding_dimensions: number;
+  embedding: number[];
+  mouth_visible: boolean;
+  mouth_activity: number;
+  gallery_selected: boolean;
+  created_at: string;
+};
+
+export type PipelineDebugDenseTrack = {
+  id: string;
+  provider_track_reference: string;
+  temporary_visual_label: string;
+  resolved_person_profile_id?: string;
+  resolved_person_name?: string;
+  resolved_person_status?: string;
+  lifecycle_status: string;
+  first_frame: number;
+  last_frame: number;
+  start_time: number;
+  end_time: number;
+  observation_count: number;
+  tracking_confidence: number;
+  quality: { mean: number; maximum: number; usable_observations: number };
+  evidence_frame_ids: string[];
+  model_provenance: Record<string, unknown>;
+  metrics: {
+    duration_seconds: number;
+    observations_per_second: number;
+    detection_minimum: number;
+    detection_mean: number;
+    detection_maximum: number;
+    gallery_coverage: number;
+    mouth_visible_coverage: number;
+    mouth_activity_mean: number;
+    maximum_observation_gap_seconds: number;
+    mean_consecutive_box_iou: number;
+    embedding_count: number;
+    embedding_dimensions: number;
+    embedding_norm_mean: number;
+    embedding_cosine_minimum?: number;
+    embedding_cosine_mean?: number;
+    pose_buckets: Record<string, number>;
+  };
+  observations: PipelineDebugDenseObservation[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type PipelineDebugDenseRecordingDetail = {
+  recording: PipelineDebugDenseRecording;
+  visual_analysis: {
+    observations?: Array<{
+      observation_id: string;
+      frame_id: string;
+      start_time: number;
+      end_time: number;
+      people: Array<{
+        visual_label: string;
+        person_track_id?: string;
+        appearance: string;
+        position: string;
+        action: string;
+        physical_presence: boolean;
+        face_visible: boolean;
+        person_profile_id?: string;
+        person_name?: string;
+        face_match_confidence?: number;
+      }>;
+    }>;
+  };
+  tracks: PipelineDebugDenseTrack[];
 };
 
 export type ModelProfile = {

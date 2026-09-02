@@ -2,10 +2,12 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/arham/ai-second-brain/internal/http/response"
@@ -16,9 +18,14 @@ import (
 
 type PipelineDebugHandler interface {
 	Providers(*gin.Context)
+	Owners(*gin.Context)
+	AnalysisOverview(*gin.Context)
 	AnalyzeFace(*gin.Context)
 	EmbedSpeaker(*gin.Context)
 	DetectActiveSpeaker(*gin.Context)
+	DenseOverview(*gin.Context)
+	DenseRecording(*gin.Context)
+	DenseFace(*gin.Context)
 }
 
 type pipelineDebugHandler struct {
@@ -45,6 +52,30 @@ func (h *pipelineDebugHandler) Providers(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, h.service.Providers(), "pipeline debug providers")
+}
+
+func (h *pipelineDebugHandler) Owners(c *gin.Context) {
+	if !h.authorized(c) {
+		return
+	}
+	owners, err := h.service.Owners(c.Request.Context())
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, gin.H{"owners": owners}, "pipeline debug owners")
+}
+
+func (h *pipelineDebugHandler) AnalysisOverview(c *gin.Context) {
+	if !h.authorized(c) {
+		return
+	}
+	result, err := h.service.AnalysisOverview(c.Request.Context(), h.requestedOwner(c))
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, result, "pipeline analysis debug overview")
 }
 
 func (h *pipelineDebugHandler) AnalyzeFace(c *gin.Context) {
@@ -98,6 +129,75 @@ func (h *pipelineDebugHandler) DetectActiveSpeaker(c *gin.Context) {
 	})
 }
 
+func (h *pipelineDebugHandler) DenseOverview(c *gin.Context) {
+	if !h.authorized(c) {
+		return
+	}
+	result, err := h.service.DenseOverview(c.Request.Context(), h.requestedOwner(c))
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, result, "dense pipeline debug overview")
+}
+
+func (h *pipelineDebugHandler) DenseRecording(c *gin.Context) {
+	if !h.authorized(c) {
+		return
+	}
+	version, ok := debugProcessingVersion(c)
+	if !ok {
+		return
+	}
+	result, err := h.service.DenseRecording(
+		c.Request.Context(), h.requestedOwner(c), c.Param("recordingID"), version,
+	)
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, result, "dense recording debug detail")
+}
+
+func (h *pipelineDebugHandler) DenseFace(c *gin.Context) {
+	if !h.authorized(c) {
+		return
+	}
+	version, ok := debugProcessingVersion(c)
+	if !ok {
+		return
+	}
+	image, err := h.service.DenseFace(
+		c.Request.Context(), h.requestedOwner(c), c.Param("recordingID"),
+		c.Param("trackID"), c.Param("observationID"), version,
+	)
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	c.Data(http.StatusOK, image.MediaType, image.Content)
+}
+
+func (h *pipelineDebugHandler) requestedOwner(c *gin.Context) string {
+	if ownerUserID := strings.TrimSpace(c.Query("owner_user_id")); ownerUserID != "" {
+		return ownerUserID
+	}
+	return h.adminUserID
+}
+
+func debugProcessingVersion(c *gin.Context) (int, bool) {
+	value := strings.TrimSpace(c.Query("processing_version"))
+	if value == "" {
+		return 0, true
+	}
+	version, err := strconv.Atoi(value)
+	if err != nil || version < 1 {
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "processing_version must be a positive integer")
+		return 0, false
+	}
+	return version, true
+}
+
 func (h *pipelineDebugHandler) authorized(c *gin.Context) bool {
 	principal, ok := utils.PrincipalFromContext(c.Request.Context())
 	if !ok || principal.Subject != h.adminUserID {
@@ -115,6 +215,15 @@ func (h *pipelineDebugHandler) run(c *gin.Context, call func() (service.Pipeline
 		return
 	}
 	response.Success(c, http.StatusOK, result, "pipeline debug run completed")
+}
+
+func (h *pipelineDebugHandler) fail(c *gin.Context, err error) {
+	_ = c.Error(err)
+	status := http.StatusBadGateway
+	if errors.Is(err, service.ErrNotFound) {
+		status = http.StatusNotFound
+	}
+	response.Error(c, status, "PIPELINE_DEBUG_ERROR", err.Error())
 }
 
 func readDebugUpload(c *gin.Context, maxBytes int64) (service.PipelineDebugFile, bool) {

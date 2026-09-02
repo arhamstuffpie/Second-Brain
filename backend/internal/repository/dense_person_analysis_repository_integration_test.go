@@ -115,6 +115,26 @@ WHERE run.recording_id=$1`, recording.ID).Scan(&stageCount, &dependenciesCorrect
 	if err := repository.CompleteDensePersonAnalysis(ctx, job, analysis); err != nil {
 		t.Fatal(err)
 	}
+	owners, err := videoRepository.PipelineDebugOwners(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundDebugOwner bool
+	for _, owner := range owners {
+		if owner.ID == ownerID && owner.RecordingCount == 1 && owner.RunCount == 1 {
+			foundDebugOwner = true
+		}
+	}
+	if !foundDebugOwner {
+		t.Fatalf("pipeline debug owners = %+v", owners)
+	}
+	debugOverview, err := videoRepository.PipelineDebugAnalysisOverview(ctx, ownerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(debugOverview.Runs) != 1 || len(debugOverview.Runs[0].Stages) != 7 {
+		t.Fatalf("pipeline debug overview = %+v", debugOverview)
+	}
 	var tracks, observations, embeddings int
 	if err := database.QueryRowContext(ctx, `
 SELECT

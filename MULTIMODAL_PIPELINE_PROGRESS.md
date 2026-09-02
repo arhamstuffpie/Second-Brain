@@ -25,6 +25,7 @@ This file tracks the replacement plan. A checked item is implemented in code; ro
 - [x] Seven-stage analysis-run manifest with explicit stage dependencies.
 - [x] Versioned identity worker matching dense track galleries to owner-scoped face profiles.
 - [x] Conservative timestamp-and-face-box mapping from sampled scenes to dense tracks.
+- [x] Admin owner selector with per-owner durable pipeline stages, dense worker queues, every persisted person track and observation, on-demand face crops, raw gallery embeddings, and derived stability metrics.
 - [x] Automatic identity linking and automatic profile merging remain disabled.
 
 ## Still required before production enablement
@@ -35,7 +36,7 @@ This file tracks the replacement plan. A checked item is implemented in code; ro
 - [ ] Match separated sources to non-overlap ECAPA cluster centroids; keep failures ambiguous.
 - [ ] Remove the sampled `localFaceTrack` legacy fallback after shadow comparison passes.
 - [ ] Fuse mouth activity, temporal coverage, face match, and voice match into candidate evidence.
-- [ ] Add stage metrics, trace propagation, kill switches, and the synchronized admin evidence view.
+- [ ] Add production stage metrics, trace propagation, kill switches, and synchronized cross-modal evidence review.
 - [ ] Add a CUDA image/profile with the same API contracts.
 - [ ] Run the labeled evaluation corpus and document thresholds, IDF1/HOTA, DER, SI-SDR, WER, false-link rate, CPU time, memory, and disk.
 - [ ] Shadow rollout, review-only identity links, throttled backfill, and rollback exercise.

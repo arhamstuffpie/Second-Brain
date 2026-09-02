@@ -368,6 +368,47 @@ type videoFrameProbe struct {
 	} `json:"format"`
 }
 
+func (e *FFmpegExtractor) ProbeVideoOrientation(
+	ctx context.Context,
+	videoPath string,
+) (service.VideoOrientation, error) {
+	commandCtx, cancel := context.WithTimeout(ctx, e.timeout)
+	defer cancel()
+	command := exec.CommandContext(
+		commandCtx, e.probeBinary, "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream=width,height:stream_tags=rotate:stream_side_data=rotation",
+		"-of", "json", videoPath,
+	)
+	output, err := command.Output()
+	if err != nil {
+		return service.VideoOrientation{}, fmt.Errorf("inspect video orientation: %w", err)
+	}
+	var probe struct {
+		Streams []struct {
+			Width    int               `json:"width"`
+			Height   int               `json:"height"`
+			Tags     map[string]string `json:"tags"`
+			SideData []struct {
+				Rotation int `json:"rotation"`
+			} `json:"side_data_list"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(output, &probe); err != nil || len(probe.Streams) == 0 {
+		if err == nil {
+			err = fmt.Errorf("video stream is missing")
+		}
+		return service.VideoOrientation{}, fmt.Errorf("decode video orientation: %w", err)
+	}
+	stream := probe.Streams[0]
+	rotation := 0
+	if len(stream.SideData) > 0 {
+		rotation = stream.SideData[0].Rotation
+	} else if value := stream.Tags["rotate"]; value != "" {
+		rotation, _ = strconv.Atoi(value)
+	}
+	return service.VideoOrientation{Width: stream.Width, Height: stream.Height, Rotation: rotation}, nil
+}
+
 type videoEvent struct {
 	index  int
 	score  float64

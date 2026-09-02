@@ -122,6 +122,7 @@ func NewContainer(deps Dependencies) (*Container, error) {
 		}
 		densePeople = configured
 	}
+	debugRepository, _ := deps.VideoRepository.(PipelineDebugRepository)
 
 	container := &Container{
 		Health:      newHealthService(deps.HealthRepository),
@@ -131,7 +132,11 @@ func NewContainer(deps Dependencies) (*Container, error) {
 		Video:       video,
 		People:      newPersonService(deps.PersonRepository, deps.FaceRecognizer, deps.FaceStore, deps.FaceConfig),
 		DensePeople: densePeople,
-		Debug:       newPipelineDebugService(deps.FaceRecognizer, deps.SpeakerEmbedder, deps.ActiveSpeaker),
+		Debug: newPipelineDebugService(
+			deps.FaceRecognizer, deps.SpeakerEmbedder, deps.ActiveSpeaker,
+			deps.DensePersonAnalyzer, debugRepository, deps.VideoStore,
+			deps.MediaExtractor, deps.PersonTrackingConfig,
+		),
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err
