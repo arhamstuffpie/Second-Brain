@@ -113,6 +113,12 @@ type DensePersonAnalysisRepository interface {
 	RetryDensePersonAnalysis(ctx context.Context, job DensePersonAnalysisJob, cause string, runAt time.Time, dead bool) error
 }
 
+type ActiveSpeakerFusionRepository interface {
+	ClaimActiveSpeakerFusion(ctx context.Context, configurationProfile string, staleAfter time.Duration) (ActiveSpeakerFusionJob, bool, error)
+	CompleteActiveSpeakerFusion(ctx context.Context, job ActiveSpeakerFusionJob, result ActiveSpeakerFusionResult, options ActiveSpeakerFusionPersistenceOptions) error
+	RetryActiveSpeakerFusion(ctx context.Context, job ActiveSpeakerFusionJob, cause string, runAt time.Time, dead bool) error
+}
+
 type AudioInspector interface {
 	Duration(ctx context.Context, path string) (float64, error)
 }
@@ -219,6 +225,10 @@ type VideoService interface {
 
 type DensePersonAnalysisService interface {
 	ProcessNextDensePersonAnalysis(ctx context.Context) (bool, error)
+}
+
+type ActiveSpeakerFusionService interface {
+	ProcessNextActiveSpeakerFusion(ctx context.Context) (bool, error)
 }
 
 type PersonService interface {

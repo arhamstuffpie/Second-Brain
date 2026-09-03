@@ -223,7 +223,10 @@ func (r *videoRepository) DensePipelineDebugRecording(
 	ownerUserID, recordingID string,
 	processingVersion int,
 ) (service.PipelineDebugDenseRecordingDetail, error) {
-	detail := service.PipelineDebugDenseRecordingDetail{Tracks: []service.PipelineDebugDenseTrack{}}
+	detail := service.PipelineDebugDenseRecordingDetail{
+		Tracks:         []service.PipelineDebugDenseTrack{},
+		FusionEvidence: []service.PipelineDebugFusionEvidence{},
+	}
 	var checkpointJSON, provenanceJSON, visualJSON []byte
 	err := r.db.QueryRowContext(ctx, `
 SELECT a.recording_id,r.file_name,a.processing_version,a.status,j.status,
@@ -386,6 +389,58 @@ ORDER BY o.person_track_id,o.observed_at_seconds,o.frame_index`,
 	}
 	if err := observationRows.Err(); err != nil {
 		return service.PipelineDebugDenseRecordingDetail{}, fmt.Errorf("iterate dense debug observations: %w", err)
+	}
+	fusionRows, err := r.db.QueryContext(ctx, `
+SELECT e.id,COALESCE(e.segment_id,''),COALESCE(e.segment_start_time,0),COALESCE(e.segment_end_time,0),
+       COALESCE(v.display_name,''),e.voice_speaker_profile_id,
+       COALESCE(e.canonical_person_profile_id,''),COALESCE(e.person_track_id,''),
+       COALESCE(e.voice_match_score,0),COALESCE(e.active_speaker_score,0),
+       COALESCE(e.active_speaker_runner_up_score,0),COALESCE(e.decision_margin,0),
+       e.temporal_coverage,COALESCE(e.visible_mouth_coverage,0),COALESCE(e.mouth_activity_score,0),
+       COALESCE(e.combined_score,0),(
+         SELECT COUNT(DISTINCT support.segment_id)
+         FROM identity_link_evidence support
+         WHERE support.owner_user_id=e.owner_user_id
+           AND support.canonical_person_profile_id=e.canonical_person_profile_id
+           AND support.person_track_id=e.person_track_id AND support.decision='accepted'
+       ),e.decision,e.conflict_reasons,e.model_provenance,e.raw_evidence,e.created_at
+FROM identity_link_evidence e
+JOIN voice_speaker_profiles v
+  ON v.owner_user_id=e.owner_user_id AND v.id=e.voice_speaker_profile_id
+WHERE e.owner_user_id=$1 AND e.recording_id=$2 AND e.processing_version=$3
+ORDER BY e.segment_start_time,e.combined_score DESC,e.person_track_id`,
+		ownerUserID, recordingID, detail.Recording.ProcessingVersion)
+	if err != nil {
+		return service.PipelineDebugDenseRecordingDetail{}, fmt.Errorf("load active-speaker fusion debug evidence: %w", err)
+	}
+	defer fusionRows.Close()
+	for fusionRows.Next() {
+		var item service.PipelineDebugFusionEvidence
+		var reasonsJSON, modelJSON, rawJSON []byte
+		if err := fusionRows.Scan(
+			&item.ID, &item.SegmentID, &item.SegmentStartTime, &item.SegmentEndTime,
+			&item.KnownVoiceName, &item.VoiceSpeakerProfileID,
+			&item.CanonicalPersonProfileID, &item.PersonTrackID,
+			&item.VoiceConfidence, &item.ActiveSpeakerScore, &item.RunnerUpScore,
+			&item.DecisionMargin, &item.TemporalCoverage, &item.MouthVisibleCoverage,
+			&item.MouthActivity, &item.CombinedScore, &item.SupportingSegmentCount,
+			&item.Decision, &reasonsJSON, &modelJSON, &rawJSON, &item.CreatedAt,
+		); err != nil {
+			return service.PipelineDebugDenseRecordingDetail{}, fmt.Errorf("scan active-speaker fusion debug evidence: %w", err)
+		}
+		if err := json.Unmarshal(reasonsJSON, &item.ConflictReasons); err != nil {
+			return service.PipelineDebugDenseRecordingDetail{}, fmt.Errorf("decode fusion conflict reasons: %w", err)
+		}
+		if err := json.Unmarshal(modelJSON, &item.ModelProvenance); err != nil {
+			return service.PipelineDebugDenseRecordingDetail{}, fmt.Errorf("decode fusion model provenance: %w", err)
+		}
+		if err := json.Unmarshal(rawJSON, &item.RawEvidence); err != nil {
+			return service.PipelineDebugDenseRecordingDetail{}, fmt.Errorf("decode raw fusion evidence: %w", err)
+		}
+		detail.FusionEvidence = append(detail.FusionEvidence, item)
+	}
+	if err := fusionRows.Err(); err != nil {
+		return service.PipelineDebugDenseRecordingDetail{}, fmt.Errorf("iterate active-speaker fusion debug evidence: %w", err)
 	}
 	return detail, nil
 }

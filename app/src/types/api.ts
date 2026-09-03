@@ -202,6 +202,31 @@ export type PipelineDebugDenseTrack = {
   updated_at: string;
 };
 
+export type PipelineDebugFusionEvidence = {
+  id: string;
+  segment_id: string;
+  segment_start_time: number;
+  segment_end_time: number;
+  known_voice_name: string;
+  voice_speaker_profile_id: string;
+  canonical_person_profile_id: string;
+  person_track_id?: string;
+  voice_confidence: number;
+  active_speaker_score: number;
+  runner_up_score: number;
+  decision_margin: number;
+  temporal_coverage: number;
+  mouth_visible_coverage: number;
+  mouth_activity: number;
+  combined_score: number;
+  supporting_segment_count: number;
+  decision: string;
+  conflict_reasons: string[];
+  model_provenance: Record<string, unknown>;
+  raw_evidence: Record<string, unknown>;
+  created_at: string;
+};
+
 export type PipelineDebugDenseRecordingDetail = {
   recording: PipelineDebugDenseRecording;
   visual_analysis: {
@@ -225,6 +250,7 @@ export type PipelineDebugDenseRecordingDetail = {
     }>;
   };
   tracks: PipelineDebugDenseTrack[];
+  fusion_evidence: PipelineDebugFusionEvidence[];
 };
 
 export type ModelProfile = {

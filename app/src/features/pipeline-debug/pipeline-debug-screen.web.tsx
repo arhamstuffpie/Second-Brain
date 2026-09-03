@@ -10,6 +10,7 @@ import type {
   PipelineDebugDenseRecording,
   PipelineDebugDenseRecordingDetail,
   PipelineDebugDenseTrack,
+  PipelineDebugFusionEvidence,
   PipelineDebugOwner,
   PipelineDebugProvider,
   PipelineDebugRun,
@@ -645,11 +646,133 @@ function DenseRecordingInspector({
         />
       ) : null}
 
+      <FusionEvidencePanel
+        api={api}
+        ownerUserID={ownerUserID}
+        recording={recording}
+        evidence={detail.fusion_evidence ?? []}
+        tracks={detail.tracks}
+        chooseTrack={chooseTrack}
+      />
+
       <details style={{ ...styles.card, ...styles.details }}>
         <summary>Complete recording JSON, including every embedding</summary>
         <pre style={styles.code}>{JSON.stringify(detail, null, 2)}</pre>
       </details>
     </>
+  );
+}
+
+function FusionEvidencePanel({ api, ownerUserID, recording, evidence, tracks, chooseTrack }: {
+  api: ApiClient;
+  ownerUserID: string;
+  recording: PipelineDebugDenseRecording;
+  evidence: PipelineDebugFusionEvidence[];
+  tracks: PipelineDebugDenseTrack[];
+  chooseTrack: (track: PipelineDebugDenseTrack) => void;
+}) {
+  return (
+    <section style={styles.card}>
+      <div style={styles.cardHeader}>
+        <div>
+          <p style={styles.eyebrow}>Labelled voice → dense face</p>
+          <h3 style={styles.h2}>Active-speaker fusion evidence</h3>
+          <p style={styles.muted}>Every decision is owner-scoped and retained even when the safe result is unknown.</p>
+        </div>
+        <span style={styles.adminBadge}>{evidence.length} decisions</span>
+      </div>
+      {evidence.length === 0 ? (
+        <p style={styles.muted}>No fusion evidence has been saved for this recording version.</p>
+      ) : (
+        <div style={styles.fusionList}>
+          {evidence.map((item) => {
+            const track = tracks.find((candidate) => candidate.id === item.person_track_id);
+            const observation = track?.observations.find((candidate) => candidate.gallery_selected)
+              ?? track?.observations[0];
+            const result = fusionResult(item, track);
+            return (
+              <article key={item.id} className="fusion-decision-row" style={styles.fusionRow}>
+                <FusionFacePreview
+                  api={api}
+                  ownerUserID={ownerUserID}
+                  recording={recording}
+                  track={track}
+                  observation={observation}
+                />
+                <div style={styles.fusionBody}>
+                  <div style={styles.sectionHeading}>
+                    <div>
+                      <strong>{item.known_voice_name || item.voice_speaker_profile_id}</strong>
+                      <p style={styles.small}>{fixed(item.segment_start_time)}s–{fixed(item.segment_end_time)}s · {item.segment_id}</p>
+                    </div>
+                    <span style={{ ...styles.statePill, ...fusionResultStyle(result) }}>{result}</span>
+                  </div>
+                  <div style={styles.fusionMetrics}>
+                    <Metric label="Voice confidence" value={percent(item.voice_confidence)} />
+                    <Metric label="Active speaker" value={percent(item.active_speaker_score)} />
+                    <Metric label="Runner-up" value={percent(item.runner_up_score)} />
+                    <Metric label="Decision margin" value={percent(item.decision_margin)} />
+                    <Metric label="Temporal coverage" value={percent(item.temporal_coverage)} />
+                    <Metric label="Mouth visible" value={percent(item.mouth_visible_coverage)} />
+                    <Metric label="Mouth activity" value={percent(item.mouth_activity)} />
+                    <Metric label="Supporting segments" value={String(item.supporting_segment_count)} />
+                  </div>
+                  <dl style={styles.definitionGrid}>
+                    <dt>Candidate track</dt><dd>{item.person_track_id || 'No visible candidate'}</dd>
+                    <dt>Canonical profile</dt><dd>{item.canonical_person_profile_id || 'Identity unknown'}</dd>
+                    <dt>Combined score</dt><dd>{percent(item.combined_score)}</dd>
+                    <dt>Conflicts</dt><dd>{item.conflict_reasons.join(', ') || 'None'}</dd>
+                  </dl>
+                  {track ? (
+                    <button type="button" onClick={() => chooseTrack(track)} style={styles.inlineButton}>
+                      Inspect candidate track
+                    </button>
+                  ) : null}
+                  <details style={styles.details}>
+                    <summary>Raw evidence JSON</summary>
+                    <pre style={styles.code}>{JSON.stringify(item, null, 2)}</pre>
+                  </details>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FusionFacePreview({ api, ownerUserID, recording, track, observation }: {
+  api: ApiClient;
+  ownerUserID: string;
+  recording: PipelineDebugDenseRecording;
+  track?: PipelineDebugDenseTrack;
+  observation?: PipelineDebugDenseObservation;
+}) {
+  const [url, setURL] = useState('');
+  useEffect(() => {
+    if (!track || !observation) return;
+    let active = true;
+    let objectURL = '';
+    api.pipelineDebug.denseFace(
+      ownerUserID, recording.recording_id, track.id,
+      observation.observation_id, recording.processing_version,
+    ).then((blob) => {
+      if (!active) return;
+      objectURL = URL.createObjectURL(blob);
+      setURL(objectURL);
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      if (objectURL) URL.revokeObjectURL(objectURL);
+    };
+  }, [api, observation, ownerUserID, recording.processing_version, recording.recording_id, track]);
+  return (
+    <div style={styles.fusionFace}>
+      {url ? <img src={url} alt="Candidate face" style={styles.fusionFaceImage} /> : (
+        <span style={styles.small}>{track ? 'Face preview unavailable' : 'Off-screen voice'}</span>
+      )}
+    </div>
   );
 }
 
@@ -983,6 +1106,19 @@ function percent(value: number) {
   return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '—';
 }
 
+function fusionResult(item: PipelineDebugFusionEvidence, track?: PipelineDebugDenseTrack) {
+  if (item.conflict_reasons.includes('off_screen')) return 'off-screen';
+  if (item.decision === 'accepted' && track?.resolved_person_profile_id === item.canonical_person_profile_id) return 'linked';
+  return item.decision;
+}
+
+function fusionResultStyle(result: string): CSSProperties {
+  if (result === 'linked') return { color: colors.green, borderColor: '#245c38', background: colors.greenSoft };
+  if (result === 'rejected') return { color: colors.red, borderColor: '#713042', background: colors.redSoft };
+  if (result === 'off-screen') return { color: colors.cyan, borderColor: '#155e75', background: '#0b2530' };
+  return { color: colors.amber, borderColor: '#725f13', background: colors.amberSoft };
+}
+
 function formatDate(value?: string) {
   if (!value) return 'None';
   const date = new Date(value);
@@ -1054,6 +1190,13 @@ const styles: Record<string, CSSProperties> = {
 	facePanel: { minWidth: 0, display: 'grid', gap: 12 },
 	faceImageFrame: { minHeight: 220, display: 'grid', placeItems: 'center', overflow: 'hidden', background: '#070708', border: `1px solid ${colors.border}`, borderRadius: 8, padding: 10, textAlign: 'center' },
 	faceImage: { display: 'block', width: '100%', height: 260, objectFit: 'contain' },
+	fusionList: { display: 'grid' },
+	fusionRow: { minWidth: 0, display: 'grid', gridTemplateColumns: '120px minmax(0, 1fr)', gap: 16, padding: '18px 0', borderTop: `1px solid ${colors.border}` },
+	fusionFace: { width: 120, height: 120, display: 'grid', placeItems: 'center', overflow: 'hidden', background: colors.page, border: `1px solid ${colors.border}`, borderRadius: 8, textAlign: 'center', padding: 8 },
+	fusionFaceImage: { width: '100%', height: '100%', objectFit: 'contain' },
+	fusionBody: { minWidth: 0, display: 'grid', gap: 12 },
+	fusionMetrics: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(125px, 1fr))', gap: 8 },
+	inlineButton: { justifySelf: 'start', minHeight: 40, padding: '8px 11px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.raised, color: colors.text, cursor: 'pointer', fontWeight: 700 },
 	tableScroll: { maxHeight: 430, overflow: 'auto', border: `1px solid ${colors.border}`, borderRadius: 8 },
 	table: { width: '100%', borderCollapse: 'collapse', color: colors.muted, fontSize: 11, textAlign: 'left' },
 	tableRow: { background: colors.page, borderTop: `1px solid ${colors.border}` },
@@ -1146,6 +1289,9 @@ const responsiveStyles = `
     .pipeline-debug-owner-controls select {
       min-width: 0 !important;
       width: 100% !important;
+    }
+    .fusion-decision-row {
+      grid-template-columns: minmax(0, 1fr) !important;
     }
   }
 `;

@@ -85,7 +85,7 @@ func (s *persistentSpeakerIdentifier) Identify(
 		}
 		if found {
 			if profile, exists := profilesByID[observation.ProfileID]; exists {
-				applySpeakerProfile(&transcript, group.providerSpeaker, profile)
+				applySpeakerProfile(&transcript, group.providerSpeaker, profile, observation.Similarity)
 			}
 			continue
 		}
@@ -154,7 +154,7 @@ func (s *persistentSpeakerIdentifier) Identify(
 			continue
 		}
 		profilesByID[resolution.Profile.ID] = resolution.Profile
-		applySpeakerProfile(&transcript, group.providerSpeaker, resolution.Profile)
+		applySpeakerProfile(&transcript, group.providerSpeaker, resolution.Profile, resolution.Similarity)
 	}
 	return transcript, errors.Join(identificationErrors...)
 }
@@ -193,7 +193,7 @@ func speakerGroups(segments []TranscriptSegment) []groupedSpeaker {
 	return result
 }
 
-func applySpeakerProfile(transcript *Transcript, providerSpeaker string, profile SpeakerProfile) {
+func applySpeakerProfile(transcript *Transcript, providerSpeaker string, profile SpeakerProfile, confidence ...*float64) {
 	relationship := strings.TrimSpace(profile.RelationshipLabel)
 	if relationship == "" {
 		relationship = strings.TrimSpace(profile.RelationshipCategory)
@@ -207,6 +207,10 @@ func applySpeakerProfile(transcript *Transcript, providerSpeaker string, profile
 		segment.SpeakerProfileID = profile.ID
 		segment.PersonProfileID = profile.PersonProfileID
 		segment.SpeakerIdentityStatus = profile.Status
+		if len(confidence) > 0 && confidence[0] != nil {
+			score := *confidence[0]
+			segment.IdentityConfidence = &score
+		}
 		if profile.Status == "confirmed" {
 			segment.SpeakerName = profile.DisplayName
 			segment.SpeakerRelationship = relationship

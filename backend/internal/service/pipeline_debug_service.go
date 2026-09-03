@@ -224,10 +224,36 @@ type PipelineDebugDenseTrack struct {
 	UpdatedAt               time.Time                       `json:"updated_at"`
 }
 
+type PipelineDebugFusionEvidence struct {
+	ID                       string         `json:"id"`
+	SegmentID                string         `json:"segment_id"`
+	SegmentStartTime         float64        `json:"segment_start_time"`
+	SegmentEndTime           float64        `json:"segment_end_time"`
+	KnownVoiceName           string         `json:"known_voice_name"`
+	VoiceSpeakerProfileID    string         `json:"voice_speaker_profile_id"`
+	CanonicalPersonProfileID string         `json:"canonical_person_profile_id"`
+	PersonTrackID            string         `json:"person_track_id,omitempty"`
+	VoiceConfidence          float64        `json:"voice_confidence"`
+	ActiveSpeakerScore       float64        `json:"active_speaker_score"`
+	RunnerUpScore            float64        `json:"runner_up_score"`
+	DecisionMargin           float64        `json:"decision_margin"`
+	TemporalCoverage         float64        `json:"temporal_coverage"`
+	MouthVisibleCoverage     float64        `json:"mouth_visible_coverage"`
+	MouthActivity            float64        `json:"mouth_activity"`
+	CombinedScore            float64        `json:"combined_score"`
+	SupportingSegmentCount   int            `json:"supporting_segment_count"`
+	Decision                 string         `json:"decision"`
+	ConflictReasons          []string       `json:"conflict_reasons"`
+	ModelProvenance          map[string]any `json:"model_provenance"`
+	RawEvidence              map[string]any `json:"raw_evidence"`
+	CreatedAt                time.Time      `json:"created_at"`
+}
+
 type PipelineDebugDenseRecordingDetail struct {
-	Recording      PipelineDebugDenseRecording `json:"recording"`
-	VisualAnalysis VisualAnalysis              `json:"visual_analysis"`
-	Tracks         []PipelineDebugDenseTrack   `json:"tracks"`
+	Recording      PipelineDebugDenseRecording   `json:"recording"`
+	VisualAnalysis VisualAnalysis                `json:"visual_analysis"`
+	Tracks         []PipelineDebugDenseTrack     `json:"tracks"`
+	FusionEvidence []PipelineDebugFusionEvidence `json:"fusion_evidence"`
 }
 
 type PipelineDebugDenseFaceSource struct {

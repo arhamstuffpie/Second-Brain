@@ -8,50 +8,52 @@ import (
 )
 
 type Dependencies struct {
-	HealthRepository      HealthRepository
-	UserRepository        UserRepository
-	ModelProfiles         ModelProfileRepository
-	CredentialCipher      CredentialCipher
-	JWT                   config.JWTConfig
-	STTConfig             config.STTConfig
-	VoiceRepository       VoiceRepository
-	SpeakerProfiles       SpeakerProfileRepository
-	SpeakerEmbedder       SpeakerEmbedder
-	SpeakerIdentifier     SpeakerIdentifier
-	PersonRepository      PersonRepository
-	DensePersonRepository DensePersonAnalysisRepository
-	DensePersonAnalyzer   DensePersonAnalyzer
-	FaceRecognizer        FaceRecognizer
-	ActiveSpeaker         ActiveSpeakerDetector
-	FaceStore             AudioStore
-	VideoRepository       VideoRepository
-	Transcriber           Transcriber
-	SpeakerAttributor     SpeakerAttributor
-	AudioStore            AudioStore
-	EnrollmentStore       AudioStore
-	AudioInspector        AudioInspector
-	VideoStore            VideoStore
-	MediaExtractor        MediaExtractor
-	VisualAnalyzer        VisualAnalyzer
-	Memograph             MemographClient
-	VoiceConfig           config.VoiceConfig
-	VideoConfig           config.VideoConfig
-	FaceConfig            config.FaceRecognitionConfig
-	PersonTrackingConfig  config.PersonTrackingConfig
-	ActiveSpeakerConfig   config.ActiveSpeakerConfig
-	WorkerConfig          config.WorkerConfig
-	Logger                *zerolog.Logger
+	HealthRepository              HealthRepository
+	UserRepository                UserRepository
+	ModelProfiles                 ModelProfileRepository
+	CredentialCipher              CredentialCipher
+	JWT                           config.JWTConfig
+	STTConfig                     config.STTConfig
+	VoiceRepository               VoiceRepository
+	SpeakerProfiles               SpeakerProfileRepository
+	SpeakerEmbedder               SpeakerEmbedder
+	SpeakerIdentifier             SpeakerIdentifier
+	PersonRepository              PersonRepository
+	DensePersonRepository         DensePersonAnalysisRepository
+	ActiveSpeakerFusionRepository ActiveSpeakerFusionRepository
+	DensePersonAnalyzer           DensePersonAnalyzer
+	FaceRecognizer                FaceRecognizer
+	ActiveSpeaker                 ActiveSpeakerDetector
+	FaceStore                     AudioStore
+	VideoRepository               VideoRepository
+	Transcriber                   Transcriber
+	SpeakerAttributor             SpeakerAttributor
+	AudioStore                    AudioStore
+	EnrollmentStore               AudioStore
+	AudioInspector                AudioInspector
+	VideoStore                    VideoStore
+	MediaExtractor                MediaExtractor
+	VisualAnalyzer                VisualAnalyzer
+	Memograph                     MemographClient
+	VoiceConfig                   config.VoiceConfig
+	VideoConfig                   config.VideoConfig
+	FaceConfig                    config.FaceRecognitionConfig
+	PersonTrackingConfig          config.PersonTrackingConfig
+	ActiveSpeakerConfig           config.ActiveSpeakerConfig
+	WorkerConfig                  config.WorkerConfig
+	Logger                        *zerolog.Logger
 }
 
 type Container struct {
-	Health      HealthService
-	Auth        AuthService
-	Models      ModelProfileService
-	Voice       VoiceService
-	Video       VideoService
-	People      PersonService
-	DensePeople DensePersonAnalysisService
-	Debug       PipelineDebugService
+	Health              HealthService
+	Auth                AuthService
+	Models              ModelProfileService
+	Voice               VoiceService
+	Video               VideoService
+	People              PersonService
+	DensePeople         DensePersonAnalysisService
+	ActiveSpeakerFusion ActiveSpeakerFusionService
+	Debug               PipelineDebugService
 }
 
 func NewContainer(deps Dependencies) (*Container, error) {
@@ -122,16 +124,30 @@ func NewContainer(deps Dependencies) (*Container, error) {
 		}
 		densePeople = configured
 	}
+	var activeSpeakerFusion ActiveSpeakerFusionService
+	if deps.ActiveSpeakerFusionRepository != nil {
+		configured, err := newActiveSpeakerFusionService(
+			deps.ActiveSpeakerFusionRepository, deps.ActiveSpeaker, deps.VideoStore,
+			deps.ActiveSpeakerConfig, deps.Logger,
+		)
+		if err != nil {
+			return nil, err
+		}
+		activeSpeakerFusion = configured
+	} else if deps.ActiveSpeakerConfig.FusionEnabled {
+		return nil, fmt.Errorf("active-speaker fusion repository is required when fusion is enabled")
+	}
 	debugRepository, _ := deps.VideoRepository.(PipelineDebugRepository)
 
 	container := &Container{
-		Health:      newHealthService(deps.HealthRepository),
-		Auth:        newAuthService(deps.UserRepository, deps.JWT),
-		Models:      newModelProfileService(deps.ModelProfiles, deps.CredentialCipher, deps.STTConfig),
-		Voice:       voice,
-		Video:       video,
-		People:      newPersonService(deps.PersonRepository, deps.FaceRecognizer, deps.FaceStore, deps.FaceConfig),
-		DensePeople: densePeople,
+		Health:              newHealthService(deps.HealthRepository),
+		Auth:                newAuthService(deps.UserRepository, deps.JWT),
+		Models:              newModelProfileService(deps.ModelProfiles, deps.CredentialCipher, deps.STTConfig),
+		Voice:               voice,
+		Video:               video,
+		People:              newPersonService(deps.PersonRepository, deps.FaceRecognizer, deps.FaceStore, deps.FaceConfig),
+		DensePeople:         densePeople,
+		ActiveSpeakerFusion: activeSpeakerFusion,
 		Debug: newPipelineDebugService(
 			deps.FaceRecognizer, deps.SpeakerEmbedder, deps.ActiveSpeaker,
 			deps.DensePersonAnalyzer, debugRepository, deps.VideoStore,

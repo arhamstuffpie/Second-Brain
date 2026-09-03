@@ -87,10 +87,11 @@ func (d *HTTPDetector) DetectActiveSpeakers(ctx context.Context, input service.A
 	}
 	defer file.Close()
 	metadata, err := json.Marshal(struct {
-		RecordingID  string                        `json:"recording_id"`
-		PersonTracks []service.TemporalPersonTrack `json:"person_tracks"`
-		Segments     []service.TranscriptSegment   `json:"segments"`
-	}{input.RecordingID, input.PersonTracks, input.Segments})
+		RecordingID      string                                    `json:"recording_id"`
+		PersonTracks     []service.TemporalPersonTrack             `json:"person_tracks"`
+		FaceObservations map[string][]service.DenseFaceObservation `json:"face_observations,omitempty"`
+		Segments         []service.TranscriptSegment               `json:"segments"`
+	}{input.RecordingID, input.PersonTracks, input.FaceObservations, input.Segments})
 	if err != nil {
 		return service.ActiveSpeakerAnalysis{}, fmt.Errorf("encode active-speaker metadata: %w", err)
 	}

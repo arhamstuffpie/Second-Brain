@@ -211,39 +211,40 @@ func run() error {
 		Msg("media analysis providers configured")
 	memographClient := memograph.NewClient(cfg.Memograph)
 	services, err := service.NewContainer(service.Dependencies{
-		HealthRepository:      repositories.Health,
-		UserRepository:        repositories.User,
-		ModelProfiles:         repositories.Models,
-		CredentialCipher:      credentialCipher,
-		STTConfig:             cfg.STT,
-		VoiceRepository:       repositories.Voice,
-		SpeakerProfiles:       repositories.Speakers,
-		SpeakerEmbedder:       speakerEmbedder,
-		SpeakerIdentifier:     speakerIdentifier,
-		PersonRepository:      repositories.People,
-		DensePersonRepository: repositories.DensePeople,
-		DensePersonAnalyzer:   densePersonAnalyzer,
-		FaceRecognizer:        faceRecognizer,
-		ActiveSpeaker:         activeSpeaker,
-		FaceStore:             faceStore,
-		VideoRepository:       repositories.Video,
-		Transcriber:           transcriber,
-		SpeakerAttributor:     stt.NewReferenceAttributor(),
-		AudioStore:            audioStore,
-		EnrollmentStore:       enrollmentStore,
-		AudioInspector:        audioInspector,
-		VideoStore:            videoStore,
-		MediaExtractor:        mediaExtractor,
-		VisualAnalyzer:        visualAnalyzer,
-		Memograph:             memographClient,
-		VoiceConfig:           cfg.Voice,
-		VideoConfig:           cfg.Video,
-		FaceConfig:            cfg.Face,
-		PersonTrackingConfig:  cfg.PersonTracking,
-		ActiveSpeakerConfig:   cfg.ActiveSpeaker,
-		WorkerConfig:          cfg.Worker,
-		Logger:                &appLogger,
-		JWT:                   cfg.JWT,
+		HealthRepository:              repositories.Health,
+		UserRepository:                repositories.User,
+		ModelProfiles:                 repositories.Models,
+		CredentialCipher:              credentialCipher,
+		STTConfig:                     cfg.STT,
+		VoiceRepository:               repositories.Voice,
+		SpeakerProfiles:               repositories.Speakers,
+		SpeakerEmbedder:               speakerEmbedder,
+		SpeakerIdentifier:             speakerIdentifier,
+		PersonRepository:              repositories.People,
+		DensePersonRepository:         repositories.DensePeople,
+		ActiveSpeakerFusionRepository: repositories.ActiveSpeakerFusion,
+		DensePersonAnalyzer:           densePersonAnalyzer,
+		FaceRecognizer:                faceRecognizer,
+		ActiveSpeaker:                 activeSpeaker,
+		FaceStore:                     faceStore,
+		VideoRepository:               repositories.Video,
+		Transcriber:                   transcriber,
+		SpeakerAttributor:             stt.NewReferenceAttributor(),
+		AudioStore:                    audioStore,
+		EnrollmentStore:               enrollmentStore,
+		AudioInspector:                audioInspector,
+		VideoStore:                    videoStore,
+		MediaExtractor:                mediaExtractor,
+		VisualAnalyzer:                visualAnalyzer,
+		Memograph:                     memographClient,
+		VoiceConfig:                   cfg.Voice,
+		VideoConfig:                   cfg.Video,
+		FaceConfig:                    cfg.Face,
+		PersonTrackingConfig:          cfg.PersonTracking,
+		ActiveSpeakerConfig:           cfg.ActiveSpeaker,
+		WorkerConfig:                  cfg.Worker,
+		Logger:                        &appLogger,
+		JWT:                           cfg.JWT,
 	})
 	if err != nil {
 		return fmt.Errorf("construct services: %w", err)
@@ -299,11 +300,12 @@ func run() error {
 	voiceWorker := worker.NewVoiceWorker(services.Voice, cfg.Worker, appLogger)
 	videoWorker := worker.NewVideoWorker(services.Video, cfg.Worker, appLogger)
 	densePersonWorker := worker.NewDensePersonWorker(services.DensePeople, cfg.Worker, appLogger)
+	activeSpeakerFusionWorker := worker.NewActiveSpeakerFusionWorker(services.ActiveSpeakerFusion, cfg.Worker, appLogger)
 	workersDone := make(chan struct{})
 	go func() {
 		defer close(workersDone)
 		var group sync.WaitGroup
-		group.Add(3)
+		group.Add(4)
 		go func() {
 			defer group.Done()
 			voiceWorker.Run(rootCtx)
@@ -315,6 +317,10 @@ func run() error {
 		go func() {
 			defer group.Done()
 			densePersonWorker.Run(rootCtx)
+		}()
+		go func() {
+			defer group.Done()
+			activeSpeakerFusionWorker.Run(rootCtx)
 		}()
 		group.Wait()
 	}()

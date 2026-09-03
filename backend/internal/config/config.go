@@ -168,9 +168,17 @@ type ActiveSpeakerConfig struct {
 	APIKey                     string
 	Model                      string
 	Timeout                    time.Duration
+	FusionEnabled              bool
+	SaveEvidence               bool
+	AutoResolveTracks          bool
+	AutoBootstrapFaces         bool
+	AutoModifyGraph            bool
 	AutoLink                   bool
 	AutoMerge                  bool
+	VoiceThreshold             float64
 	ScoreThreshold             float64
+	MinimumMargin              float64
+	MinimumSegmentDuration     float64
 	MinimumMouthCoverage       float64
 	MinimumTemporalCoverage    float64
 	MinimumSeparatedUtterances int
@@ -336,9 +344,17 @@ func Load() (Config, error) {
 			APIKey:                     GetEnv("APP_ACTIVE_SPEAKER_API_KEY", ""),
 			Model:                      GetEnv("APP_ACTIVE_SPEAKER_MODEL", "active-speaker-v1"),
 			Timeout:                    getEnvDuration("APP_ACTIVE_SPEAKER_TIMEOUT", 2*time.Minute),
+			FusionEnabled:              GetEnvBool("APP_ACTIVE_SPEAKER_FUSION_ENABLED", strings.ToLower(strings.TrimSpace(GetEnv("APP_ACTIVE_SPEAKER_PROVIDER", "disabled"))) != "disabled"),
+			SaveEvidence:               GetEnvBool("APP_ACTIVE_SPEAKER_SAVE_EVIDENCE", true),
+			AutoResolveTracks:          GetEnvBool("APP_ACTIVE_SPEAKER_AUTO_RESOLVE_TRACKS", GetEnvBool("APP_ACTIVE_SPEAKER_AUTO_LINK", false)),
+			AutoBootstrapFaces:         GetEnvBool("APP_ACTIVE_SPEAKER_AUTO_BOOTSTRAP_FACES", false),
+			AutoModifyGraph:            GetEnvBool("APP_ACTIVE_SPEAKER_AUTO_MODIFY_GRAPH", false),
 			AutoLink:                   GetEnvBool("APP_ACTIVE_SPEAKER_AUTO_LINK", false),
 			AutoMerge:                  GetEnvBool("APP_PERSON_AUTO_MERGE", false),
+			VoiceThreshold:             getEnvFloat("APP_ACTIVE_SPEAKER_VOICE_THRESHOLD", 0.85),
 			ScoreThreshold:             getEnvFloat("APP_ACTIVE_SPEAKER_SCORE_THRESHOLD", 0.85),
+			MinimumMargin:              getEnvFloat("APP_ACTIVE_SPEAKER_MIN_MARGIN", 0.15),
+			MinimumSegmentDuration:     getEnvFloat("APP_ACTIVE_SPEAKER_MIN_SEGMENT_SECONDS", 1.0),
 			MinimumMouthCoverage:       getEnvFloat("APP_ACTIVE_SPEAKER_MIN_MOUTH_COVERAGE", 0.75),
 			MinimumTemporalCoverage:    getEnvFloat("APP_ACTIVE_SPEAKER_MIN_TEMPORAL_COVERAGE", 0.75),
 			MinimumSeparatedUtterances: GetEnvInt("APP_ACTIVE_SPEAKER_MIN_UTTERANCES", 2),
@@ -541,6 +557,9 @@ func (c Config) Validate() error {
 	if c.ActiveSpeaker.Provider != "disabled" && c.ActiveSpeaker.Provider != "local" && c.ActiveSpeaker.Provider != "external" {
 		return fmt.Errorf("APP_ACTIVE_SPEAKER_PROVIDER must be disabled, local, or external")
 	}
+	if c.ActiveSpeaker.Provider == "disabled" && c.ActiveSpeaker.FusionEnabled {
+		return fmt.Errorf("active-speaker fusion requires a configured provider")
+	}
 	if c.ActiveSpeaker.Provider != "disabled" {
 		if strings.TrimSpace(c.ActiveSpeaker.BaseURL) == "" || strings.TrimSpace(c.ActiveSpeaker.Model) == "" ||
 			c.ActiveSpeaker.Timeout <= 0 {
@@ -549,11 +568,20 @@ func (c Config) Validate() error {
 		if c.ActiveSpeaker.Provider == "external" && strings.TrimSpace(c.ActiveSpeaker.APIKey) == "" {
 			return fmt.Errorf("APP_ACTIVE_SPEAKER_API_KEY is required for the external provider")
 		}
-		if c.ActiveSpeaker.ScoreThreshold <= 0 || c.ActiveSpeaker.ScoreThreshold > 1 ||
+		if c.ActiveSpeaker.VoiceThreshold <= 0 || c.ActiveSpeaker.VoiceThreshold > 1 ||
+			c.ActiveSpeaker.ScoreThreshold <= 0 || c.ActiveSpeaker.ScoreThreshold > 1 ||
+			c.ActiveSpeaker.MinimumMargin <= 0 || c.ActiveSpeaker.MinimumMargin > 1 ||
+			c.ActiveSpeaker.MinimumSegmentDuration <= 0 ||
 			c.ActiveSpeaker.MinimumMouthCoverage <= 0 || c.ActiveSpeaker.MinimumMouthCoverage > 1 ||
 			c.ActiveSpeaker.MinimumTemporalCoverage <= 0 || c.ActiveSpeaker.MinimumTemporalCoverage > 1 ||
 			c.ActiveSpeaker.MinimumSeparatedUtterances < 2 || c.ActiveSpeaker.MergeEvidenceCount < 2 {
 			return fmt.Errorf("active-speaker identity thresholds are invalid")
+		}
+		if (c.ActiveSpeaker.AutoResolveTracks || c.ActiveSpeaker.AutoBootstrapFaces) && !c.ActiveSpeaker.SaveEvidence {
+			return fmt.Errorf("active-speaker automatic linking requires evidence persistence")
+		}
+		if c.ActiveSpeaker.AutoBootstrapFaces && !c.ActiveSpeaker.AutoResolveTracks {
+			return fmt.Errorf("active-speaker face bootstrap requires automatic track resolution")
 		}
 	}
 	if c.Vision.Provider != "openai" && c.Vision.Provider != "mock" {

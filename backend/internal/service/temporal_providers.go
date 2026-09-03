@@ -58,12 +58,13 @@ type TemporalAnalysis struct {
 }
 
 type ActiveSpeakerInput struct {
-	RecordingID  string                `json:"recording_id"`
-	VideoPath    string                `json:"-"`
-	FileName     string                `json:"-"`
-	MediaType    string                `json:"-"`
-	PersonTracks []TemporalPersonTrack `json:"person_tracks"`
-	Segments     []TranscriptSegment   `json:"segments"`
+	RecordingID      string                            `json:"recording_id"`
+	VideoPath        string                            `json:"-"`
+	FileName         string                            `json:"-"`
+	MediaType        string                            `json:"-"`
+	PersonTracks     []TemporalPersonTrack             `json:"person_tracks"`
+	FaceObservations map[string][]DenseFaceObservation `json:"face_observations,omitempty"`
+	Segments         []TranscriptSegment               `json:"segments"`
 }
 
 type ActiveSpeakerEvidence struct {

@@ -3,14 +3,15 @@ package repository
 import "fmt"
 
 type Container struct {
-	Health      HealthRepository
-	User        UserRepository
-	Models      ModelProfileRepository
-	Speakers    SpeakerProfileRepository
-	People      PersonRepository
-	DensePeople DensePersonAnalysisRepository
-	Voice       VoiceRepository
-	Video       VideoRepository
+	Health              HealthRepository
+	User                UserRepository
+	Models              ModelProfileRepository
+	Speakers            SpeakerProfileRepository
+	People              PersonRepository
+	DensePeople         DensePersonAnalysisRepository
+	ActiveSpeakerFusion ActiveSpeakerFusionRepository
+	Voice               VoiceRepository
+	Video               VideoRepository
 }
 
 func NewContainer(db DBTX) (*Container, error) {
@@ -20,14 +21,15 @@ func NewContainer(db DBTX) (*Container, error) {
 	}
 
 	container := &Container{
-		Health:      newHealthRepository(baseRepository),
-		User:        newUserRepository(baseRepository),
-		Models:      newModelProfileRepository(baseRepository),
-		Speakers:    newSpeakerProfileRepository(baseRepository),
-		People:      newPersonRepository(baseRepository),
-		DensePeople: newDensePersonAnalysisRepository(baseRepository),
-		Voice:       newVoiceRepository(baseRepository),
-		Video:       newVideoRepository(baseRepository),
+		Health:              newHealthRepository(baseRepository),
+		User:                newUserRepository(baseRepository),
+		Models:              newModelProfileRepository(baseRepository),
+		Speakers:            newSpeakerProfileRepository(baseRepository),
+		People:              newPersonRepository(baseRepository),
+		DensePeople:         newDensePersonAnalysisRepository(baseRepository),
+		ActiveSpeakerFusion: newActiveSpeakerFusionRepository(baseRepository),
+		Voice:               newVoiceRepository(baseRepository),
+		Video:               newVideoRepository(baseRepository),
 	}
 	if err := container.Validate(); err != nil {
 		return nil, err
@@ -56,6 +58,9 @@ func (c *Container) Validate() error {
 	}
 	if c.DensePeople == nil {
 		return fmt.Errorf("dense person analysis repository is required")
+	}
+	if c.ActiveSpeakerFusion == nil {
+		return fmt.Errorf("active-speaker fusion repository is required")
 	}
 	if c.Voice == nil {
 		return fmt.Errorf("voice repository is required")
